@@ -1,0 +1,158 @@
+#!/bin/bash
+# To run this, you need to first install cargo-vendor.
+#
+# TODO: this script has a known bug in: if the Debian patches being applied,
+# changes the set of dependencies, then "cargo vendor" is not re-run in order
+# to pick up this new set of dependencies. This is manifested by an error
+# message like: "perhaps a crate was updated and forgotten to be re-vendored?"
+#
+set -e
+
+SCRIPTDIR="$(dirname "$(readlink -f "$0")")"
+
+not_needed() {
+	diff -ru Cargo.lock.orig Cargo.lock | grep '^-"checksum' | cut '-d ' -f2-3
+}
+
+ghetto_parse_cargo() {
+	cat "$1" \
+	 | tr '\n' '\t' \
+	 | sed -e 's/\t\[/\n[/g' \
+	 | perl -ne 'print if s/^\[(?:package|project)\].*\tname\s*=\s*"(.*?)".*\tversion\s*=\s*"(.*?)".*/\1 \2/g'
+}
+
+pruned_paths() {
+	for i in vendor/*/Cargo.toml; do
+		pkgnamever=
+		pkgnamever=$(ghetto_parse_cargo "$i")
+		if [ -z "$pkgnamever" ]; then
+			echo >&2 "failed to parse: $i"
+			exit 1
+		fi
+		echo "$pkgnamever $i"
+	done | grep -F -f <(not_needed) | cut '-d ' -f3 | while read x; do
+		echo " $(dirname $x)"
+	done
+}
+
+crate_to_debcargo_conf() {
+    echo "$1" | sed -e 's/_/-/g'
+}
+
+rm -rf vendor/
+cargo vendor --verbose vendor/
+mkdir -p .cargo
+cat >.cargo/config <<eof
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "$PWD/vendor"
+eof
+cargo update
+cp Cargo.lock Cargo.lock.orig
+
+if [ -d debcargo-conf ]; then ( cd debcargo-conf && git pull );
+else git clone "${DEBCARGO_CONF:-https://salsa.debian.org/rust-team/debcargo-conf}"; fi
+
+# keep applying patches, and drop to a subshell for manual fixing, until it succeeds
+while ! ( cd vendor
+x=true
+for i in *; do
+	debname=$(crate_to_debcargo_conf "$i")
+	cd $i
+	# if there is a d/rules then don't mess with it, it's too custom for this
+	# script to deal with - just use the upstream version. example: backtrace-sys
+	# TODO: deal with those better, especially backtrace-sys
+	if [ -e ../../debcargo-conf/src/$debname/debian/rules ]; then
+		echo >&2 "$0: the debcargo-conf for crate $i has a custom rules file, but applying patches anyway"
+		echo >&2 "$0: you may want to examine this situation more closely"
+	fi
+	if [ -d ../../debcargo-conf/src/$debname/debian/patches ]; then
+		echo >&2 "$0: patching $i"
+		mkdir -p debian
+		if [ ! -d debian/patches ]; then
+			cp -a -n "../../debcargo-conf/src/$debname/debian/patches" debian/
+		fi
+		QUILT_PATCHES=debian/patches quilt push -a
+		case $? in
+		0|2) true;;
+		*)  echo >&2 "$0: patching $i failed <<<<<<<<<<<<<<<<<<<<<<<<"
+			QUILT_PATCHES=debian/patches quilt pop -af
+			x=false;;
+		esac
+	fi
+	if [ -f ../../debcargo-conf/src/$debname/debian/build.rs ]; then
+		echo >&2 "$0: overwriting build.rs with our custom one"
+		if [ ! -f build.rs.orig ]; then
+			cp -f build.rs build.rs.orig
+		fi
+		cp -f ../../debcargo-conf/src/$i/debian/build.rs build.rs
+	fi
+	cd ..
+done; $x ); do
+	echo >&2 "================================================================================"
+	echo >&2 "$0: You are now in a sub-shell!"
+	echo >&2 "$0: Fix the failed patches in debcargo-conf/, then exit the sub-shell by pressing ctrl-D ONCE."
+	echo >&2 "$0: If you need to abort this process, press ctrl-D then quickly ctrl-C."
+	if [ -f "${SRCDIR:-$PWD}/debian/debcargo-conf.patch" ]; then
+		echo >&2 "$0: Previous patch changes exist, to apply them run:"
+		echo >&2 "  $ patch -d vendor -p2 < '${SRCDIR:-$PWD}/debian/debcargo-conf.patch'"
+	fi
+	echo >&2 "================================================================================"
+	bash || true
+	echo >&2 "$0: trying patches again..."
+done
+find vendor/*/debian/patches -name '*~' -delete || true
+cargo update
+pruned_paths | while read x; do echo >&2 "$0: removing, because debcargo-conf patches makes it obsolete: $x"; rm -rf "$x"; done
+
+# remove excluded files
+( cd vendor
+for i in *; do (
+	debname=$(crate_to_debcargo_conf "$i")
+	shopt -s globstar # needed for double-glob to work in excludes
+	cd $i
+	if [ -e ../../debcargo-conf/src/$debname/debian/rules ]; then
+		echo >&2 "$0: the debcargo-conf for crate $i has a custom rules file, but applying excludes anyway"
+		echo >&2 "$0: you may want to examine this situation more closely"
+	fi
+	if grep -q excludes ../../debcargo-conf/src/$debname/debian/debcargo.toml 2>/dev/null; then
+		sed -nre 's/.*excludes\s*=\s*(\[[^]]*\]).*/\1/p' \
+		  ../../debcargo-conf/src/$i/debian/debcargo.toml \
+		  | python -c "import ast, sys; x=ast.literal_eval(sys.stdin.read()); print('\n'.join((i[:-3] if i.endswith('/**') else i) for i in x));" \
+		  | while read x; do echo >&2 "$0: removing, since it's excluded by debcargo-conf: vendor/$i/$x"; rm -rf $x; done
+	fi
+); done; )
+
+# TODO: rm special logic from debcargo and put into debcargo-conf instead
+echo >&2 "$0: removing winapi archives"
+rm -rf vendor/winapi-*-pc-windows-gnu/lib/*.a
+
+echo >&2 "$0: pruning all checksums.."
+for i in vendor/*; do ${SCRIPTDIR}/prune-checksums "$i"; done
+
+( cd vendor
+for i in *; do (
+	cd $i
+	debname=$(crate_to_debcargo_conf "$i")
+	if [ -d debian/patches ]; then
+		rm -rf "../../debcargo-conf/src/$debname/debian/patches"
+		cp -a debian/patches "../../debcargo-conf/src/$debname/debian/"
+	fi
+); done; )
+( cd debcargo-conf
+git add .
+if ! git diff --cached --quiet; then
+	git commit -m "Manual changes from debian-cargo-vendor"
+	git diff @~ > ../../debcargo-conf.patch || true
+	(cd ../.. ; echo >&2 "$0: backed up patch changes to $PWD/debcargo-conf.patch")
+	echo >&2 "$0: you should backport/merge them back into debcargo-conf.git"
+fi
+)
+
+echo >&2 "$0: cleaning up..."
+rm -rf .cargo Cargo.lock debcargo-conf
+
+echo >&2 "$0: restoring original Cargo.lock"
+mv Cargo.lock.orig Cargo.lock

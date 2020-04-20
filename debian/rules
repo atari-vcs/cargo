@@ -1,0 +1,54 @@
+#!/usr/bin/make -f
+
+include /usr/share/dpkg/pkg-info.mk
+include /usr/share/dpkg/architecture.mk
+include /usr/share/dpkg/buildflags.mk
+include /usr/share/rustc/architecture.mk
+
+export CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
+export DEB_HOST_RUST_TYPE DEB_HOST_GNU_TYPE
+
+CARGO = $(CURDIR)/debian/bin/cargo
+
+export CARGO_HOME = $(CURDIR)/debian/cargo_home
+export DEB_CARGO_CRATE=cargo_$(DEB_VERSION_UPSTREAM)
+export RUSTFLAGS += --remap-path-prefix=$(CURDIR)=/usr/src/cargo-$(DEB_VERSION_UPSTREAM)
+
+# don't shrink, this can take ages
+# see https://github.com/rust-lang/cargo/issues/6490 for details
+export PROPTEST_MAX_SHRINK_ITERS = 0
+export CARGO_TEST_SLOW_CPU_MULTIPLIER = 4
+
+# To run a specific test, run something like:
+#   $ debian/rules override_dh_auto_test-arch \
+#     CARGO_TEST_FLAGS="package::include -- <args ...>"
+# See `cargo test --help` for more options.
+CARGO_TEST_FLAGS =
+
+%:
+	dh $@ --with bash-completion
+
+override_dh_auto_configure:
+	$(CARGO) prepare-debian $(CURDIR)/vendor
+
+override_dh_auto_build-arch:
+	$(CARGO) build
+
+override_dh_auto_build-indep:
+	$(CARGO) doc
+
+override_dh_auto_test-arch:
+	CFG_DISABLE_CROSS_TESTS=1 $(CARGO) test $(CARGO_TEST_FLAGS)
+
+override_dh_auto_test-indep:
+	# no arch-indep tests
+
+override_dh_auto_install:
+	DESTDIR=$(CURDIR)/debian/cargo $(CARGO) install
+
+override_dh_auto_clean:
+	$(CARGO) clean
+
+override_dh_clean:
+	# Upstream contains a lot of these
+	dh_clean -XCargo.toml.orig

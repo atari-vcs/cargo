@@ -1,0 +1,98 @@
+diff --git a/src/commoncrypto-sys/debian/patches/no-clippy.patch b/src/commoncrypto-sys/debian/patches/no-clippy.patch
+index 3e4c885..93789f3 100644
+--- a/src/commoncrypto-sys/debian/patches/no-clippy.patch
++++ b/src/commoncrypto-sys/debian/patches/no-clippy.patch
+@@ -1,17 +1,16 @@
+---- a/Cargo.toml	2017-01-24 06:56:51.000000000 +0000
+-+++ b/Cargo.toml	2018-09-15 15:37:47.602333479 +0000
+-@@ -19,14 +19,8 @@
++--- a/Cargo.toml
+++++ b/Cargo.toml
++@@ -8,13 +8,8 @@
+  keywords = ["crypto", "hash", "digest", "osx", "commoncrypto"]
+  license = "MIT"
+- repository = "https://github.com/malept/rust-commoncrypto"
+--[dependencies.clippy]
+--version = "0.0"
+--optional = true
+  
+- [dependencies.libc]
+- version = "0.2"
+- [dev-dependencies.hex]
+- version = "0.2"
+--
+ -[features]
+ -lint = ["clippy"]
++-
++ [dependencies]
++ libc = "0.2"
++ 
++-clippy = { version = "0.0", optional = true }
++-
++ [dev-dependencies]
++ hex = "0.2"
+diff --git a/src/commoncrypto/debian/patches/no-clippy.patch b/src/commoncrypto/debian/patches/no-clippy.patch
+index 38d9c92..b21a7ca 100644
+--- a/src/commoncrypto/debian/patches/no-clippy.patch
++++ b/src/commoncrypto/debian/patches/no-clippy.patch
+@@ -1,17 +1,16 @@
+---- a/Cargo.toml	2017-01-24 06:56:51.000000000 +0000
+-+++ b/Cargo.toml	2018-09-15 17:37:01.354423224 +0000
+-@@ -19,14 +19,8 @@
++--- a/Cargo.toml
+++++ b/Cargo.toml
++@@ -8,13 +8,8 @@
+  keywords = ["crypto", "hash", "digest", "osx", "commoncrypto"]
+  license = "MIT"
+- repository = "https://github.com/malept/rust-commoncrypto"
+--[dependencies.clippy]
+--version = "0.0"
+--optional = true
+  
+- [dependencies.commoncrypto-sys]
+- version = "0.2.0"
+- [dev-dependencies.hex]
+- version = "0.2"
+--
+ -[features]
+ -lint = ["clippy"]
++-
++ [dependencies]
++ commoncrypto-sys = { version = "0.2.0", path = "../commoncrypto-sys" }
++ 
++-clippy = { version = "0.0", optional = true }
++-
++ [dev-dependencies]
++ hex = "0.2"
+diff --git a/src/unicode-bidi/debian/patches/no-flamegraphs.patch b/src/unicode-bidi/debian/patches/no-flamegraphs.patch
+index 6234d5d..9acab86 100644
+--- a/src/unicode-bidi/debian/patches/no-flamegraphs.patch
++++ b/src/unicode-bidi/debian/patches/no-flamegraphs.patch
+@@ -1,5 +1,5 @@
+---- a/Cargo.toml	2017-07-06 23:45:07.000000000 +0000
+-+++ b/Cargo.toml	2018-09-15 18:09:13.913086470 +0000
++--- a/Cargo.toml
+++++ b/Cargo.toml
+ @@ -23,13 +23,6 @@
+  
+  [lib]
+@@ -12,12 +12,13 @@
+ -version = "0.1"
+ -optional = true
+  
+- [dependencies.matches]
+- version = "0.1"
+-@@ -44,6 +37,5 @@
++ [dependencies.serde]
++ version = ">=0.8, <2.0"
++@@ -43,7 +36,6 @@
++ 
+  [features]
+- bench_it = []
+- default = []
++ with_serde = ["serde"]
+ -flame_it = ["flame", "flamer"]
+  unstable = []
+- with_serde = ["serde"]
++ default = []
++ bench_it = []

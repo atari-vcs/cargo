@@ -1,0 +1,759 @@
+cargo (0.43.1-3) unstable; urgency=medium
+
+  * Reupload, actually include the fix described in the previous entry.
+
+ -- Ximin Luo <infinity0@debian.org>  Mon, 20 Apr 2020 14:30:01 +0100
+
+cargo (0.43.1-2) unstable; urgency=medium
+
+  * cargo-debian-wrapper: don't install /usr/.crates2.json. (Closes: #958301)
+
+ -- Ximin Luo <infinity0@debian.org>  Mon, 20 Apr 2020 13:30:57 +0100
+
+cargo (0.43.1-1) unstable; urgency=medium
+
+  [ Fabian Grünbichler ]
+  * New upstream release.
+
+ -- Ximin Luo <infinity0@debian.org>  Sat, 18 Apr 2020 19:54:01 +0100
+
+cargo (0.40.0-3) unstable; urgency=medium
+
+  * debian cargo wrapper: drop DEB_CARGO_PACKAGE in favour of the more
+    standardised DESTDIR.
+  * Experimental riscv64 support.
+
+ -- Ximin Luo <infinity0@debian.org>  Sun, 05 Jan 2020 13:31:46 +0000
+
+cargo (0.40.0-2) unstable; urgency=medium
+
+  * Restore patch for pkg-config crate to auto-detect Debian cross-compiling.
+  * Add patch for backtrace-sys to auto-detect Debian cross-compiling.
+
+ -- Ximin Luo <infinity0@debian.org>  Thu, 05 Dec 2019 22:31:57 +0000
+
+cargo (0.40.0-1) unstable; urgency=medium
+
+  [ Sylvestre Ledru ]
+  * Ship the zsh completion (Closes: #941437)
+
+  [ Ximin Luo ]
+  * New upstream release.
+
+ -- Ximin Luo <infinity0@debian.org>  Thu, 28 Nov 2019 10:24:46 +0000
+
+cargo (0.37.0-3) unstable; urgency=medium
+
+  * Update 2001_more_portable_rustflags.patch, fixes mips FTBFS
+
+ -- Ximin Luo <infinity0@debian.org>  Sat, 20 Jul 2019 16:02:08 -0700
+
+cargo (0.37.0-2) unstable; urgency=medium
+
+  * Bump serde vendored crate version up to 1.0.96 to avoid issue when
+    compiling with atomics (the default).
+
+ -- Ximin Luo <infinity0@debian.org>  Thu, 18 Jul 2019 02:34:48 -0700
+
+cargo (0.37.0-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Ximin Luo <infinity0@debian.org>  Tue, 16 Jul 2019 23:06:49 -0700
+
+cargo (0.35.0-2) unstable; urgency=medium
+
+  * Use more portable flags in tests, fixing FTBFS on mips.
+    (Closes: #930218)
+
+ -- Ximin Luo <infinity0@debian.org>  Sat, 08 Jun 2019 11:04:43 -0700
+
+cargo (0.35.0-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Ximin Luo <infinity0@debian.org>  Fri, 31 May 2019 00:29:11 -0700
+
+cargo (0.33.0-3) unstable; urgency=medium
+
+  * Drop patch to capture rustc error output, it is unnecessary.
+  * Add upstream patch to fix typenum bug.
+
+ -- Ximin Luo <infinity0@debian.org>  Sat, 18 May 2019 20:22:22 -0700
+
+cargo (0.33.0-2) unstable; urgency=medium
+
+  * Add patch to capture rustc error output if extra-verbose.
+
+ -- Ximin Luo <infinity0@debian.org>  Sat, 18 May 2019 12:14:38 -0700
+
+cargo (0.33.0-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Ximin Luo <infinity0@debian.org>  Tue, 05 Feb 2019 20:52:47 -0800
+
+cargo (0.32.0-2~exp1) experimental; urgency=medium
+
+  * Drop patch 2007, for disabling incremental build on sparc64.
+    Closes: bug#917048, Thanks to John Paul Adrian Glaubitz.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Sat, 02 Feb 2019 13:16:13 +0530
+
+cargo (0.32.0-1) unstable; urgency=medium
+
+  * debian-cargo-wrapper: Support DEB_CARGO_INSTALL_PREFIX for installing into
+    somewhere other than /usr, e.g. / or /usr/lib/cargo.
+  * Move dev scripts from /usr/share/cargo into /usr/share/cargo/scripts.
+  * Increase yet another timeout duration for slower architectures.
+
+ -- Ximin Luo <infinity0@debian.org>  Thu, 24 Jan 2019 00:29:51 -0800
+
+cargo (0.32.0-1~exp3) experimental; urgency=medium
+
+  [ Matt Kraai ]
+  * Rename bash completion script so that it's used.
+
+  [ Ximin Luo ]
+  * Further increase a timeout duration for mips.
+  * debian-cargo-wrapper: add --link-to-system option
+
+ -- Ximin Luo <infinity0@debian.org>  Wed, 23 Jan 2019 19:44:05 -0800
+
+cargo (0.32.0-1~exp2) experimental; urgency=medium
+
+  * Try to deal with the various test failures as suggested by upstream.
+
+ -- Ximin Luo <infinity0@debian.org>  Tue, 22 Jan 2019 20:08:29 -0800
+
+cargo (0.32.0-1~exp1) experimental; urgency=medium
+
+  [ upstream ]
+  * Cargo will now download crates in parallel using HTTP/2.
+  * You can now rename packages in your Cargo.toml We have a guide on how
+    to use the package key in your dependencies.
+
+  [ Vasudev Kamath ]
+  * Fix the scripts related to tarball creation
+  * Update unsuspicious file list for 0.32.0
+  * Update copyright information for 0.32.0.
+  * Add lintian-override for source-is-missing, for javascript file from
+    vendored crate documentation. File is not really shipped.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Wed, 12 Dec 2018 21:47:42 +0530
+
+cargo (0.31.1-1) unstable; urgency=medium
+
+  * Upload 0.31.1 to unstable.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Tue, 11 Dec 2018 20:57:21 +0530
+
+cargo (0.31.1-1~exp1) experimental; urgency=medium
+
+  [ upstream ]
+  * [1.30.0] Backport msys progress bar fix for stable.
+
+  [ Ximin Luo ]
+  * debian-cargo-vendor: only store differences between vendor-patches and
+    debcargo-conf.
+
+  [ Vasudev Kamath ]
+  * Do not delete Cargo.lock in debian-cargo-vendor script as its
+    referenced later in make_orig_multi.sh.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Tue, 11 Dec 2018 20:53:53 +0530
+
+cargo (0.31.0-4) unstable; urgency=medium
+
+  * Don't set RUSTFLAGS in d/rules. (Closes: #914110)
+
+ -- Ximin Luo <infinity0@debian.org>  Mon, 19 Nov 2018 22:50:59 -0800
+
+cargo (0.31.0-3) unstable; urgency=medium
+
+  * Tweak the cargo wrapper script to be more robust.
+
+ -- Ximin Luo <infinity0@debian.org>  Fri, 09 Nov 2018 02:56:54 -0800
+
+cargo (0.31.0-2) unstable; urgency=medium
+
+  * Fix test failure on some architectures due to hash ordering.
+  * Bump libgit2 dependency version constraint. (Closes: #899038)
+
+ -- Ximin Luo <infinity0@debian.org>  Sun, 04 Nov 2018 11:32:26 -0800
+
+cargo (0.31.0-1) unstable; urgency=medium
+
+  * Don't run tests when doing arch-indep build.
+  * Fix package include/exclude tests.
+
+ -- Ximin Luo <infinity0@debian.org>  Sun, 04 Nov 2018 10:10:24 -0800
+
+cargo (0.31.0-1~exp1) experimental; urgency=medium
+
+  * New upstream release.
+  * Simplify build scripts and add a Debian wrapper for cargo.
+
+ -- Ximin Luo <infinity0@debian.org>  Sun, 04 Nov 2018 03:50:33 -0800
+
+cargo (0.30.0-1) unstable; urgency=medium
+
+  * Upload to unstable.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Sun, 21 Oct 2018 11:59:11 +0530
+
+cargo (0.30.0-1~exp1) experimental; urgency=medium
+
+  [ upstream ]
+  * Cargo can silently fix some bad lockfiles You can use --locked to
+    disable this behaviour.
+  * cargo-install will now allow you to cross compile an install using
+    --target.
+  * Added the cargo-fix subcommand to automatically move project code from
+    2015 edition to 2018.
+
+  [ Vasudev Kamath ]
+  * Refresh patch 2004 for new release.
+  * Add openssl crates fuzz,test doc and apps file to unsuspicious list.
+  * debian/patches:
+    + Drop patch 0774e97da3894f07ed5b6f7db175027a9bc4718b.patch for adding
+      cross compile support. Its merged upstream.
+    + Refresh patch 2001 to newer version of libgit2-sys.
+    + Refresh patch 2003 to newer version of libssh2-sys.
+    + Drop patch 1001 which is merged upstream.
+    + Refresh patch 2005 and 2007 to remove fuzz.
+    + Refresh patch 2002 with newer release.
+  * debian/control:
+    + Mark package compliance with Debian policy 4.2.1.
+  * Update copyright information for new release.
+  * debian/rules:
+    + Use DEB_BUILD_OPTIONS to disable tests on powerpc and powerpcspe
+      architecture.
+      Closes: bug#908961, Thanks to Helmut Grohne.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Sun, 07 Oct 2018 10:39:49 +0530
+
+cargo (0.29.0-1) unstable; urgency=medium
+
+  * Merge changes of 0.28.0-2, which was missed in first release of 0.29.0
+  * Upload to unstable.
+  * Refresh patch for `install --target` feature for release 0.29.0
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Mon, 13 Aug 2018 20:37:13 +0530
+
+cargo (0.29.0-1~exp1) experimental; urgency=medium
+  [ upstream ]
+  * Cargo will now no longer allow you to publish crates with build
+    scripts that modify the src directory. The src directory in a crate
+    should be considered to be immutable.
+
+  [ Vasudev Kamath ]
+  * Update unsuspicious text for new release 0.29.0
+  * Change pattern for embedded zlib
+  * debian/patches:
+    + Refresh patches 2001, 2002, 2003, 2004 to work with new release and
+      new vendor files.
+    + Add patch 1001 to fix deprecated warnings on usage of "casues" from
+      failure crate,
+  * Update copyright information for new release.
+  * Make package compliant with policy 4.2.0.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Sun, 12 Aug 2018 22:25:42 +0530
+
+cargo (0.28.0-2) unstable; urgency=medium
+
+  * Re-add `install --target` functionality, needed by dh-cargo.
+
+ -- Ximin Luo <infinity0@debian.org>  Sun, 12 Aug 2018 00:15:23 -0700
+
+cargo (0.28.0-1) unstable; urgency=medium
+
+  * Upload to unstable
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Tue, 07 Aug 2018 22:14:46 +0530
+
+cargo (0.28.0-1~exp3) experimental; urgency=medium
+
+  * Disable incremental compilation tests on sparc64 architecture.
+    Closes: bug#905623, Thanks to John Paul Adrian Glaubitz.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Tue, 07 Aug 2018 22:01:31 +0530
+
+cargo (0.28.0-1~exp2) experimental; urgency=medium
+
+  * Add patch 2005 to disable fetch_platform_specific_dependencies unit
+    tests. Upstream issue #5864.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Sun, 05 Aug 2018 17:17:00 +0530
+
+cargo (0.28.0-1~exp1) experimental; urgency=medium
+
+  [ upstream ]
+  * cargo-metadata now includes authors, categories, keywords, readme, and
+    repository fields.
+  * cargo-metadata now includes a package's metadata table.
+  * Added the --target-dir optional argument. This allows you to specify a
+    different directory than target for placing compilation artifacts.
+  * Cargo will be adding automatic target inference for binaries,
+    benchmarks, examples, and tests in the Rust 2018 edition. If your
+    project specifies specific targets e.g. using [[bin]] and have other
+    binaries in locations where cargo would infer a binary, Cargo will
+    produce a warning. You can disable this feature ahead of time by
+    setting any of the following autobins, autobenches, autoexamples,
+    autotests to false.
+  * Cargo will now cache compiler information. This can be disabled by
+    setting CARGO_CACHE_RUSTC_INFO=0 in your environment.
+
+  [ Sylvestre Ledru ]
+  * Update of the alioth ML address.
+
+  [ Vasudev Kamath ]
+  * Update README.source to mention preferred way of upload.
+  * Update unsuspicious files for new release.
+  * debian/patches:
+    + Refresh patch 2007 for new release.
+    + Refresh patch 2001 for new version of libgit2-sys
+    + Drop patch 2008 as its merged upstream.
+    + Add patch 2003 for forcing use of libssh2 from system, which was now
+      controlled by environment variable.
+  * debian/copyright:
+    + Update copyright information for new release.
+  * Mark package compliance with Debian Policy 4.1.5.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Sun, 29 Jul 2018 22:07:36 +0530
+
+cargo (0.27.0-2) unstable; urgency=medium
+
+  * Support cross-compile install (upstream PR #5614).
+
+ -- Ximin Luo <infinity0@debian.org>  Wed, 06 Jun 2018 22:35:30 -0700
+
+cargo (0.27.0-1) unstable; urgency=medium
+
+  * Upload to unstable.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Sun, 03 Jun 2018 20:42:13 +0530
+
+cargo (0.27.0-1~exp1) experimental; urgency=medium
+
+  [ upstream ]
+  * Cargo will now output path to custom commands when -v is passed with
+    --list.
+  * Cargo binary version is now same as the Rust version.
+  * Cargo.lock files are now included in published crates.
+
+  [ Vasudev Kamath ]
+  * Update  patch 2004 for the new release.
+  * Add files from clap and vec_map to unsuspicious list.
+  * debian/patches:
+    + Update path to libgit2-sys in patch 2001.
+    + Adjust file name and paths to test files to be patched in patch
+      2002.
+    + Drop all unused imports and comment out functions not just drop
+      #[test] in patch 2002.
+    + Drop patch 1001 as its now part of new cargo release.
+    + Refresh patch 2007.
+  * debian/copyright:
+    + Update copyright information for new vendored crates.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Sat, 02 Jun 2018 15:10:38 +0530
+
+cargo (0.26.0-1) unstable; urgency=medium
+
+  * Upload to unstable.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Tue, 01 May 2018 13:02:05 +0530
+
+cargo (0.26.0-1~exp1) experimental; urgency=medium
+
+  [upstream]
+  * cargo new now defaults to create binary crate instead of library
+    crate.
+  * cargo new will no longer name crates with name starting with rust- or
+    ending with -rs.
+  * cargo doc is faster as it uses cargo check instead of full rebuild.
+
+  [Vasudev Kamath]
+  * Refresh the patch 2004 against newer Cargo.toml
+  * Mark package compliance with Debian Policy 4.1.4
+  * debian/patches:
+    + Drop patch 2003 and 2005, the doc should be built from source using
+      mdbook.
+    + Drop patch 2006, the wasm32 related test seems to be dropped
+      upstream.
+    + Drop patch 1002, merged upstream.
+    + Add tests/generate_lock_file.rs to patch 2002 to disable
+      no_index_update test, this tries to access network.
+    + Refresh patch 1001 with new upstream release.
+  * debian/rules: disable execution of src/ci/dox.sh, this script is no
+    longer present in new release.
+  * debian/copyright:
+    + Add copyright for humantime crate.
+    + Add copyright for lazycell crate.
+    + Add copyright for quick-error crate
+    + Add copyright for proc-macro2 crate.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Sat, 21 Apr 2018 20:59:39 +0530
+
+cargo (0.25.0-3) unstable; urgency=medium
+
+  [ Ximin Luo ]
+  * Update Vcs-* fields to salsa
+
+  [ Vasudev Kamath ]
+  * Add patch to prevent incremental builds on sparc64.
+    Closes: bug#895300, Thanks to John Paul Adrian Glaubitz.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Sun, 15 Apr 2018 12:28:29 +0530
+
+cargo (0.25.0-2) unstable; urgency=medium
+
+  [ Ximin Luo ]
+  * Depend on rustc 1.24 or later.
+  * Backport a patch to not require dev-dependencies when not needed.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Thu, 22 Mar 2018 20:08:17 +0530
+
+cargo (0.25.0-1) unstable; urgency=medium
+
+  * Upload to unstable.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Fri, 09 Mar 2018 21:09:38 +0530
+
+cargo (0.25.0-1~exp2) experimental; urgency=medium
+
+  * Disable test running on powerpc and powerpcspe for now. Will be
+    enabled once issue in test suites are fixed.
+    Request from John Paul Adrian Glaubitz in IRC.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Sun, 25 Feb 2018 10:27:23 +0530
+
+cargo (0.25.0-1~exp1) experimental; urgency=medium
+
+  [upstream]
+  * Added a workspace.default-members config that overrides implied --all
+    in virtual workspaces.
+  * Enable incremental by default on development builds.
+
+  [ Vasudev Kamath ]
+  * debian/vendor-tarball-filter.txt: Filter out git test data from
+    libgit2-sys crate.
+  * debian/vendor-tarball-unsusupiciousAudit unsuspicious files for 0.25.0
+    release.
+  * debian/make_orig_multi.sh: Make sure we take filter and unsuspiciaus
+    texts from debian folder.
+  * debian/patches:
+    + Drop patch 0001 it is merged upstream.
+    + Fix the typo in description of patch 2006.
+  * Drop source/lintian-override. README under patches directory is no
+    longer considered as a patch file by lintian.
+  * debian/copyright:
+    + Drop unused vendor crates copyright information.
+    + Add new crates copyright information to copyright.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Sat, 24 Feb 2018 14:43:48 +0530
+
+cargo (0.24.0-1) unstable; urgency=medium
+
+  * Upload to unstable.
+
+ -- Ximin Luo <infinity0@debian.org>  Sat, 27 Jan 2018 10:41:06 +0100
+
+cargo (0.24.0-1~exp1) experimental; urgency=medium
+
+  [upstream]
+  * Supports uninstallation of multiple crates.
+  * `cargo check` unit testing.
+  * Install  a specific version using `cargo install --version`
+
+  [ Vasudev Kamath ]
+  * Update vendor-tarball-unsuspicious.txt vendor-tarball-filter.txt for
+    new upstream release.
+  * debian/control:
+    + Mark package compliance with Debian Policy 4.1.3.
+  * debian/patches:
+    + Update patch 2001 to work with libgit2-sys-0.6.19.
+    + Update 1002 patch to drop url crate specific hunk as its merged
+      upstream.
+    + Add patch 0001 to fix bad_git_dependency test failure.
+  * debian/copyright:
+    + Add new vendor crates to copyright.
+    + Track rustfmt.toml in top level copyright section.
+  * Add lintian-override for ignoring README from
+    patch-file-present-but-not-mentioned-in-series tag.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Thu, 25 Jan 2018 14:57:43 +0530
+
+cargo (0.23.0-1) unstable; urgency=medium
+
+  * Upload to unstable.
+  * Mark package as compliant with Debian Policy 4.1.2.
+    No change required to source.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Sun, 10 Dec 2017 15:33:55 +0530
+
+cargo (0.23.0-1~exp1) experimental; urgency=medium
+
+  * [upstream]
+    + Cargo will now build multi file examples in subdirectories of the
+      examples folder that have a main.rs file.
+    + Changed [root] to [package] in Cargo.lock. Old format packages will
+      continue to work and can be updated using cargo update.
+    + Supports vendoring git repositories.
+  * Refresh patch 2004 for new release.
+  * Audit logo.svg file from termion crate.
+  * debian/patches:
+    + Drop patch 1001, its merged upstream.
+    + Refresh patch 2002 with new upstream changes.
+    + Refresh patch 2001 with newer libgit2-sys changes.
+    + Add patch 2005 to prevent executing non-existing mdbook command
+      during build.
+    + Move part of typo fix for url crate to patch 1001 to 1002. url crate
+      is not updated in new cargo release.
+  * debian/copyright:
+    + Remove copyright for gcc crate.
+    + Add copyright information for cc, commoncrypto, crypto-hash,
+      redox_syscall. redox_termios and termion crate.
+    + Add CONTRIBUTING.md to top Files section.
+    + Drop magnet-sys from copyright.
+
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Tue, 05 Dec 2017 22:03:49 +0530
+
+cargo (0.22.0-1~exp1) experimental; urgency=medium
+
+  * New upstream release.
+    + Can now install multiple crates with cargo install.
+    + cargo commands inside a virtual workspace will now implicitly pass
+      --all.
+    + Added [patch] section to Cargo.toml to handle prepublication
+      dependencies RFC 1969.
+    + include and exclude fields in Cargo.toml now accept gitignore like
+      patterns.
+    + Added --all-target option.
+    + Using required dependencies as a feature is now deprecated and emits
+      a warning.
+  * Put upstream PR url for patch 1001.
+  * Add conv crate file to unsuspicious files.
+  * debian/patches:
+    + Refresh patches 1001, 2002 and 2004 with new upstream release.
+    + Fix typo in cargo search command and related tests.
+  * debian/control:
+    + Mark package compliance with Debian Policy 4.1.1.
+    + Mark priority for package as optional from extra. Priority extra is
+      deprecated from Debian Policy 4.0.1.
+  * debian/copyright:
+    + Add newly added vendor copyright information.
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Sun, 29 Oct 2017 19:50:42 +0530
+
+cargo (0.21.1-2) unstable; urgency=medium
+
+  * Upload to unstable.
+
+ -- Ximin Luo <infinity0@debian.org>  Wed, 25 Oct 2017 23:30:46 +0200
+
+cargo (0.21.1-1) experimental; urgency=medium
+
+  * debian/control:
+    + Add myself as uploader for cargo package.
+    + Mark package compliance with Debian Policy 4.1.0.
+  * Mark tables.rs from unicode-normalization as unsuspicious.
+  * Ignore sublime workspace file from hex crate.
+  * debian/copyright:
+    + Drop wildcards representing the old crates under vendor folder.
+    + Add copyright information for newer crates under vendor
+    + Add ARCHITECTURE.* to copyright.
+  * debian/patches:
+    + Rename patches to follow patch naming guidelines mentioned in
+      debian/patches/README.
+    + Add patch 1001 to fix spelling errors in cargo output messages.
+    + Make patch 2003 DEP-3 compliant.
+    + Adjust make_orig_multi.sh to renamed clean-cargo-deps.patch
+
+ -- Vasudev Kamath <vasudev@copyninja.info>  Sat, 23 Sep 2017 10:41:07 +0530
+
+cargo (0.20.0-2) unstable; urgency=medium
+
+  * Work around #865549, fixes FTBFS on ppc64el.
+
+ -- Ximin Luo <infinity0@debian.org>  Thu, 14 Sep 2017 15:47:55 +0200
+
+cargo (0.20.0-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Fix cross-compiling declarations, Multi-Arch: foreign => allowed
+  * Un-embed libgit2 0.25.1 again. (Closes: #860990)
+  * Update to latest Standards-Version; no changes required.
+
+ -- Ximin Luo <infinity0@debian.org>  Thu, 24 Aug 2017 19:13:00 +0200
+
+cargo (0.17.0-2) unstable; urgency=medium
+
+  * Re-embed libgit2 0.25.1 due to the Debian testing freeze. It will be
+    removed again after the freeze is over, when libgit2 0.25.1 can again
+    enter Debian unstable.
+
+ -- Ximin Luo <infinity0@debian.org>  Wed, 03 May 2017 16:56:03 +0200
+
+cargo (0.17.0-1) unstable; urgency=medium
+
+  * Upload to unstable so we have something to build rustc 1.17.0 with.
+
+ -- Ximin Luo <infinity0@debian.org>  Wed, 03 May 2017 11:24:08 +0200
+
+cargo (0.17.0-1~exp3) experimental; urgency=medium
+
+  * Add git to Build-Depends to fix FTBFS.
+  * Mention cross-compiling in the previous changelog entry.
+
+ -- Ximin Luo <infinity0@debian.org>  Tue, 02 May 2017 13:18:53 +0200
+
+cargo (0.17.0-1~exp2) experimental; urgency=medium
+
+  * Bring in some changes from Ubuntu.
+    - Rename deps/ to vendor/ as that's what upstream uses, and update
+      other files with the new paths too.
+    - Remove cargo-vendor-unpack since we no longer need to postprocess
+      cargo-vendor output in that way.
+  * Document that bootstrap.py probably doesn't work now.
+  * Include /usr/share/rustc/architecture.mk in d/rules instead of duplicating
+    awkward arch-dependent Makefile snippets.
+  * Don't embed libgit2, add a versioned B-D to libgit2-dev.
+  * Add support for cross-compiling bootstrap.
+
+ -- Ximin Luo <infinity0@debian.org>  Mon, 01 May 2017 20:49:45 +0200
+
+cargo (0.17.0-1~exp1) experimental; urgency=medium
+
+  * New upstream release. (Closes: #851089, #859312)
+
+ -- Ximin Luo <infinity0@debian.org>  Thu, 20 Apr 2017 03:16:04 +0200
+
+cargo (0.15.0~dev-1) unstable; urgency=medium
+
+  * New upstream snapshot (git 1877f59d6b2cb057f7ef6c6b34b926fd96a683c1)
+    - Compatible with OpenSSL 1.1.0 (Closes: #828259)
+  * rules: use new link-arg options (Closes: #834980, #837433)
+    - Requires rustc >= 1.13
+
+ -- Luca Bruno <lucab@debian.org>  Fri, 25 Nov 2016 23:30:03 +0000
+
+cargo (0.11.0-2) unstable; urgency=high
+
+  * debian/rules: fix RUSTFLAGS quoting (Closes: #834980)
+
+ -- Luca Bruno <lucab@debian.org>  Sun, 21 Aug 2016 18:21:21 +0000
+
+cargo (0.11.0-1) unstable; urgency=medium
+
+  [ Daniele Tricoli ]
+  * New upstream release. (Closes: #826938)
+    - Update deps tarball.
+    - Refresh patches.
+    - Drop clean-win-crates.patch since time crate is not a dependency
+      anymore.
+    - Drop deps-url-fix-toml.patch since merged upstream.
+
+  [ Luca Bruno ]
+  * Install subcommand manpages too
+  * Move to a bootstrapped (stage1) build by default
+
+ -- Luca Bruno <lucab@debian.org>  Mon, 15 Aug 2016 13:59:04 +0000
+
+cargo (0.9.0-1) unstable; urgency=medium
+
+  * New upstream version
+    + Fix deprecation errors (Closes: #822178, #823652)
+    + Updated deps tarball
+    + Refreshed patches
+
+ -- Luca Bruno <lucab@debian.org>  Sat, 07 May 2016 17:56:28 +0200
+
+cargo (0.8.0-2) unstable; urgency=low
+
+  * Prefer libcurl4-gnutls-dev for building (Closes: #819831)
+
+ -- Luca Bruno <lucab@debian.org>  Tue, 05 Apr 2016 22:23:44 +0200
+
+cargo (0.8.0-1) unstable; urgency=medium
+
+  * New upstream version 0.8.0
+    + Updated deps tarball
+    + Refreshed patches
+  * cargo: removed unused lintian overrides
+
+ -- Luca Bruno <lucab@debian.org>  Sat, 05 Mar 2016 22:39:06 +0100
+
+cargo (0.7.0-2) unstable; urgency=medium
+
+  * Bump standards version
+  * cargo:
+    + add a new stage2 profile
+    + preserve original Cargo.lock for clean
+    + clean environment to allow multiple builds
+  * cargo-doc:
+    + update docbase paths after package split
+    + do not reference remote jquery
+    + do not build under nodoc profile
+  * control: update build-deps for build-profiles
+
+ -- Luca Bruno <lucab@debian.org>  Thu, 03 Mar 2016 22:18:32 +0100
+
+cargo (0.7.0-1) unstable; urgency=medium
+
+  * New upstream version 0.7.0
+    + Updated deps tarball and repack filter
+    + Refreshed patches
+  * Fixes to debian packaging
+    + Updated deps repack script
+    + index packing: use the same TAR format as cargo
+    + rules: ask cargo to build verbosely
+  * Update README.source to match current packaging
+
+ -- Luca Bruno <lucab@debian.org>  Sun, 14 Feb 2016 16:12:55 +0100
+
+cargo (0.6.0-2) unstable; urgency=medium
+
+  * Introduce a cargo-doc package
+  * Fails to build when wget is installed. Force curl
+    (Closes: #809298)
+  * Add the missing VCS- fields
+
+ -- Sylvestre Ledru <sylvestre@debian.org>  Tue, 26 Jan 2016 13:01:16 +0100
+
+cargo (0.6.0-1) unstable; urgency=medium
+
+  * New upstream version 0.6.0
+    + Updated deps tarball
+    + Not shipping a registry index anymore
+  * Refreshed bootstrap.py script
+    + Skip optional dependencies in stage0
+  * Added some crude pack/unpack helpers
+  * copyright: cleaned up unused entries
+  * rules: major update for new 0.6.0 bootstrap
+
+ -- Luca Bruno <lucab@debian.org>  Fri, 04 Dec 2015 00:42:55 +0100
+
+cargo (0.3.0-2) unstable; urgency=medium
+
+  * Fix install target, removing arch-specific path
+
+ -- Luca Bruno <lucab@debian.org>  Sat, 14 Nov 2015 19:46:57 +0100
+
+cargo (0.3.0-1) unstable; urgency=medium
+
+  * Team upload.
+  * First upload to unstable.
+  * Update gbp.conf according to git repo structure.
+  * patches: downgrade missing_docs lints to simple warnings
+    to avoid build failures on newer rustc.
+
+ -- Luca Bruno <lucab@debian.org>  Sat, 14 Nov 2015 17:29:15 +0100
+
+cargo (0.3.0-0~exp1) experimental; urgency=low
+
+  * Team upload.
+  * Initial Debian release. (Closes: #786432)
+
+ -- Luca Bruno <lucab@debian.org>  Tue, 11 Aug 2015 20:15:54 +0200

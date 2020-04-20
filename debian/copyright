@@ -1,0 +1,729 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: cargo
+Source: https://github.com/rust-lang/cargo
+
+Files:
+ crates/*
+ src/*
+ tests/*
+ .*
+ Cargo.*
+ LICENSE-*
+ README.*
+ ARCHITECTURE.*
+ CHANGELOG.*
+ CONTRIBUTING.*
+ appveyor.yml
+ azure-pipelines.yml
+ ci/*
+ publish.py
+Copyright: 2014 The Rust Project Developers
+License: MIT or Apache-2.0
+Comment: please do not add * to the above paragraph, so we can use lintian to
+         help us update this file properly
+
+Files: vendor/bitflags/*
+       vendor/bufstream/*
+       vendor/env_logger/*
+       vendor/env_logger-0*/*
+       vendor/flate2/*
+       vendor/fs2/*
+       vendor/glob/*
+       vendor/libc/*
+       vendor/log/*
+       vendor/regex/*
+       vendor/regex-syntax/*
+       vendor/semver/*
+       vendor/shell-escape/*
+       vendor/vec_map/*
+       vendor/unicode-width/*
+       vendor/num-integer/*
+       vendor/num-traits/*
+Copyright: 2010-2019 The Rust Project Developers
+License: MIT or Apache-2.0
+Comment:
+ This is a collection of external crates embedded here to bootstrap cargo.
+ Most of them come from the original upstream Rust project, thus share the
+ same MIT/Apache-2.0 dual-license. See https://github.com/rust-lang.
+ Exceptions are noted below.
+
+Files:
+ vendor/backtrace/*
+ vendor/backtrace-sys/*
+ vendor/cc/*
+ vendor/cfg-if/*
+ vendor/filetime/*
+ vendor/fnv/*
+ vendor/git2/*
+ vendor/git2-curl/*
+ vendor/jobserver/*
+ vendor/libz-sys/*
+ vendor/libgit2-sys/*
+ vendor/libssh2-sys/*
+ vendor/miow/*
+ vendor/openssl-probe/*
+ vendor/pkg-config/*
+ vendor/proc-macro2/*
+ vendor/rustc-workspace-hack/*
+ vendor/rustc-demangle/*
+ vendor/tar/*
+ vendor/time/*
+ vendor/toml/*
+ vendor/socket2/*
+ vendor/libnghttp2-sys/*
+ vendor/wait-timeout/*
+Copyright: 2014-2018 Alex Crichton <alex@alexcrichton.com>
+           2014-2018 The Rust Project Developers
+License: MIT or Apache-2.0
+Comment:
+ see https://github.com/alexcrichton/
+ see https://github.com/servo/rust-fnv
+
+Files:
+ vendor/getrandom/*
+ vendor/rand/*
+ vendor/rand-0*/*
+ vendor/rand_core/*
+ vendor/rand_core-0*/*
+ vendor/rand_chacha/*
+ vendor/rand_chacha-0*/*
+ vendor/rand_hc/*
+ vendor/rand_hc-0*/*
+ vendor/rand_isaac/*
+ vendor/rand_jitter/*
+ vendor/rand_os/*
+ vendor/rand_pcg/*
+ vendor/rand_xoshiro/*
+ vendor/rand_xorshift/*
+Copyright:
+ 2019-2020 The Rand Project Developers
+ 2010-2020 The Rust Project Developers
+License: MIT or Apache-2.0
+Comment:
+ see https://github.com/rust-random/getrandom
+ see https://github.com/rust-random/rand
+
+Files:
+ vendor/aho-corasick/*
+ vendor/memchr/*
+ vendor/utf8-ranges/*
+ vendor/wincolor/*
+ vendor/termcolor/*
+ vendor/globset/*
+ vendor/ignore/*
+ vendor/same-file/*
+ vendor/walkdir/*
+ vendor/winapi-util/*
+ vendor/byteorder/*
+ vendor/bytesize/*
+Copyright: 2015-2018 Andrew Gallant <jamslam@gmail.com>
+License: MIT or Unlicense
+Comment: see upstream projects,
+ * https://github.com/docopt/docopt.rs
+ * https://github.com/BurntSushi/aho-corasick
+ * https://github.com/BurntSushi/rust-memchr
+ * https://github.com/BurntSushi/utf8-ranges
+ * https://github.com/BurntSushi/ripgrep/tree/master/wincolor
+ * https://github.com/BurntSushi/ripgrep/tree/master/termcolor
+ * https://github.com/BurntSushi/ripgrep/tree/master/globset
+ * https://github.com/BurntSushi/ripgrep/tree/master/ignore
+ * https://github.com/BurntSushi/same-file
+ * https://github.com/BurntSushi/walkdir
+ * https://github.com/BurntSushi/winapi-util
+
+Files: vendor/anyhow/*
+Copyright: 2019-2020 David Tolnay <dtolnay@gmail.com>
+License: MIT OR Apache-2.0
+Comment: see https://github.com/dtolnay/anyhow
+
+Files: vendor/adler32/*
+Copyright: 2015-2019 Remi Rampin <remirampin@gmail.com>
+License: Zlib
+Comment: see https://github.com/remram44/adler32-rs
+
+Files: vendor/bitmaps/*
+Copyright: 2019-2020 Bodil Stokke <bodil@bodil.org>
+License: MPL-2.0+
+Comment: see https://github.com/bodil/bitmaps
+
+Files:
+ vendor/bstr/*
+ vendor/ucd-util/*
+Copyright: 2015-2019 Andrew Gallant <jamslam@gmail.com>
+License: MIT or Apache-2.0
+Comment:
+ see https://github.com/BurntSushi/bstr
+ see https://github.com/BurntSushi/rucd
+
+Files: vendor/ansi_term/*
+Copyright: 2014, Benjamin Sago <ogham@bsago.me>
+           Ryan Scheel (Havvy) <ryan.havvy@gmail.com>
+           Josh Triplett <josh@joshtriplett.org>
+License: MIT
+
+Files: vendor/atty/*
+Copyright: 2015-2016, Doug Tangren
+License: MIT
+Comment: see https://github.com/softprops/atty
+
+Files: vendor/autocfg/*
+Copyright: 2018-2019 Josh Stone <cuviper@gmail.com>
+License: Apache-2.0 or MIT
+Comment: see https://github.com/cuviper/autocfg
+
+Files: vendor/bit-set/*
+ vendor/bit-vec/*
+Copyright: 2016 The Rust Project Developers
+           Alexis Beingessner <a.beingessner@gmail.com>
+License: MIT or Apache-2.0
+
+Files: vendor/bytes/*
+Copyright: 2015-2019 Carl Lerche <me@carllerche.com>
+License: MIT
+Comment: see https://github.com/carllerche/bytes
+
+Files:
+ vendor/c2-chacha/*
+ vendor/ppv-lite86/*
+Copyright: 2019-2019 The CryptoCorrosion Contributors
+License: MIT or Apache-2.0
+Comment: see https://github.com/cryptocorrosion/cryptocorrosion
+
+Files: vendor/chrono/*
+Copyright: 2014-2018 Kang Seonghoon <public+rust@mearie.org>
+           2014-2018 Brandon W Maister <quodlibetor@gmail.com>
+License: MIT or Apache-2.0
+Comment: see https://github.com/chronotope/chrono
+
+Files: vendor/clap/*
+Copyright: 2015-2016, Kevin B. Knapp <kbknapp@gmail.com>
+License: MIT
+
+Files: vendor/cloudabi/*
+Copyright: Nuxi and contributors
+License: BSD-2-clause
+Comment: See https://github.com/nuxinl/cloudabi
+
+Files: vendor/core-foundation/*
+       vendor/core-foundation-sys/*
+Copyright: 2012-2013, The Servo Project Developers,
+ 2012-2013, Mozilla Foundation
+License: MIT or Apache-2.0
+Comment: see https://github.com/servo/core-foundation-rs
+
+Files: vendor/crc32fast/*
+Copyright: 2018, Sam Rijs <srijs@airpost.net>
+           2018, Alex Crichton <alex@alexcrichton.com>
+License: MIT or Apache-2.0
+
+Files:
+ vendor/crossbeam-channel/*
+ vendor/crossbeam-utils/*
+Copyright: 2017-2018 The Crossbeam Project Developers
+License: MIT or Apache-2.0
+Comment: see https://github.com/crossbeam-rs
+
+Files: vendor/commoncrypto/*
+       vendor/commoncrypto-sys/*
+       vendor/crypto-hash/*
+Copyright: 2016, Mark Lee
+ 2015-2016, Mark Lee
+License: MIT
+Comment:
+ * see https://github.com/malept/rust-commoncrypto
+ * see https://github.com/malept/crypto-hash
+
+Files: vendor/curl/*
+       vendor/curl-sys/*
+Copyright: 2014-2019 Alex Crichton <alex@alexcrichton.com>
+License: MIT
+Comment: see https://github.com/alexcrichton/curl-rust
+
+Files: vendor/failure/*
+       vendor/failure_derive/*
+Copyright: Without Boats <boats@mozilla.com>
+License: MIT or Apache-2.0
+Comment:
+ * see https://github.com/withoutboats/failure
+ * see https://github.com/withoutboats/failure_derive
+
+Files: vendor/fuchsia-cprng/*
+Copyright:
+ 2018 The Fuchsia Authors
+ 2018 Erick Tryzelaar <etryzelaar@google.com>
+License: BSD-3-Clause
+Comment: see https://fuchsia.googlesource.com/fuchsia/+/master/garnet/public/rust/fuchsia-cprng
+
+Files: vendor/hermit-abi/*
+Copyright: 2019-2019 Stefan Lankes
+License: MIT or Apache-2.0
+Comment: see https://github.com/hermitcore/hermit-abi
+
+Files:
+ vendor/hex/*
+ vendor/hex-0*/*
+Copyright:
+ 2015-2019 KokaKiwi <kokakiwi@kokakiwi.net>
+ 2015-2019 rust-hex Developers
+License: MIT or Apache-2.0
+Comment: see https://github.com/KokaKiwi/rust-hex
+
+Files: vendor/home/*
+Copyright: Brian Anderson <andersb@gmail.com>
+License: MIT or Apache-2.0
+Comment: see https://github.com/brson/home
+
+Files: vendor/http/*
+Copyright: 2017-2019 Alex Crichton <alex@alexcrichton.com>
+           2017-2019 Carl Lerche <me@carllerche.com>
+           2017-2019 Sean McArthur <sean@seanmonstar.com>
+License: MIT or Apache-2.0
+Comment: see https://github.com/hyperium/http
+
+Files:
+ vendor/humantime/*
+ vendor/humantime-1*/*
+Copyright: 2016, The humantime Developers
+License: MIT or Apache-2.0
+Comment:
+ Includes parts of http date with copyright: 2016, Pyfisch and portions of musl
+ libc with copyright 2005-2013 Rich Felker.
+ .
+ See https://github.com/tailhook/humantime
+
+Files:
+ vendor/im-rc/*
+ vendor/sized-chunks/*
+Copyright: 2017-2019 Bodil Stokke <bodil@bodil.org>
+License: MPL-2.0+
+Comment:
+ see https://github.com/bodil/im-rs
+ see https://github.com/bodil/sized-chunks
+
+Files: vendor/iovec/*
+Copyright: 2017-2018 Carl Lerche <me@carllerche.com>
+License: MIT or Apache-2.0
+Comment: see https://github.com/carllerche/iovec
+
+Files: vendor/itoa/*
+       vendor/quote/*
+Copyright: 2016-2017 David Tolnay <dtolnay@gmail.com>
+License: MIT or Apache-2.0
+Comment: see https://github.com/dtolnay
+
+Files: vendor/foreign-types/*
+       vendor/foreign-types-shared/*
+Copyright: 2017-2017 Steven Fackler <sfackler@gmail.com>
+License: MIT or Apache-2.0
+Comment: see https://github.com/sfackler/foreign-types
+
+Files: vendor/fwdansi/*
+Copyright: 2018-2018 kennytm <kennytm@gmail.com>
+License: MIT
+Comment: see https://github.com/kennytm/fwdansi
+
+Files: vendor/idna/*
+Copyright: 2013 Simon Sapin <simon.sapin@exyr.org>
+           2013-2014 Valentin Gosu
+           1991-2015 Unicode, Inc
+License: MIT or Apache-2.0
+
+Files: vendor/lazycell/*
+Copyright: 20014, The Rust Project Developers
+           2016-2017, Nikita Pekin and lazycell contributors
+License: MIT or Apache-2.0
+
+Files: vendor/lazy_static/*
+ vendor/rustc_version/*
+Copyright: 2014-2016 Marvin Löbel <loebel.marvin@gmail.com>
+License: MIT or Apache-2.0
+
+Files: vendor/matches/*
+Copyright: 2015 Simon Sapin <simon.sapin@exyr.org>
+License: MIT
+Comment: see https://github.com/SimonSapin/rust-std-candidates
+
+Files: vendor/maybe-uninit/*
+Copyright: 2019-2019 est31 <MTest31@outlook.com>
+           2019-2019 The Rust Project Developers
+License: Apache-2.0 OR MIT
+Comment: see https://github.com/est31/maybe-uninit
+
+Files: vendor/miniz_oxide/*
+Copyright:
+ 2017-2019 Frommi <daniil.liferenko@gmail.com>
+ 2017-2019 oyvindln <oyvindln@users.noreply.github.com>
+License: MIT
+Comment: see https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide
+
+Files: vendor/num_cpus/*
+Copyright: 2015, Sean McArthur <sean@seanmonstar.com>
+License: MIT or Apache-2.0
+
+Files: vendor/numtoa/*
+Copyright: 2017-2018 Michael Aaron Murphy <mmstickman@gmail.com>
+License: MIT or Apache-2.0
+Comment: see https://gitlab.com/mmstick/numtoa
+
+Files: vendor/opener/*
+Copyright: 2018 Brian Bowman <seeker14491@gmail.com>
+License: MIT or Apache-2.0
+Comment: see https://github.com/Seeker14491/opener
+
+Files: vendor/openssl/*
+Copyright: 2013-2015 Steven Fackler <sfackler@gmail.com>
+           2013 Jack Lloyd
+           2011 Google Inc.
+License: Apache-2.0
+
+Files: vendor/openssl-sys/*
+Copyright: 2015 Steven Fackler <sfackler@gmail.com>
+           2015 Alex Crichton <alex@alexcrichton.com>
+License: MIT
+Comment: see https://github.com/sfackler/rust-openssl
+
+Files: vendor/pretty_env_logger/*
+Copyright: 2016-2019 Sean McArthur <sean@seanmonstar>
+License: MIT or Apache-2.0
+Comment: see https://github.com/seanmonstar/pretty-env-logger
+
+Files: vendor/proptest/*
+ vendor/rusty-fork/*
+Copyright: Jason Lingle
+           2016 FullContact, Inc
+License: MIT or Apache-2.0
+
+Files: vendor/quick-error/*
+Copyright: 2015, The quick-error developers
+License: MIT or Apache-2.0
+
+Files: vendor/rdrand/*
+Copyright: 2014-2018 Simonas Kazlauskas <rdrand@kazlauskas.me>
+License: ISC
+Comment: see https://github.com/nagisa/rust_rdrand/
+
+Files: vendor/redox_syscall/*
+       vendor/redox_termios/*
+Copyright: 2017, Redox OS Developers
+License: MIT
+
+Files: vendor/remove_dir_all/*
+Copyright: 2017, Aaron Power <theaaronepower@gmail.com>
+License: MIT or Apache-2.0
+Comment: see https://github.com/Aaronepower/remove_dir_all
+
+Files: vendor/rustfix/*
+Copyright: 2016, Pascal Hertleif
+           2016, Oliver Schneider
+License: MIT or Apache-2.0
+
+Files: vendor/ryu/*
+Copyright: David Tolnay <dtolnay@gmail.com>
+License: BSL-1.0 or Apache-2.0
+
+Files: vendor/schannel/*
+Copyright: 2015, Steffen Butzer <steffen.butzer@outlook.com>
+License: MIT
+Comment: see https://github.com/steffengy/schannel-rs/
+
+Files: vendor/semver-parser/*
+Copyright: 2016-2018 Steve Klabnik <steve@steveklabnik.com>
+License: MIT or Apache-2.0
+Comment: see https://github.com/steveklabnik/semver-parser
+
+Files: vendor/serde/*
+       vendor/serde_derive/*
+       vendor/serde_ignored/*
+       vendor/serde_json/*
+Copyright: 2014-2017 Erick Tryzelaar <erick.tryzelaar@gmail.com>
+           2014-2017 David Tolnay <dtolnay@gmail.com>
+License: MIT or Apache-2.0
+Comment: see https://github.com/serde-rs
+         see https://github.com/dtolnay/serde-ignored
+
+Files: vendor/scopeguard/*
+Copyright: 2015, The Rust Project Developers
+           bluss
+License: MIT or Apache-2.0
+Comment: see https://github.com/bluss/scopeguard
+
+Files: vendor/smallvec/*
+Copyright: 2018 Simon Sapin <simon.sapin@exyr.org>
+License: MIT or Apache-2.0
+
+Files: vendor/spin/*
+Copyright: 2014-2019 Mathijs van de Nes <git@mathijs.vd-nes.nl>
+           2014-2019 John Ericson <git@JohnEricson.me>
+License: MIT
+Comment: see https://github.com/mvdnes/spin-rs.git
+
+Files: vendor/strip-ansi-escapes/*
+Copyright: 2017-2018 Ted Mielczarek <ted@mielczarek.org>
+License: Apache-2.0 or MIT
+Comment: see https://github.com/luser/strip-ansi-escapes
+
+Files: vendor/strsim/*
+Copyright: 2015 Danny Guo <dannyguo91@gmail.com>
+License: MIT
+Comment: see https://github.com/dguo/strsim-rs
+
+Files: vendor/syn/*
+Copyright: 2016-2017 David Tolnay <dtolnay@gmail.com>
+License: MIT or Apache-2.0
+Comment: see https://github.com/dtolnay/syn
+
+Files: vendor/synstructure/*
+Copyright: Michael Layzell <michael@thelayzells.com>
+License: MIT
+Comment: see https://github.com/mystor/synstructure
+
+Files: vendor/termion/*
+Copyright: 2016, Ticki
+License: MIT
+Comment: see https://github.com/ticki/termion/
+
+Files: vendor/textwrap/*
+Copyright: 2016, Martin Geisler <martin@geisler.net>
+License: MIT
+
+Files: vendor/tempfile/*
+Copyright: 2015, Steven Allen
+License: MIT or Apache-2.0
+
+Files: vendor/thread_local/*
+Copyright: 2016 Amanieu d'Antras <amanieu@gmail.com>
+License: MIT or Apache-2.0
+Comment: see https://github.com/Amanieu/thread_local-rs
+
+Files: vendor/typenum/*
+Copyright: 2015-2018 Paho Lurie-Gregg <paho@paholg.com>
+           2015-2018 Andre Bogus <bogusandre@gmail.com>
+License: MIT or Apache-2.0
+Comment: see https://github.com/paholg/typenum
+
+Files: vendor/unicode-bidi/*
+Copyright: 2015 The Servo Project Developers
+License: MIT or Apache-2.0
+Comment: see https://github.com/servo/unicode-bidi
+
+Files: vendor/unicode-normalization/*
+Copyright: 2016 kwantam <kwantam@gmail.com>
+License: MIT or Apache-2.0
+
+Files: vendor/unicode-xid/*
+Copyright: 2015-2017 erick.tryzelaar <erick.tryzelaar@gmail.com>
+           2015-2017 kwantam <kwantam@gmail.com>
+License: MIT or Apache-2.0
+Comment: see https://github.com/unicode-rs/unicode-xid
+
+Files: vendor/unreachable/*
+       vendor/void/*
+Copyright: 2015-2017 Jonathan Reem <jonathan.reem@gmail.com>
+License: MIT
+Comment: see https://github.com/reem/
+
+Files:
+ vendor/url/*
+ vendor/url_serde/*
+ vendor/percent-encoding/*
+Copyright: 2015-2016 Simon Sapin <simon.sapin@exyr.org>
+           2013-2019 The rust-url developers
+License: MIT or Apache-2.0
+Comment: see https://github.com/servo/rust-url
+         see https://github.com/servo/rust-url/tree/master/percent_encoding
+
+Files: vendor/utf8parse/*
+Copyright: 2016-2019 Joe Wilm <joe@jwilm.com>
+License: Apache-2.0 or MIT
+Comment: see https://github.com/jwilm/vte
+
+Files: vendor/vcpkg/*
+Copyright: 2017-2017 Jim McGrath <jimmc2@gmail.com>
+License: MIT or Apache-2.0
+Comment: see https://github.com/mcgoo/vcpkg-rs
+
+Files: vendor/version_check/*
+Copyright: 2017-2019 Sergio Benitez <sb@sergio.bz>
+License: MIT or Apache-2.0
+Comment: see https://github.com/SergioBenitez/version_check
+
+Files: vendor/vte/*
+Copyright: 2016-2019 Joe Wilm <joe@jwilm.com>
+License: Apache-2.0 or MIT
+Comment: see https://github.com/jwilm/vte
+
+Files: vendor/winapi/*
+Copyright:
+ 2014-2017 Peter Atashian <retep998@gmail.com>
+ 2014-2017 winapi-rs developers
+License: MIT
+Comment: see https://github.com/retep998/winapi-rs
+
+Files: vendor/winapi-*-pc-windows-gnu/*
+Copyright: 2014-2018 Peter Atashian <retep998@gmail.com>
+License: MIT or Apache-2.0
+Comment: see https://github.com/retep998/winapi-rs
+
+Files: debian/*
+Copyright:
+ 2016-2019 Ximin Luo <infinity0@debian.org>
+ 2017-2019 Vasudeva Kamath <vasudev@copyninja.info>
+ 2015-2016 Luca Bruno <lucab@debian.org>
+License: MIT or Apache-2.0
+
+Files: debian/bootstrap.py
+Copyright: 2015 David Huseby
+License: BSD-2-clause
+Comment: See LICENSE at https://github.com/dhuseby/cargo-bootstrap/
+
+License: Apache-2.0
+ On Debian systems, see /usr/share/common-licenses/Apache-2.0 for
+ the full text of the Apache License version 2.
+
+License: BSD-2-clause
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions are met:
+ .
+ 1. Redistributions of source code must retain the above copyright notice,
+    this list of conditions and the following disclaimer.
+ 2. Redistributions in binary form must reproduce the above copyright notice,
+    this list of conditions and the following disclaimer in the documentation
+    and/or other materials provided with the distribution.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ POSSIBILITY OF SUCH DAMAGE.
+
+License: BSD-3-clause
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions are
+ met:
+ .
+  1. Redistributions of source code must retain the above copyright
+     notice, this list of conditions and the following disclaimer.
+  2. Redistributions in binary form must reproduce the above copyright
+     notice, this list of conditions and the following disclaimer in the
+     documentation and/or other materials provided with the
+     distribution.
+  3. Neither the name of the Creytiv.com nor the names of its
+     contributors may be used to endorse or promote products derived
+     from this software without specific prior written permission.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+ IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
+ INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+ STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+ IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ POSSIBILITY OF SUCH DAMAGE.
+
+License: ISC
+ Permission to use, copy, modify, and/or distribute this software for any
+ purpose with or without fee is hereby granted, provided that the above
+ copyright notice and this permission notice appear in all copies.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+License: MIT
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+  .
+  The above copyright notice and this permission notice shall be included in
+  all copies or substantial portions of the Software.
+  .
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+  THE SOFTWARE.
+
+License: MPL-2.0
+ Debian systems provide the MPL 2.0 in /usr/share/common-licenses/MPL-2.0
+
+License: Unlicense
+ This is free and unencumbered software released into the public domain.
+ .
+ Anyone is free to copy, modify, publish, use, compile, sell, or
+ distribute this software, either in source code form or as a compiled
+ binary, for any purpose, commercial or non-commercial, and by any
+ means.
+ .
+ In jurisdictions that recognize copyright laws, the author or authors
+ of this software dedicate any and all copyright interest in the
+ software to the public domain. We make this dedication for the benefit
+ of the public at large and to the detriment of our heirs and
+ successors. We intend this dedication to be an overt act of
+ relinquishment in perpetuity of all present and future rights to this
+ software under copyright law.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ OTHER DEALINGS IN THE SOFTWARE.
+
+License: BSL-1.0
+ Permission is hereby granted, free of charge, to any person or organization
+ obtaining a copy of the software and accompanying documentation covered by this
+ license (the "Software") to use, reproduce, display, distribute, execute, and
+ transmit the Software, and to prepare derivative works of the Software, and to
+ permit third-parties to whom the Software is furnished to do so, all subject to
+ the following:
+ .
+ The copyright notices in the Software and this entire statement, including the
+ above license grant, this restriction and the following disclaimer, must be
+ included in all copies of the Software, in whole or in part, and all derivative
+ works of the Software, unless such copies or derivative works are solely in the
+ form of machine-executable object code generated by a source language
+ processor.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE, TITLE AND NON-INFRINGEMENT. IN NO EVENT SHALL
+ THE COPYRIGHT HOLDERS OR ANYONE DISTRIBUTING THE SOFTWARE BE LIABLE FOR ANY
+ DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE, ARISING
+ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ THE SOFTWARE.
+
+License: Zlib
+ This software is provided 'as-is', without any express or implied
+ warranty.  In no event will the authors be held liable for any damages
+ arising from the use of this software.
+ .
+ Permission is granted to anyone to use this software for any purpose,
+ including commercial applications, and to alter it and redistribute it
+ freely, subject to the following restrictions:
+ .
+ 1. The origin of this software must not be misrepresented; you must not
+    claim that you wrote the original software. If you use this software
+    in a product, an acknowledgment in the product documentation would be
+    appreciated but is not required.
+ 2. Altered source versions must be plainly marked as such, and must not be
+    misrepresented as being the original software.
+ 3. This notice may not be removed or altered from any source distribution.

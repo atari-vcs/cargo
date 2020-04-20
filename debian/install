@@ -1,0 +1,3 @@
+debian/scripts/*                        usr/share/cargo/scripts
+debian/bin/cargo                        usr/share/cargo/bin
+src/etc/_cargo                          usr/share/zsh/vendor-completions

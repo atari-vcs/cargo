@@ -1,0 +1,56 @@
+Updating the package
+====================
+
+0. Update debcargo-conf.git so that cargo's dependencies are up-to-date. This
+   means less stuff will have to be patched (in debian/debcargo-conf.patch) in
+   the next step. This might take a while, ask other people for help if needed.
+1. Run d/make_orig_multi.sh <version>.
+2. Verify the -vendor component tarball to make sure it looks good.
+   If not, edit d/make_orig_multi.sh and the surrounding files (such as patches
+   and exclude files) and repeat the above until it looks good.
+3. $ git fetch upstream
+   You might have to first run:
+   $ git remote add upstream https://github.com/rust-lang/cargo
+4. $ gbp import-orig ../cargo_<version>.orig.tar.gz
+   If you get errors, check the extra default flags in d/gbp.conf
+5. Check that no old versions remain in vendor/. If there are, then your git
+   repo was messed up when you ran (4). Rewind the debian/sid, upstream, and
+   pristine-tar branches, delete the upstream/<version> tag; this reverts step
+   (4). Clean up your git repo, and then try (4) again.
+6. Update d/patches and the rest of the packaging, as normal.
+
+General info
+============
+
+Current packaging of cargo is sub-optimal due to the fact that
+both the language (Rust) and its package manager (Cargo)
+are involved into self-dependency loops to bootstrap.
+
+Moreover, the current approach to modules and registry by cargo is
+biased towards a developer-friendly always-online use.
+
+This package currently resort to several workarounds to build cargo:
+ 1. we use a custom script (debian/bootstrap.py) to build a local
+    stage0, instead of downloading/embedding a snapshotted binary.
+ 2. we embed all dependencies crates, because cargo needs external
+    modules (which need cargo themself to build).
+ 4. we generate a .cargo/config at build-time, to override paths and
+    registry.
+ 5. we create a temporary git repository at build-time for the
+    registry, as this is needed by cargo.
+
+As such, the original source is composed by two tarballs:
+ * cargo source
+ * dependencies crates (under vendor/), stripped of unused embedded
+   C libraries
+
+Uploading Package
+=================
+
+Please use dgit push-source command to upload new version of the package to
+archive. Command by itself creates a source only upload uploads the package to
+ftpmaster and creates version history on dgit.
+
+    dgit push-source --gbp
+
+ -- Vasudev Kamath <vasudev@copyninja.info>, Sat,  9 Jun 2018 14:41:17 +0530

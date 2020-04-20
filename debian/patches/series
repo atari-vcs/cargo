@@ -1,0 +1,3 @@
+2002_disable-net-tests.patch
+2003_disable_unicode_xid_favicon.patch
+2005_disable_fetch_cross_tests.patch
