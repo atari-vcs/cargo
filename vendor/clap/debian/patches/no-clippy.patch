@@ -1,0 +1,22 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -63,10 +63,6 @@
+ [dependencies.bitflags]
+ version = "1.0"
+ 
+-[dependencies.clippy]
+-version = "~0.0.166"
+-optional = true
+-
+ [dependencies.strsim]
+ version = "0.8"
+ optional = true
+@@ -102,7 +98,7 @@
+ debug = []
+ default = ["suggestions", "color", "vec_map"]
+ doc = ["yaml"]
+-lints = ["clippy"]
++lints = []
+ nightly = []
+ no_cargo = []
+ suggestions = ["strsim"]

@@ -1,0 +1,24 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -23,13 +23,6 @@
+ 
+ [lib]
+ name = "unicode_bidi"
+-[dependencies.flame]
+-version = "0.1"
+-optional = true
+-
+-[dependencies.flamer]
+-version = "0.1"
+-optional = true
+ 
+ [dependencies.serde]
+ version = ">=0.8, <2.0"
+@@ -43,7 +36,6 @@
+ 
+ [features]
+ with_serde = ["serde"]
+-flame_it = ["flame", "flamer"]
+ unstable = []
+ default = []
+ bench_it = []

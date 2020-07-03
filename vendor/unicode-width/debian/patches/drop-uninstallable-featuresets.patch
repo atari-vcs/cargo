@@ -1,0 +1,38 @@
+Description: Drop std and rustc-dep-of-std featuresets
+ The rustc-std-workspace-std package is not available in Debian.
+Author: Peter Michael Green <plugwash@debian.org>
+
+---
+The information above should follow the Patch Tagging Guidelines, please
+checkout http://dep.debian.net/deps/dep3/ to learn about the format. Here
+are templates for supplementary fields that you might want to add:
+
+Origin: <vendor|upstream|other>, <url of original patch>
+Bug: <url in upstream bugtracker>
+Bug-Debian: https://bugs.debian.org/<bugnumber>
+Bug-Ubuntu: https://launchpad.net/bugs/<bugnumber>
+Forwarded: <no|not-needed|url proving that it has been forwarded>
+Reviewed-By: <name and email of someone who approved the patch>
+Last-Update: 2020-04-12
+
+--- rust-unicode-width-0.1.7.orig/Cargo.toml
++++ rust-unicode-width-0.1.7/Cargo.toml
+@@ -31,13 +31,13 @@ version = "1.0"
+ optional = true
+ package = "rustc-std-workspace-core"
+ 
+-[dependencies.std]
+-version = "1.0"
+-optional = true
+-package = "rustc-std-workspace-std"
++#[dependencies.std]
++#version = "1.0"
++#optional = true
++#package = "rustc-std-workspace-std"
+ 
+ [features]
+ bench = []
+ default = []
+ no_std = []
+-rustc-dep-of-std = ["std", "core", "compiler_builtins"]
++#rustc-dep-of-std = ["std", "core", "compiler_builtins"]

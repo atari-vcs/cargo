@@ -1,0 +1,11 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -47,7 +47,7 @@
+ spnego = []
+ ssl = ["openssl-sys"]
+ static-curl = []
+-static-ssl = ["openssl-sys/vendored"]
++static-ssl = ["openssl-sys"]
+ [target."cfg(all(unix, not(target_os = \"macos\")))".dependencies.openssl-sys]
+ version = "0.9"
+ optional = true

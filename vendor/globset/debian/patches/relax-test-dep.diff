@@ -1,0 +1,13 @@
+Index: globset/Cargo.toml
+===================================================================
+--- globset.orig/Cargo.toml
++++ globset/Cargo.toml
+@@ -52,7 +52,7 @@ version = "0.3.0"
+ version = "1"
+ 
+ [dev-dependencies.serde_json]
+-version = "1.0.45"
++version = "1.0.41"
+ 
+ [features]
+ serde1 = ["serde"]

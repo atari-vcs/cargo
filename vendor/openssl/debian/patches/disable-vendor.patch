@@ -1,0 +1,8 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -51,4 +51,4 @@
+ v102 = []
+ v110 = []
+ v111 = []
+-vendored = ["openssl-sys/vendored"]
++vendored = []

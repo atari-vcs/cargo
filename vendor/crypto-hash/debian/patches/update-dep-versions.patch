@@ -1,0 +1,11 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -22,7 +22,7 @@
+ license = "MIT"
+ repository = "https://github.com/malept/crypto-hash"
+ [dependencies.hex]
+-version = "0.3"
++version = "0.4"
+ [target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.commoncrypto]
+ version = "0.2"
+ [target."cfg(not(any(target_os = \"windows\", target_os = \"macos\", target_os = \"ios\")))".dependencies.openssl]

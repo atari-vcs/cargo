@@ -1,0 +1,10 @@
+Index: num-cpus/Cargo.toml
+===================================================================
+--- num-cpus.orig/Cargo.toml
++++ num-cpus/Cargo.toml
+@@ -25,5 +25,3 @@ repository = "https://github.com/seanmon
+ repository = "https://github.com/seanmonstar/num_cpus"
+ [dependencies.libc]
+ version = "0.2.26"
+-[target."cfg(all(any(target_arch = \"x86_64\", target_arch = \"aarch64\"), target_os = \"hermit\"))".dependencies.hermit-abi]
+-version = "0.1.3"

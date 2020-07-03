@@ -1,0 +1,11 @@
+Description: for now, disable mesalink as it has some extra deps
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -44,7 +44,6 @@
+ default = ["ssl"]
+ force-system-lib-on-osx = ["curl-sys/force-system-lib-on-osx"]
+ http2 = ["curl-sys/http2"]
+-mesalink = ["curl-sys/mesalink"]
+ protocol-ftp = ["curl-sys/protocol-ftp"]
+ spnego = ["curl-sys/spnego"]
+ ssl = ["openssl-sys", "openssl-probe", "curl-sys/ssl"]

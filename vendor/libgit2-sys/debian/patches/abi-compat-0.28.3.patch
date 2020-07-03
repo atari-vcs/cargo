@@ -1,0 +1,10 @@
+--- a/lib.rs
++++ b/lib.rs
+@@ -331,7 +331,6 @@
+     pub push_negotiation: Option<git_push_negotiation>,
+     pub transport: Option<git_transport_cb>,
+     pub payload: *mut c_void,
+-    pub resolve_url: Option<git_url_resolve_cb>,
+ }
+ 
+ #[repr(C)]

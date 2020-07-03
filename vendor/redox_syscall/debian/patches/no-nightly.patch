@@ -1,0 +1,43 @@
+diff --git a/build.rs b/build.rs
+new file mode 100644
+index 0000000..ca906fa
+--- /dev/null
++++ b/build.rs
+@@ -0,0 +1,9 @@
++use std::env;
++
++pub fn main() {
++    if let Ok(os) = env::var("CARGO_CFG_TARGET_OS") {
++        if os == "redox" {
++            println!("cargo:rustc-cfg=nightly");
++        }
++    }
++}
+diff --git a/src/lib.rs b/src/lib.rs
+index 6b8d130..42526f0 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,5 +1,5 @@
+-#![feature(asm)]
+-#![feature(const_fn)]
++#![cfg_attr(nightly, feature(asm))]
++#![cfg_attr(nightly, feature(const_fn))]
+ #![cfg_attr(not(test), no_std)]
+ 
+ #[cfg(test)]
+@@ -10,6 +10,7 @@ pub use self::call::*;
+ pub use self::data::*;
+ pub use self::error::*;
+ pub use self::flag::*;
++#[cfg(target_os = "redox")]
+ pub use self::io::*;
+ pub use self::number::*;
+ pub use self::scheme::*;
+@@ -47,6 +48,7 @@ pub mod error;
+ pub mod flag;
+ 
+ /// Functions for low level hardware control
++#[cfg(target_os = "redox")]
+ pub mod io;
+ 
+ /// Call numbers used by each system call

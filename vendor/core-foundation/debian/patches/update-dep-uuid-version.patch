@@ -1,0 +1,22 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -29,7 +29,7 @@
+ version = "0.2"
+ 
+ [dependencies.uuid]
+-version = "0.5"
++version = ">= 0.7, < 0.9"
+ optional = true
+ 
+ [features]
+--- a/src/uuid.rs
++++ b/src/uuid.rs
+@@ -62,7 +62,7 @@
+             b.byte14,
+             b.byte15,
+         ];
+-        Uuid::from_bytes(&bytes).unwrap()
++        Uuid::from_slice(&bytes).unwrap()
+     }
+ }
+ 

@@ -1,0 +1,15 @@
+Description: for now, disable mesalink as it has some extra deps
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -35,11 +35,6 @@
+ [dependencies.libz-sys]
+ version = "1.0.18"
+ 
+-[dependencies.mesalink]
+-version = "1.1.0-cratesio"
+-features = ["client_apis", "error_strings", "tls13", "aesgcm", "chachapoly", "x25519", "ecdh", "ecdsa", "verifier"]
+-optional = true
+-default-features = false
+ [build-dependencies.cc]
+ version = "1.0"
+ 

@@ -1,0 +1,13 @@
+Index: im-rc/Cargo.toml
+===================================================================
+--- im-rc.orig/Cargo.toml
++++ im-rc/Cargo.toml
+@@ -63,7 +63,7 @@ version = "1.0"
+ optional = true
+ 
+ [dependencies.sized-chunks]
+-version = "0.5.1"
++version = ">= 0.5.1, < 0.7"
+ 
+ [dependencies.typenum]
+ version = "1.10"

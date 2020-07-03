@@ -1,0 +1,10 @@
+--- a/Cargo.toml	2018-12-07 21:23:58.793977939 -0800
++++ b/Cargo.toml	2018-12-07 21:24:35.522546433 -0800
+@@ -25,5 +25,5 @@
+ doctest = false
+ [dependencies.libc]
+ version = "0.2"
+-[build-dependencies.cc]
+-version = "1.0.24"
++[build-dependencies.pkg-config]
++version = "0.3"

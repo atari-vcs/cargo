@@ -1,0 +1,11 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -52,7 +52,7 @@
+ version = "0.1.39"
+ optional = true
+ [dev-dependencies.bincode]
+-version = "0.8.0"
++version = ">= 0.8.0, < 2"
+ 
+ [dev-dependencies.doc-comment]
+ version = "0.3"

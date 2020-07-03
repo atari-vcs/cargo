@@ -1,0 +1,17 @@
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -385,9 +385,11 @@
+     }
+ 
+     fn command(&self, name: &str, args: &[&str]) -> Command {
+-        let exe = self
+-            .env_var("PKG_CONFIG")
+-            .unwrap_or_else(|_| String::from("pkg-config"));
++        let exe = self.env_var("PKG_CONFIG").unwrap_or_else(|_| {
++            self.env_var("DEB_HOST_GNU_TYPE")
++                .map(|t| t.to_string() + "-pkg-config")
++                .unwrap_or_else(|_| String::from("pkg-config"))
++        });
+         let mut cmd = Command::new(exe);
+         if self.is_static(name) {
+             cmd.arg("--static");

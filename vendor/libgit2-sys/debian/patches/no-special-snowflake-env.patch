@@ -1,0 +1,20 @@
+--- a/build.rs
++++ b/build.rs
+@@ -7,7 +7,7 @@
+     let https = env::var("CARGO_FEATURE_HTTPS").is_ok();
+     let ssh = env::var("CARGO_FEATURE_SSH").is_ok();
+ 
+-    if env::var("LIBGIT2_SYS_USE_PKG_CONFIG").is_ok() {
++    if true {
+         let mut cfg = pkg_config::Config::new();
+         if let Ok(lib) = cfg.atleast_version("0.28.0").probe("libgit2") {
+             for include in &lib.include_paths {
+@@ -17,7 +17,7 @@
+         }
+     }
+ 
+-    if !Path::new("libgit2/.git").exists() {
++    if false {
+         let _ = Command::new("git")
+             .args(&["submodule", "update", "--init"])
+             .status();

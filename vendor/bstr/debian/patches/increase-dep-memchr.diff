@@ -1,0 +1,13 @@
+Index: bstr/Cargo.toml
+===================================================================
+--- bstr.orig/Cargo.toml
++++ bstr/Cargo.toml
+@@ -33,7 +33,7 @@ version = "1.2"
+ optional = true
+ 
+ [dependencies.memchr]
+-version = "2.1.2"
++version = "2.2.1"
+ default-features = false
+ 
+ [dependencies.regex-automata]

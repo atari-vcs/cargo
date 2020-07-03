@@ -1,0 +1,11 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -22,8 +22,6 @@
+ keywords = ["terminal", "tty", "isatty"]
+ license = "MIT"
+ repository = "https://github.com/softprops/atty"
+-[target."cfg(target_os = \"hermit\")".dependencies.hermit-abi]
+-version = "0.1.6"
+ [target."cfg(unix)".dependencies.libc]
+ version = "0.2"
+ default-features = false

@@ -1,0 +1,34 @@
+Description: Don't run doctests for FloatCore::{min, max} methods
+ This is to mitigate Debian bug #950337. The doctests show how to use the
+ `min` and `max` methods of the `FloatCore` trait, but with the `std`
+ feature enabled, they fall back to the implementations built into the
+ compiler, which shows different behavior on `mipsel` and `mips64el`
+ architectures than on the other architectures supported by Debian.
+ The bug in the compiler is tracked in Debian bug #950583. As soon as that
+ is fixed, this patch should be removed.
+Author: Wolfgang Silbermayr <wolfgang@silbermayr.at>
+Bug: https://github.com/rust-num/num-traits/issues/151
+Bug-Debian: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=950337
+Last-Update: 2020-02-06
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+--- a/src/float.rs
++++ b/src/float.rs
+@@ -568,7 +568,7 @@
+     ///
+     /// # Examples
+     ///
+-    /// ```
++    /// ```no_run
+     /// use num_traits::float::FloatCore;
+     /// use std::{f32, f64};
+     ///
+@@ -602,7 +602,7 @@
+     ///
+     /// # Examples
+     ///
+-    /// ```
++    /// ```no_run
+     /// use num_traits::float::FloatCore;
+     /// use std::{f32, f64};
+     ///

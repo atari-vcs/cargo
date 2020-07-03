@@ -1,0 +1,32 @@
+--- a/Cargo.toml	2020-02-21 15:24:20.134369814 -0500
++++ b/Cargo.toml	2020-02-21 15:24:47.854425168 -0500
+@@ -24,7 +24,7 @@
+ license = "MIT OR Apache-2.0"
+ repository = "https://github.com/rust-lang/log"
+ [package.metadata.docs.rs]
+-features = ["std", "serde", "kv_unstable_sval"]
++features = ["std", "serde"]
+ 
+ [[test]]
+ name = "filters"
+@@ -37,20 +37,11 @@
+ optional = true
+ default-features = false
+ 
+-[dependencies.sval]
+-version = "0.4.2"
+-optional = true
+-default-features = false
+ [dev-dependencies.serde_test]
+ version = "1.0"
+ 
+-[dev-dependencies.sval]
+-version = "0.4.2"
+-features = ["test"]
+-
+ [features]
+ kv_unstable = []
+-kv_unstable_sval = ["kv_unstable", "sval/fmt"]
+ max_level_debug = []
+ max_level_error = []
+ max_level_info = []

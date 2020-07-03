@@ -1,0 +1,2 @@
+dont-run-mipsel-failing-doctests.diff
+remove-libm-dep.diff
