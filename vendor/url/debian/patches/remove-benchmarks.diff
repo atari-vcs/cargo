@@ -1,0 +1,22 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -24,10 +24,6 @@
+ license = "MIT/Apache-2.0"
+ repository = "https://github.com/servo/rust-url"
+ 
+-[[bench]]
+-name = "parse_url"
+-path = "benches/parse_url.rs"
+-harness = false
+ [dependencies.form_urlencoded]
+ version = "1.0.0"
+ 
+@@ -44,8 +40,6 @@
+ version = "1.0"
+ features = ["derive"]
+ optional = true
+-[dev-dependencies.bencher]
+-version = "0.1"
+ 
+ [dev-dependencies.serde_json]
+ version = "1.0"

@@ -6,6 +6,7 @@ use cargo_test_support::{is_nightly, project};
 #[cargo_test]
 fn exported_priv_warning() {
     if !is_nightly() {
+        // exported_private_dependencies lint is unstable
         return;
     }
     Package::new("priv_dep", "0.1.0")
@@ -16,15 +17,15 @@ fn exported_priv_warning() {
         .file(
             "Cargo.toml",
             r#"
-            cargo-features = ["public-dependency"]
+                cargo-features = ["public-dependency"]
 
-            [package]
-            name = "foo"
-            version = "0.0.1"
+                [package]
+                name = "foo"
+                version = "0.0.1"
 
-            [dependencies]
-            priv_dep = "0.1.0"
-        "#,
+                [dependencies]
+                priv_dep = "0.1.0"
+            "#,
         )
         .file(
             "src/lib.rs",
@@ -37,16 +38,10 @@ fn exported_priv_warning() {
 
     p.cargo("build --message-format=short")
         .masquerade_as_nightly_cargo()
-        .with_stderr(
+        .with_stderr_contains(
             "\
-[UPDATING] `[..]` index
-[DOWNLOADING] crates ...
-[DOWNLOADED] priv_dep v0.1.0 ([..])
-[COMPILING] priv_dep v0.1.0
-[COMPILING] foo v0.0.1 ([CWD])
-src/lib.rs:3:13: warning: type `priv_dep::FromPriv` from private dependency 'priv_dep' in public interface
-[FINISHED] dev [unoptimized + debuginfo] target(s) in [..]
-"
+src/lib.rs:3:13: warning: type `[..]FromPriv` from private dependency 'priv_dep' in public interface
+",
         )
         .run()
 }
@@ -54,6 +49,7 @@ src/lib.rs:3:13: warning: type `priv_dep::FromPriv` from private dependency 'pri
 #[cargo_test]
 fn exported_pub_dep() {
     if !is_nightly() {
+        // exported_private_dependencies lint is unstable
         return;
     }
     Package::new("pub_dep", "0.1.0")
@@ -64,15 +60,15 @@ fn exported_pub_dep() {
         .file(
             "Cargo.toml",
             r#"
-            cargo-features = ["public-dependency"]
+                cargo-features = ["public-dependency"]
 
-            [package]
-            name = "foo"
-            version = "0.0.1"
+                [package]
+                name = "foo"
+                version = "0.0.1"
 
-            [dependencies]
-            pub_dep = {version = "0.1.0", public = true}
-        "#,
+                [dependencies]
+                pub_dep = {version = "0.1.0", public = true}
+            "#,
         )
         .file(
             "src/lib.rs",
@@ -104,8 +100,8 @@ pub fn requires_nightly_cargo() {
         .file(
             "Cargo.toml",
             r#"
-            cargo-features = ["public-dependency"]
-        "#,
+                cargo-features = ["public-dependency"]
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -118,7 +114,8 @@ error: failed to parse manifest at `[..]`
 
 Caused by:
   the cargo feature `public-dependency` requires a nightly version of Cargo, but this is the `stable` channel
-See https://doc.rust-lang.org/book/appendix-07-nightly-rust.html for more information about Rust release channels.
+  See https://doc.rust-lang.org/book/appendix-07-nightly-rust.html for more information about Rust release channels.
+  See https://doc.rust-lang.org/[..]cargo/reference/unstable.html#public-dependency for more information about using this feature.
 "
         )
         .run()
@@ -134,14 +131,13 @@ fn requires_feature() {
         .file(
             "Cargo.toml",
             r#"
+                [package]
+                name = "foo"
+                version = "0.0.1"
 
-            [package]
-            name = "foo"
-            version = "0.0.1"
-
-            [dependencies]
-            pub_dep = { version = "0.1.0", public = true }
-        "#,
+                [dependencies]
+                pub_dep = { version = "0.1.0", public = true }
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -156,7 +152,12 @@ error: failed to parse manifest at `[..]`
 Caused by:
   feature `public-dependency` is required
 
-consider adding `cargo-features = [\"public-dependency\"]` to the manifest
+  The package requires the Cargo feature called `public-dependency`, \
+  but that feature is not stabilized in this version of Cargo (1.[..]).
+  Consider adding `cargo-features = [\"public-dependency\"]` to the top of Cargo.toml \
+  (above the [package] table) to tell Cargo you are opting in to use this unstable feature.
+  See https://doc.rust-lang.org/nightly/cargo/reference/unstable.html#public-dependency \
+  for more information about the status of this feature.
 ",
         )
         .run()
@@ -172,15 +173,15 @@ fn pub_dev_dependency() {
         .file(
             "Cargo.toml",
             r#"
-            cargo-features = ["public-dependency"]
+                cargo-features = ["public-dependency"]
 
-            [package]
-            name = "foo"
-            version = "0.0.1"
+                [package]
+                name = "foo"
+                version = "0.0.1"
 
-            [dev-dependencies]
-            pub_dep = {version = "0.1.0", public = true}
-        "#,
+                [dev-dependencies]
+                pub_dep = {version = "0.1.0", public = true}
+            "#,
         )
         .file(
             "src/lib.rs",

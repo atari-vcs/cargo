@@ -1,16 +1,16 @@
 //! Tests for build.rs scripts.
 
-use std::env;
-use std::fs::{self, File};
-use std::io;
-use std::io::prelude::*;
-use std::thread;
-
-use cargo::util::paths::remove_dir_all;
+use cargo_test_support::compare::assert_match_exact;
 use cargo_test_support::paths::CargoPathExt;
 use cargo_test_support::registry::Package;
-use cargo_test_support::{basic_manifest, cross_compile, project};
-use cargo_test_support::{rustc_host, sleep_ms, slow_cpu_multiplier};
+use cargo_test_support::tools;
+use cargo_test_support::{basic_manifest, cross_compile, is_coarse_mtime, project};
+use cargo_test_support::{rustc_host, sleep_ms, slow_cpu_multiplier, symlink_supported};
+use cargo_util::paths::remove_dir_all;
+use std::env;
+use std::fs;
+use std::io;
+use std::thread;
 
 #[cargo_test]
 fn custom_build_script_failed() {
@@ -18,13 +18,13 @@ fn custom_build_script_failed() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "foo"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
-            build = "build.rs"
-        "#,
+                name = "foo"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
+                build = "build.rs"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file("build.rs", "fn main() { std::process::exit(101); }")
@@ -39,7 +39,7 @@ fn custom_build_script_failed() {
 [ERROR] failed to run custom build command for `foo v0.5.0 ([CWD])`
 
 Caused by:
-  process didn't exit successfully: `[..]/build-script-build` (exit code: 101)",
+  process didn't exit successfully: `[..]/build-script-build` (exit [..]: 101)",
         )
         .run();
 }
@@ -50,42 +50,40 @@ fn custom_build_env_vars() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "foo"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
+                name = "foo"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
 
-            [features]
-            bar_feat = ["bar/foo"]
+                [features]
+                bar_feat = ["bar/foo"]
 
-            [dependencies.bar]
-            path = "bar"
-        "#,
+                [dependencies.bar]
+                path = "bar"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "bar"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
-            build = "build.rs"
+                name = "bar"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
+                build = "build.rs"
 
-            [features]
-            foo = []
-        "#,
+                [features]
+                foo = []
+            "#,
         )
         .file("bar/src/lib.rs", "pub fn hello() {}");
 
     let file_content = format!(
         r#"
             use std::env;
-            use std::io::prelude::*;
             use std::path::Path;
-            use std::fs;
 
             fn main() {{
                 let _target = env::var("TARGET").unwrap();
@@ -103,7 +101,7 @@ fn custom_build_env_vars() {
 
                 let out = env::var("OUT_DIR").unwrap();
                 assert!(out.starts_with(r"{0}"));
-                assert!(fs::metadata(&out).map(|m| m.is_dir()).unwrap_or(false));
+                assert!(Path::new(&out).is_dir());
 
                 let _host = env::var("HOST").unwrap();
 
@@ -117,19 +115,195 @@ fn custom_build_env_vars() {
                 let rustdoc = env::var("RUSTDOC").unwrap();
                 assert_eq!(rustdoc, "rustdoc");
 
+                assert!(env::var("RUSTC_WRAPPER").is_err());
+                assert!(env::var("RUSTC_WORKSPACE_WRAPPER").is_err());
+
                 assert!(env::var("RUSTC_LINKER").is_err());
+
+                assert!(env::var("RUSTFLAGS").is_err());
+                let rustflags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap();
+                assert_eq!(rustflags, "");
             }}
         "#,
         p.root()
             .join("target")
             .join("debug")
             .join("build")
-            .display()
+            .display(),
     );
 
     let p = p.file("bar/build.rs", &file_content).build();
 
     p.cargo("build --features bar_feat").run();
+}
+
+#[cargo_test]
+fn custom_build_env_var_rustflags() {
+    let rustflags = "--cfg=special";
+    let rustflags_alt = "--cfg=notspecial";
+    let p = project()
+        .file(
+            ".cargo/config",
+            &format!(
+                r#"
+                [build]
+                rustflags = ["{}"]
+                "#,
+                rustflags
+            ),
+        )
+        .file(
+            "build.rs",
+            &format!(
+                r#"
+                use std::env;
+
+                fn main() {{
+                    // Static assertion that exactly one of the cfg paths is always taken.
+                    assert!(env::var("RUSTFLAGS").is_err());
+                    let x;
+                    #[cfg(special)]
+                    {{ assert_eq!(env::var("CARGO_ENCODED_RUSTFLAGS").unwrap(), "{}"); x = String::new(); }}
+                    #[cfg(notspecial)]
+                    {{ assert_eq!(env::var("CARGO_ENCODED_RUSTFLAGS").unwrap(), "{}"); x = String::new(); }}
+                    let _ = x;
+                }}
+                "#,
+                rustflags, rustflags_alt,
+            ),
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    p.cargo("check").run();
+
+    // RUSTFLAGS overrides build.rustflags, so --cfg=special shouldn't be passed
+    p.cargo("check").env("RUSTFLAGS", rustflags_alt).run();
+}
+
+#[cargo_test]
+fn custom_build_env_var_encoded_rustflags() {
+    // NOTE: We use "-Clink-arg=-B nope" here rather than, say, "-A missing_docs", since for the
+    // latter it won't matter if the whitespace accidentally gets split, as rustc will do the right
+    // thing either way.
+    let p = project()
+        .file(
+            ".cargo/config",
+            r#"
+            [build]
+            rustflags = ["-Clink-arg=-B nope", "--cfg=foo"]
+            "#,
+        )
+        .file(
+            "build.rs",
+            r#"
+                use std::env;
+
+                fn main() {{
+                    assert_eq!(env::var("CARGO_ENCODED_RUSTFLAGS").unwrap(), "-Clink-arg=-B nope\x1f--cfg=foo");
+                }}
+                "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    p.cargo("check").run();
+}
+
+#[cargo_test]
+fn custom_build_env_var_rustc_wrapper() {
+    let wrapper = tools::echo_wrapper();
+    let p = project()
+        .file(
+            "build.rs",
+            r#"
+            use std::env;
+
+            fn main() {{
+                assert_eq!(
+                    env::var("RUSTC_WRAPPER").unwrap(),
+                    env::var("CARGO_RUSTC_WRAPPER_CHECK").unwrap()
+                );
+            }}
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    p.cargo("check")
+        .env("CARGO_BUILD_RUSTC_WRAPPER", &wrapper)
+        .env("CARGO_RUSTC_WRAPPER_CHECK", &wrapper)
+        .run();
+}
+
+#[cargo_test]
+fn custom_build_env_var_rustc_workspace_wrapper() {
+    let wrapper = tools::echo_wrapper();
+
+    // Workspace wrapper should be set for any crate we're operating directly on.
+    let p = project()
+        .file(
+            "build.rs",
+            r#"
+            use std::env;
+
+            fn main() {{
+                assert_eq!(
+                    env::var("RUSTC_WORKSPACE_WRAPPER").unwrap(),
+                    env::var("CARGO_RUSTC_WORKSPACE_WRAPPER_CHECK").unwrap()
+                );
+            }}
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    p.cargo("check")
+        .env("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", &wrapper)
+        .env("CARGO_RUSTC_WORKSPACE_WRAPPER_CHECK", &wrapper)
+        .run();
+
+    // But should not be set for a crate from the registry, as then it's not in a workspace.
+    Package::new("bar", "0.1.0")
+        .file(
+            "Cargo.toml",
+            r#"
+            [package]
+            name = "bar"
+            version = "0.1.0"
+            links = "a"
+            "#,
+        )
+        .file(
+            "build.rs",
+            r#"
+            use std::env;
+
+            fn main() {{
+                assert!(env::var("RUSTC_WORKSPACE_WRAPPER").is_err());
+            }}
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .publish();
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+            [package]
+            name = "foo"
+            version = "0.1.0"
+
+            [dependencies]
+            bar = "0.1"
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    p.cargo("check")
+        .env("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", &wrapper)
+        .run();
 }
 
 #[cargo_test]
@@ -168,18 +342,405 @@ fn custom_build_env_var_rustc_linker() {
 }
 
 #[cargo_test]
+fn custom_build_env_var_rustc_linker_bad_host_target() {
+    let target = rustc_host();
+    let p = project()
+        .file(
+            ".cargo/config",
+            &format!(
+                r#"
+                [target.{}]
+                linker = "/path/to/linker"
+                "#,
+                target
+            ),
+        )
+        .file(
+            "build.rs",
+            r#"
+            use std::env;
+
+            fn main() {
+                assert!(env::var("RUSTC_LINKER").unwrap().ends_with("/path/to/linker"));
+            }
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    // build.rs should fail since host == target when no target is set
+    p.cargo("build --verbose")
+        .with_status(101)
+        .with_stderr_contains(
+            "\
+[COMPILING] foo v0.0.1 ([CWD])
+[RUNNING] `rustc --crate-name build_script_build build.rs [..]--crate-type bin [..]-C linker=[..]/path/to/linker [..]`
+[ERROR] linker `[..]/path/to/linker` not found
+"
+        )
+        .run();
+}
+
+#[cargo_test]
+fn custom_build_env_var_rustc_linker_host_target() {
+    let target = rustc_host();
+    let p = project()
+        .file(
+            ".cargo/config",
+            &format!(
+                r#"
+                target-applies-to-host = false
+                [target.{}]
+                linker = "/path/to/linker"
+                "#,
+                target
+            ),
+        )
+        .file(
+            "build.rs",
+            r#"
+            use std::env;
+
+            fn main() {
+                assert!(env::var("RUSTC_LINKER").unwrap().ends_with("/path/to/linker"));
+            }
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    // no crate type set => linker never called => build succeeds if and
+    // only if build.rs succeeds, despite linker binary not existing.
+    if cargo_test_support::is_nightly() {
+        p.cargo("build -Z target-applies-to-host --target")
+            .arg(&target)
+            .masquerade_as_nightly_cargo()
+            .run();
+    }
+}
+
+#[cargo_test]
+fn custom_build_env_var_rustc_linker_host_target_env() {
+    let target = rustc_host();
+    let p = project()
+        .file(
+            ".cargo/config",
+            &format!(
+                r#"
+                [target.{}]
+                linker = "/path/to/linker"
+                "#,
+                target
+            ),
+        )
+        .file(
+            "build.rs",
+            r#"
+            use std::env;
+
+            fn main() {
+                assert!(env::var("RUSTC_LINKER").unwrap().ends_with("/path/to/linker"));
+            }
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    // no crate type set => linker never called => build succeeds if and
+    // only if build.rs succeeds, despite linker binary not existing.
+    if cargo_test_support::is_nightly() {
+        p.cargo("build -Z target-applies-to-host --target")
+            .env("CARGO_TARGET_APPLIES_TO_HOST", "false")
+            .arg(&target)
+            .masquerade_as_nightly_cargo()
+            .run();
+    }
+}
+
+#[cargo_test]
+fn custom_build_invalid_host_config_feature_flag() {
+    let target = rustc_host();
+    let p = project()
+        .file(
+            ".cargo/config",
+            &format!(
+                r#"
+                [target.{}]
+                linker = "/path/to/linker"
+                "#,
+                target
+            ),
+        )
+        .file(
+            "build.rs",
+            r#"
+            use std::env;
+
+            fn main() {
+                assert!(env::var("RUSTC_LINKER").unwrap().ends_with("/path/to/linker"));
+            }
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    // build.rs should fail due to -Zhost-config being set without -Ztarget-applies-to-host
+    if cargo_test_support::is_nightly() {
+        p.cargo("build -Z host-config --target")
+            .arg(&target)
+            .masquerade_as_nightly_cargo()
+            .with_status(101)
+            .with_stderr_contains(
+                "\
+error: the -Zhost-config flag requires the -Ztarget-applies-to-host flag to be set
+",
+            )
+            .run();
+    }
+}
+
+#[cargo_test]
+fn custom_build_env_var_rustc_linker_host_target_with_bad_host_config() {
+    let target = rustc_host();
+    let p = project()
+        .file(
+            ".cargo/config",
+            &format!(
+                r#"
+                target-applies-to-host = true
+                [host]
+                linker = "/path/to/host/linker"
+                [target.{}]
+                linker = "/path/to/target/linker"
+                "#,
+                target
+            ),
+        )
+        .file(
+            "build.rs",
+            r#"
+            use std::env;
+
+            fn main() {
+                assert!(env::var("RUSTC_LINKER").unwrap().ends_with("/path/to/target/linker"));
+            }
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    // build.rs should fail due to bad target linker being set
+    if cargo_test_support::is_nightly() {
+        p.cargo("build -Z target-applies-to-host -Z host-config --verbose --target")
+            .arg(&target)
+            .masquerade_as_nightly_cargo()
+            .with_status(101)
+            .with_stderr_contains(
+                "\
+[COMPILING] foo v0.0.1 ([CWD])
+[RUNNING] `rustc --crate-name build_script_build build.rs [..]--crate-type bin [..]-C linker=[..]/path/to/target/linker [..]`
+[ERROR] linker `[..]/path/to/target/linker` not found
+"
+            )
+            .run();
+    }
+}
+
+#[cargo_test]
+fn custom_build_env_var_rustc_linker_bad_host() {
+    let target = rustc_host();
+    let p = project()
+        .file(
+            ".cargo/config",
+            &format!(
+                r#"
+                [host]
+                linker = "/path/to/host/linker"
+                [target.{}]
+                linker = "/path/to/target/linker"
+                "#,
+                target
+            ),
+        )
+        .file(
+            "build.rs",
+            r#"
+            use std::env;
+
+            fn main() {
+                assert!(env::var("RUSTC_LINKER").unwrap().ends_with("/path/to/target/linker"));
+            }
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    // build.rs should fail due to bad host linker being set
+    if cargo_test_support::is_nightly() {
+        p.cargo("build -Z target-applies-to-host -Z host-config --verbose --target")
+            .arg(&target)
+            .masquerade_as_nightly_cargo()
+            .with_status(101)
+            .with_stderr_contains(
+                "\
+[COMPILING] foo v0.0.1 ([CWD])
+[RUNNING] `rustc --crate-name build_script_build build.rs [..]--crate-type bin [..]-C linker=[..]/path/to/host/linker [..]`
+[ERROR] linker `[..]/path/to/host/linker` not found
+"
+            )
+            .run();
+    }
+}
+
+#[cargo_test]
+fn custom_build_env_var_rustc_linker_bad_host_with_arch() {
+    let target = rustc_host();
+    let p = project()
+        .file(
+            ".cargo/config",
+            &format!(
+                r#"
+                [host]
+                linker = "/path/to/host/linker"
+                [host.{}]
+                linker = "/path/to/host/arch/linker"
+                [target.{}]
+                linker = "/path/to/target/linker"
+                "#,
+                target, target
+            ),
+        )
+        .file(
+            "build.rs",
+            r#"
+            use std::env;
+
+            fn main() {
+                assert!(env::var("RUSTC_LINKER").unwrap().ends_with("/path/to/target/linker"));
+            }
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    // build.rs should fail due to bad host linker being set
+    if cargo_test_support::is_nightly() {
+        p.cargo("build -Z target-applies-to-host -Z host-config --verbose --target")
+            .arg(&target)
+            .masquerade_as_nightly_cargo()
+            .with_status(101)
+            .with_stderr_contains(
+                "\
+[COMPILING] foo v0.0.1 ([CWD])
+[RUNNING] `rustc --crate-name build_script_build build.rs [..]--crate-type bin [..]-C linker=[..]/path/to/host/arch/linker [..]`
+[ERROR] linker `[..]/path/to/host/arch/linker` not found
+"
+            )
+            .run();
+    }
+}
+
+#[cargo_test]
+fn custom_build_env_var_rustc_linker_cross_arch_host() {
+    let target = rustc_host();
+    let cross_target = cross_compile::alternate();
+    let p = project()
+        .file(
+            ".cargo/config",
+            &format!(
+                r#"
+                [host.{}]
+                linker = "/path/to/host/arch/linker"
+                [target.{}]
+                linker = "/path/to/target/linker"
+                "#,
+                cross_target, target
+            ),
+        )
+        .file(
+            "build.rs",
+            r#"
+            use std::env;
+
+            fn main() {
+                assert!(env::var("RUSTC_LINKER").unwrap().ends_with("/path/to/target/linker"));
+            }
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    // build.rs should fail due to bad host linker being set
+    if cargo_test_support::is_nightly() {
+        p.cargo("build -Z target-applies-to-host -Z host-config --verbose --target")
+            .arg(&target)
+            .masquerade_as_nightly_cargo()
+            .run();
+    }
+}
+
+#[cargo_test]
+fn custom_build_env_var_rustc_linker_bad_cross_arch_host() {
+    let target = rustc_host();
+    let cross_target = cross_compile::alternate();
+    let p = project()
+        .file(
+            ".cargo/config",
+            &format!(
+                r#"
+                [host]
+                linker = "/path/to/host/linker"
+                [host.{}]
+                linker = "/path/to/host/arch/linker"
+                [target.{}]
+                linker = "/path/to/target/linker"
+                "#,
+                cross_target, target
+            ),
+        )
+        .file(
+            "build.rs",
+            r#"
+            use std::env;
+
+            fn main() {
+                assert!(env::var("RUSTC_LINKER").unwrap().ends_with("/path/to/target/linker"));
+            }
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    // build.rs should fail due to bad host linker being set
+    if cargo_test_support::is_nightly() {
+        p.cargo("build -Z target-applies-to-host -Z host-config --verbose --target")
+            .arg(&target)
+            .masquerade_as_nightly_cargo()
+            .with_status(101)
+            .with_stderr_contains(
+                "\
+[COMPILING] foo v0.0.1 ([CWD])
+[RUNNING] `rustc --crate-name build_script_build build.rs [..]--crate-type bin [..]-C linker=[..]/path/to/host/linker [..]`
+[ERROR] linker `[..]/path/to/host/linker` not found
+"
+            )
+            .run();
+    }
+}
+
+#[cargo_test]
 fn custom_build_script_wrong_rustc_flags() {
     let p = project()
         .file(
             "Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "foo"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
-            build = "build.rs"
-        "#,
+                name = "foo"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
+                build = "build.rs"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file(
@@ -203,36 +764,36 @@ fn custom_build_script_rustc_flags() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "bar"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
+                name = "bar"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
 
-            [dependencies.foo]
-            path = "foo"
-        "#,
+                [dependencies.foo]
+                path = "foo"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file(
             "foo/Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "foo"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
-            build = "build.rs"
-        "#,
+                name = "foo"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
+                build = "build.rs"
+            "#,
         )
         .file("foo/src/lib.rs", "")
         .file(
             "foo/build.rs",
             r#"
-            fn main() {
-                println!("cargo:rustc-flags=-l nonexistinglib -L /dummy/path1 -L /dummy/path2");
-            }
-        "#,
+                fn main() {
+                    println!("cargo:rustc-flags=-l nonexistinglib -L /dummy/path1 -L /dummy/path2");
+                }
+            "#,
         )
         .build();
 
@@ -262,36 +823,36 @@ fn custom_build_script_rustc_flags_no_space() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "bar"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
+                name = "bar"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
 
-            [dependencies.foo]
-            path = "foo"
-        "#,
+                [dependencies.foo]
+                path = "foo"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file(
             "foo/Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "foo"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
-            build = "build.rs"
-        "#,
+                name = "foo"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
+                build = "build.rs"
+            "#,
         )
         .file("foo/src/lib.rs", "")
         .file(
             "foo/build.rs",
             r#"
-            fn main() {
-                println!("cargo:rustc-flags=-lnonexistinglib -L/dummy/path1 -L/dummy/path2");
-            }
-        "#,
+                fn main() {
+                    println!("cargo:rustc-flags=-lnonexistinglib -L/dummy/path1 -L/dummy/path2");
+                }
+            "#,
         )
         .build();
 
@@ -321,12 +882,12 @@ fn links_no_build_cmd() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            links = "a"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                links = "a"
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -352,29 +913,29 @@ fn links_duplicates() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            links = "a"
-            build = "build.rs"
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                links = "a"
+                build = "build.rs"
 
-            [dependencies.a-sys]
-            path = "a-sys"
-        "#,
+                [dependencies.a-sys]
+                path = "a-sys"
+            "#,
         )
         .file("src/lib.rs", "")
         .file("build.rs", "")
         .file(
             "a-sys/Cargo.toml",
             r#"
-            [project]
-            name = "a-sys"
-            version = "0.5.0"
-            authors = []
-            links = "a"
-            build = "build.rs"
-        "#,
+                [project]
+                name = "a-sys"
+                version = "0.5.0"
+                authors = []
+                links = "a"
+                build = "build.rs"
+            "#,
         )
         .file("a-sys/src/lib.rs", "")
         .file("a-sys/build.rs", "")
@@ -388,6 +949,7 @@ versions that meet the requirements `*` are: 0.5.0
 
 the package `a-sys` links to the native library `a`, but it conflicts with a previous package which links to `a` as well:
 package `foo v0.5.0 ([..])`
+Only one package in the dependency graph may specify the same links value. This helps ensure that only one copy of a native library is linked in the final binary. Try to adjust your dependencies so that only one package uses the links ='a-sys' value. For more information, see https://doc.rust-lang.org/cargo/reference/resolver.html#links.
 
 failed to select a version for `a-sys` which could resolve this conflict
 ").run();
@@ -455,44 +1017,44 @@ fn links_duplicates_deep_dependency() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            links = "a"
-            build = "build.rs"
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                links = "a"
+                build = "build.rs"
 
-            [dependencies.a]
-            path = "a"
-        "#,
+                [dependencies.a]
+                path = "a"
+            "#,
         )
         .file("src/lib.rs", "")
         .file("build.rs", "")
         .file(
             "a/Cargo.toml",
             r#"
-            [project]
-            name = "a"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
+                [project]
+                name = "a"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
 
-            [dependencies.a-sys]
-            path = "a-sys"
-        "#,
+                [dependencies.a-sys]
+                path = "a-sys"
+            "#,
         )
         .file("a/src/lib.rs", "")
         .file("a/build.rs", "")
         .file(
             "a/a-sys/Cargo.toml",
             r#"
-            [project]
-            name = "a-sys"
-            version = "0.5.0"
-            authors = []
-            links = "a"
-            build = "build.rs"
-        "#,
+                [project]
+                name = "a-sys"
+                version = "0.5.0"
+                authors = []
+                links = "a"
+                build = "build.rs"
+            "#,
         )
         .file("a/a-sys/src/lib.rs", "")
         .file("a/a-sys/build.rs", "")
@@ -507,6 +1069,7 @@ versions that meet the requirements `*` are: 0.5.0
 
 the package `a-sys` links to the native library `a`, but it conflicts with a previous package which links to `a` as well:
 package `foo v0.5.0 ([..])`
+Only one package in the dependency graph may specify the same links value. This helps ensure that only one copy of a native library is linked in the final binary. Try to adjust your dependencies so that only one package uses the links ='a-sys' value. For more information, see https://doc.rust-lang.org/cargo/reference/resolver.html#links.
 
 failed to select a version for `a-sys` which could resolve this conflict
 ").run();
@@ -520,51 +1083,51 @@ fn overrides_and_links() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
 
-            [dependencies.a]
-            path = "a"
-        "#,
+                [dependencies.a]
+                path = "a"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "build.rs",
             r#"
-            use std::env;
-            fn main() {
-                assert_eq!(env::var("DEP_FOO_FOO").ok().expect("FOO missing"),
-                           "bar");
-                assert_eq!(env::var("DEP_FOO_BAR").ok().expect("BAR missing"),
-                           "baz");
-            }
-        "#,
+                use std::env;
+                fn main() {
+                    assert_eq!(env::var("DEP_FOO_FOO").ok().expect("FOO missing"),
+                               "bar");
+                    assert_eq!(env::var("DEP_FOO_BAR").ok().expect("BAR missing"),
+                               "baz");
+                }
+            "#,
         )
         .file(
             ".cargo/config",
             &format!(
                 r#"
-            [target.{}.foo]
-            rustc-flags = "-L foo -L bar"
-            foo = "bar"
-            bar = "baz"
-        "#,
+                    [target.{}.foo]
+                    rustc-flags = "-L foo -L bar"
+                    foo = "bar"
+                    bar = "baz"
+                "#,
                 target
             ),
         )
         .file(
             "a/Cargo.toml",
             r#"
-            [project]
-            name = "a"
-            version = "0.5.0"
-            authors = []
-            links = "foo"
-            build = "build.rs"
-        "#,
+                [project]
+                name = "a"
+                version = "0.5.0"
+                authors = []
+                links = "foo"
+                build = "build.rs"
+            "#,
         )
         .file("a/src/lib.rs", "")
         .file("a/build.rs", "not valid rust code")
@@ -593,12 +1156,12 @@ fn unused_overrides() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file("src/lib.rs", "")
         .file("build.rs", "fn main() {}")
@@ -606,11 +1169,11 @@ fn unused_overrides() {
             ".cargo/config",
             &format!(
                 r#"
-            [target.{}.foo]
-            rustc-flags = "-L foo -L bar"
-            foo = "bar"
-            bar = "baz"
-        "#,
+                    [target.{}.foo]
+                    rustc-flags = "-L foo -L bar"
+                    foo = "bar"
+                    bar = "baz"
+                "#,
                 target
             ),
         )
@@ -625,51 +1188,51 @@ fn links_passes_env_vars() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
 
-            [dependencies.a]
-            path = "a"
-        "#,
+                [dependencies.a]
+                path = "a"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "build.rs",
             r#"
-            use std::env;
-            fn main() {
-                assert_eq!(env::var("DEP_FOO_FOO").unwrap(), "bar");
-                assert_eq!(env::var("DEP_FOO_BAR").unwrap(), "baz");
-            }
-        "#,
+                use std::env;
+                fn main() {
+                    assert_eq!(env::var("DEP_FOO_FOO").unwrap(), "bar");
+                    assert_eq!(env::var("DEP_FOO_BAR").unwrap(), "baz");
+                }
+            "#,
         )
         .file(
             "a/Cargo.toml",
             r#"
-            [project]
-            name = "a"
-            version = "0.5.0"
-            authors = []
-            links = "foo"
-            build = "build.rs"
-        "#,
+                [project]
+                name = "a"
+                version = "0.5.0"
+                authors = []
+                links = "foo"
+                build = "build.rs"
+            "#,
         )
         .file("a/src/lib.rs", "")
         .file(
             "a/build.rs",
             r#"
-            use std::env;
-            fn main() {
-                let lib = env::var("CARGO_MANIFEST_LINKS").unwrap();
-                assert_eq!(lib, "foo");
+                use std::env;
+                fn main() {
+                    let lib = env::var("CARGO_MANIFEST_LINKS").unwrap();
+                    assert_eq!(lib, "foo");
 
-                println!("cargo:foo=bar");
-                println!("cargo:bar=baz");
-            }
-        "#,
+                    println!("cargo:foo=bar");
+                    println!("cargo:bar=baz");
+                }
+            "#,
         )
         .build();
 
@@ -682,12 +1245,12 @@ fn only_rerun_build_script() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file("src/lib.rs", "")
         .file("build.rs", "fn main() {}")
@@ -696,7 +1259,7 @@ fn only_rerun_build_script() {
     p.cargo("build -v").run();
     p.root().move_into_the_past();
 
-    File::create(&p.root().join("some-new-file")).unwrap();
+    p.change_file("some-new-file", "");
     p.root().move_into_the_past();
 
     p.cargo("build -v")
@@ -718,25 +1281,25 @@ fn rebuild_continues_to_pass_env_vars() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "a"
-            version = "0.5.0"
-            authors = []
-            links = "foo"
-            build = "build.rs"
-        "#,
+                [project]
+                name = "a"
+                version = "0.5.0"
+                authors = []
+                links = "foo"
+                build = "build.rs"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "build.rs",
             r#"
-            use std::time::Duration;
-            fn main() {
-                println!("cargo:foo=bar");
-                println!("cargo:bar=baz");
-                std::thread::sleep(Duration::from_millis(500));
-            }
-        "#,
+                use std::time::Duration;
+                fn main() {
+                    println!("cargo:foo=bar");
+                    println!("cargo:bar=baz");
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            "#,
         )
         .build();
     a.root().move_into_the_past();
@@ -746,15 +1309,15 @@ fn rebuild_continues_to_pass_env_vars() {
             "Cargo.toml",
             &format!(
                 r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
+                    [project]
+                    name = "foo"
+                    version = "0.5.0"
+                    authors = []
+                    build = "build.rs"
 
-            [dependencies.a]
-            path = '{}'
-        "#,
+                    [dependencies.a]
+                    path = '{}'
+                "#,
                 a.root().display()
             ),
         )
@@ -762,19 +1325,19 @@ fn rebuild_continues_to_pass_env_vars() {
         .file(
             "build.rs",
             r#"
-            use std::env;
-            fn main() {
-                assert_eq!(env::var("DEP_FOO_FOO").unwrap(), "bar");
-                assert_eq!(env::var("DEP_FOO_BAR").unwrap(), "baz");
-            }
-        "#,
+                use std::env;
+                fn main() {
+                    assert_eq!(env::var("DEP_FOO_FOO").unwrap(), "bar");
+                    assert_eq!(env::var("DEP_FOO_BAR").unwrap(), "baz");
+                }
+            "#,
         )
         .build();
 
     p.cargo("build -v").run();
     p.root().move_into_the_past();
 
-    File::create(&p.root().join("some-new-file")).unwrap();
+    p.change_file("some-new-file", "");
     p.root().move_into_the_past();
 
     p.cargo("build -v").run();
@@ -786,12 +1349,12 @@ fn testing_and_such() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file("src/lib.rs", "")
         .file("build.rs", "fn main() {}")
@@ -801,7 +1364,7 @@ fn testing_and_such() {
     p.cargo("build -v").run();
     p.root().move_into_the_past();
 
-    File::create(&p.root().join("src/lib.rs")).unwrap();
+    p.change_file("src/lib.rs", "");
     p.root().move_into_the_past();
 
     println!("test");
@@ -831,10 +1394,7 @@ fn testing_and_such() {
         )
         .run();
 
-    File::create(&p.root().join("src/main.rs"))
-        .unwrap()
-        .write_all(b"fn main() {}")
-        .unwrap();
+    p.change_file("src/main.rs", "fn main() {}");
     println!("run");
     p.cargo("run")
         .with_stderr(
@@ -854,28 +1414,28 @@ fn propagation_of_l_flags() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            [dependencies.a]
-            path = "a"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                [dependencies.a]
+                path = "a"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "a/Cargo.toml",
             r#"
-            [project]
-            name = "a"
-            version = "0.5.0"
-            authors = []
-            links = "bar"
-            build = "build.rs"
+                [project]
+                name = "a"
+                version = "0.5.0"
+                authors = []
+                links = "bar"
+                build = "build.rs"
 
-            [dependencies.b]
-            path = "../b"
-        "#,
+                [dependencies.b]
+                path = "../b"
+            "#,
         )
         .file("a/src/lib.rs", "")
         .file(
@@ -885,13 +1445,13 @@ fn propagation_of_l_flags() {
         .file(
             "b/Cargo.toml",
             r#"
-            [project]
-            name = "b"
-            version = "0.5.0"
-            authors = []
-            links = "foo"
-            build = "build.rs"
-        "#,
+                [project]
+                name = "b"
+                version = "0.5.0"
+                authors = []
+                links = "foo"
+                build = "build.rs"
+            "#,
         )
         .file("b/src/lib.rs", "")
         .file("b/build.rs", "bad file")
@@ -899,9 +1459,9 @@ fn propagation_of_l_flags() {
             ".cargo/config",
             &format!(
                 r#"
-            [target.{}.foo]
-            rustc-flags = "-L foo"
-        "#,
+                    [target.{}.foo]
+                    rustc-flags = "-L foo"
+                "#,
                 target
             ),
         )
@@ -925,48 +1485,48 @@ fn propagation_of_l_flags_new() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            [dependencies.a]
-            path = "a"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                [dependencies.a]
+                path = "a"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "a/Cargo.toml",
             r#"
-            [project]
-            name = "a"
-            version = "0.5.0"
-            authors = []
-            links = "bar"
-            build = "build.rs"
+                [project]
+                name = "a"
+                version = "0.5.0"
+                authors = []
+                links = "bar"
+                build = "build.rs"
 
-            [dependencies.b]
-            path = "../b"
-        "#,
+                [dependencies.b]
+                path = "../b"
+            "#,
         )
         .file("a/src/lib.rs", "")
         .file(
             "a/build.rs",
             r#"
-            fn main() {
-                println!("cargo:rustc-link-search=bar");
-            }
-        "#,
+                fn main() {
+                    println!("cargo:rustc-link-search=bar");
+                }
+            "#,
         )
         .file(
             "b/Cargo.toml",
             r#"
-            [project]
-            name = "b"
-            version = "0.5.0"
-            authors = []
-            links = "foo"
-            build = "build.rs"
-        "#,
+                [project]
+                name = "b"
+                version = "0.5.0"
+                authors = []
+                links = "foo"
+                build = "build.rs"
+            "#,
         )
         .file("b/src/lib.rs", "")
         .file("b/build.rs", "bad file")
@@ -974,9 +1534,9 @@ fn propagation_of_l_flags_new() {
             ".cargo/config",
             &format!(
                 r#"
-            [target.{}.foo]
-            rustc-link-search = ["foo"]
-        "#,
+                    [target.{}.foo]
+                    rustc-link-search = ["foo"]
+                "#,
                 target
             ),
         )
@@ -999,14 +1559,14 @@ fn build_deps_simple() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-            [build-dependencies.a]
-            path = "a"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+                [build-dependencies.a]
+                path = "a"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
@@ -1043,14 +1603,14 @@ fn build_deps_not_for_normal() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-            [build-dependencies.aaaaa]
-            path = "a"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+                [build-dependencies.aaaaa]
+                path = "a"
+            "#,
         )
         .file(
             "src/lib.rs",
@@ -1074,7 +1634,7 @@ fn build_deps_not_for_normal() {
         .with_stderr_contains("[..]can't find crate for `aaaaa`[..]")
         .with_stderr_contains(
             "\
-[ERROR] could not compile `foo`.
+[ERROR] could not compile `foo` due to previous error
 
 Caused by:
   process didn't exit successfully: [..]
@@ -1089,15 +1649,15 @@ fn build_cmd_with_a_build_cmd() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
 
-            [build-dependencies.a]
-            path = "a"
-        "#,
+                [build-dependencies.a]
+                path = "a"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
@@ -1111,15 +1671,15 @@ fn build_cmd_with_a_build_cmd() {
         .file(
             "a/Cargo.toml",
             r#"
-            [project]
-            name = "a"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
+                [project]
+                name = "a"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
 
-            [build-dependencies.b]
-            path = "../b"
-        "#,
+                [build-dependencies.b]
+                path = "../b"
+            "#,
         )
         .file("a/src/lib.rs", "")
         .file(
@@ -1139,19 +1699,19 @@ fn build_cmd_with_a_build_cmd() {
 [RUNNING] `rustc [..] a/build.rs [..] --extern b=[..]`
 [RUNNING] `[..]/a-[..]/build-script-build`
 [RUNNING] `rustc --crate-name a [..]lib.rs [..]--crate-type lib \
-    --emit=[..]link -C debuginfo=2 \
+    --emit=[..]link[..]-C debuginfo=2 \
     -C metadata=[..] \
     --out-dir [..]target/debug/deps \
     -L [..]target/debug/deps`
 [COMPILING] foo v0.5.0 ([CWD])
 [RUNNING] `rustc --crate-name build_script_build build.rs [..]--crate-type bin \
-    --emit=[..]link \
+    --emit=[..]link[..]\
     -C debuginfo=2 -C metadata=[..] --out-dir [..] \
     -L [..]target/debug/deps \
     --extern a=[..]liba[..].rlib`
 [RUNNING] `[..]/foo-[..]/build-script-build`
 [RUNNING] `rustc --crate-name foo [..]lib.rs [..]--crate-type lib \
-    --emit=[..]link -C debuginfo=2 \
+    --emit=[..]link[..]-C debuginfo=2 \
     -C metadata=[..] \
     --out-dir [..] \
     -L [..]target/debug/deps`
@@ -1167,55 +1727,78 @@ fn out_dir_is_preserved() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "build.rs",
             r#"
-            use std::env;
-            use std::fs::File;
-            use std::path::Path;
-            fn main() {
-                let out = env::var("OUT_DIR").unwrap();
-                File::create(Path::new(&out).join("foo")).unwrap();
-            }
-        "#,
+                use std::env;
+                use std::fs::File;
+                use std::path::Path;
+                fn main() {
+                    let out = env::var("OUT_DIR").unwrap();
+                    File::create(Path::new(&out).join("foo")).unwrap();
+                }
+            "#,
         )
         .build();
 
     // Make the file
     p.cargo("build -v").run();
-    p.root().move_into_the_past();
 
     // Change to asserting that it's there
-    File::create(&p.root().join("build.rs"))
-        .unwrap()
-        .write_all(
-            br#"
-        use std::env;
-        use std::old_io::File;
-        fn main() {
-            let out = env::var("OUT_DIR").unwrap();
-            File::open(&Path::new(&out).join("foo")).unwrap();
-        }
-    "#,
+    p.change_file(
+        "build.rs",
+        r#"
+            use std::env;
+            use std::fs::File;
+            use std::path::Path;
+            fn main() {
+                let out = env::var("OUT_DIR").unwrap();
+                File::open(&Path::new(&out).join("foo")).unwrap();
+            }
+        "#,
+    );
+    p.cargo("build -v")
+        .with_stderr(
+            "\
+[COMPILING] foo [..]
+[RUNNING] `rustc --crate-name build_script_build [..]
+[RUNNING] `[..]/build-script-build`
+[RUNNING] `rustc --crate-name foo [..]
+[FINISHED] [..]
+",
         )
-        .unwrap();
-    p.root().move_into_the_past();
-    p.cargo("build -v").run();
+        .run();
 
     // Run a fresh build where file should be preserved
-    p.cargo("build -v").run();
+    p.cargo("build -v")
+        .with_stderr(
+            "\
+[FRESH] foo [..]
+[FINISHED] [..]
+",
+        )
+        .run();
 
     // One last time to make sure it's still there.
-    File::create(&p.root().join("foo")).unwrap();
-    p.cargo("build -v").run();
+    p.change_file("foo", "");
+    p.cargo("build -v")
+        .with_stderr(
+            "\
+[COMPILING] foo [..]
+[RUNNING] `[..]build-script-build`
+[RUNNING] `rustc --crate-name foo [..]
+[FINISHED] [..]
+",
+        )
+        .run();
 }
 
 #[cargo_test]
@@ -1224,22 +1807,22 @@ fn output_separate_lines() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "build.rs",
             r#"
-            fn main() {
-                println!("cargo:rustc-flags=-L foo");
-                println!("cargo:rustc-flags=-l static=foo");
-            }
-        "#,
+                fn main() {
+                    println!("cargo:rustc-flags=-L foo");
+                    println!("cargo:rustc-flags=-l static=foo");
+                }
+            "#,
         )
         .build();
     p.cargo("build -v")
@@ -1262,22 +1845,22 @@ fn output_separate_lines_new() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "build.rs",
             r#"
-            fn main() {
-                println!("cargo:rustc-link-search=foo");
-                println!("cargo:rustc-link-lib=static=foo");
-            }
-        "#,
+                fn main() {
+                    println!("cargo:rustc-link-search=foo");
+                    println!("cargo:rustc-link-lib=static=foo");
+                }
+            "#,
         )
         .build();
     p.cargo("build -v")
@@ -1301,41 +1884,41 @@ fn code_generation() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file(
             "src/main.rs",
             r#"
-            include!(concat!(env!("OUT_DIR"), "/hello.rs"));
+                include!(concat!(env!("OUT_DIR"), "/hello.rs"));
 
-            fn main() {
-                println!("{}", message());
-            }
-        "#,
+                fn main() {
+                    println!("{}", message());
+                }
+            "#,
         )
         .file(
             "build.rs",
             r#"
-            use std::env;
-            use std::fs::File;
-            use std::io::prelude::*;
-            use std::path::PathBuf;
+                use std::env;
+                use std::fs;
+                use std::path::PathBuf;
 
-            fn main() {
-                let dst = PathBuf::from(env::var("OUT_DIR").unwrap());
-                let mut f = File::create(&dst.join("hello.rs")).unwrap();
-                f.write_all(b"
-                    pub fn message() -> &'static str {
-                        \"Hello, World!\"
-                    }
-                ").unwrap();
-            }
-        "#,
+                fn main() {
+                    let dst = PathBuf::from(env::var("OUT_DIR").unwrap());
+                    fs::write(dst.join("hello.rs"),
+                        "
+                        pub fn message() -> &'static str {
+                            \"Hello, World!\"
+                        }
+                        ")
+                    .unwrap();
+                }
+            "#,
         )
         .build();
 
@@ -1358,19 +1941,19 @@ fn release_with_build_script() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "build.rs",
             r#"
-            fn main() {}
-        "#,
+                fn main() {}
+            "#,
         )
         .build();
 
@@ -1383,12 +1966,12 @@ fn build_script_only() {
         .file(
             "Cargo.toml",
             r#"
-              [project]
-              name = "foo"
-              version = "0.0.0"
-              authors = []
-              build = "build.rs"
-        "#,
+                  [project]
+                  name = "foo"
+                  version = "0.0.0"
+                  authors = []
+                  build = "build.rs"
+            "#,
         )
         .file("build.rs", r#"fn main() {}"#)
         .build();
@@ -1411,44 +1994,44 @@ fn shared_dep_with_a_build_script() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
 
-            [dependencies.a]
-            path = "a"
+                [dependencies.a]
+                path = "a"
 
-            [build-dependencies.b]
-            path = "b"
-        "#,
+                [build-dependencies.b]
+                path = "b"
+            "#,
         )
         .file("src/lib.rs", "")
         .file("build.rs", "fn main() {}")
         .file(
             "a/Cargo.toml",
             r#"
-            [package]
-            name = "a"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-        "#,
+                [package]
+                name = "a"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file("a/build.rs", "fn main() {}")
         .file("a/src/lib.rs", "")
         .file(
             "b/Cargo.toml",
             r#"
-            [package]
-            name = "b"
-            version = "0.5.0"
-            authors = []
+                [package]
+                name = "b"
+                version = "0.5.0"
+                authors = []
 
-            [dependencies.a]
-            path = "../a"
-        "#,
+                [dependencies.a]
+                path = "../a"
+            "#,
         )
         .file("b/src/lib.rs", "")
         .build();
@@ -1461,46 +2044,46 @@ fn transitive_dep_host() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
 
-            [build-dependencies.b]
-            path = "b"
-        "#,
+                [build-dependencies.b]
+                path = "b"
+            "#,
         )
         .file("src/lib.rs", "")
         .file("build.rs", "fn main() {}")
         .file(
             "a/Cargo.toml",
             r#"
-            [package]
-            name = "a"
-            version = "0.5.0"
-            authors = []
-            links = "foo"
-            build = "build.rs"
-        "#,
+                [package]
+                name = "a"
+                version = "0.5.0"
+                authors = []
+                links = "foo"
+                build = "build.rs"
+            "#,
         )
         .file("a/build.rs", "fn main() {}")
         .file("a/src/lib.rs", "")
         .file(
             "b/Cargo.toml",
             r#"
-            [package]
-            name = "b"
-            version = "0.5.0"
-            authors = []
+                [package]
+                name = "b"
+                version = "0.5.0"
+                authors = []
 
-            [lib]
-            name = "b"
-            plugin = true
+                [lib]
+                name = "b"
+                plugin = true
 
-            [dependencies.a]
-            path = "../a"
-        "#,
+                [dependencies.a]
+                path = "../a"
+            "#,
         )
         .file("b/src/lib.rs", "")
         .build();
@@ -1513,41 +2096,38 @@ fn test_a_lib_with_a_build_command() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file(
             "src/lib.rs",
             r#"
-            include!(concat!(env!("OUT_DIR"), "/foo.rs"));
+                include!(concat!(env!("OUT_DIR"), "/foo.rs"));
 
-            /// ```
-            /// foo::bar();
-            /// ```
-            pub fn bar() {
-                assert_eq!(foo(), 1);
-            }
-        "#,
+                /// ```
+                /// foo::bar();
+                /// ```
+                pub fn bar() {
+                    assert_eq!(foo(), 1);
+                }
+            "#,
         )
         .file(
             "build.rs",
             r#"
-            use std::env;
-            use std::io::prelude::*;
-            use std::fs::File;
-            use std::path::PathBuf;
+                use std::env;
+                use std::fs;
+                use std::path::PathBuf;
 
-            fn main() {
-                let out = PathBuf::from(env::var("OUT_DIR").unwrap());
-                File::create(out.join("foo.rs")).unwrap().write_all(b"
-                    fn foo() -> i32 { 1 }
-                ").unwrap();
-            }
-        "#,
+                fn main() {
+                    let out = PathBuf::from(env::var("OUT_DIR").unwrap());
+                    fs::write(out.join("foo.rs"), "fn foo() -> i32 { 1 }").unwrap();
+                }
+            "#,
         )
         .build();
     p.cargo("test").run();
@@ -1559,25 +2139,25 @@ fn test_dev_dep_build_script() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
 
-            [dev-dependencies.a]
-            path = "a"
-        "#,
+                [dev-dependencies.a]
+                path = "a"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "a/Cargo.toml",
             r#"
-            [project]
-            name = "a"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-        "#,
+                [project]
+                name = "a"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file("a/build.rs", "fn main() {}")
         .file("a/src/lib.rs", "")
@@ -1593,15 +2173,15 @@ fn build_script_with_dynamic_native_dependency() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "builder"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "builder"
+                version = "0.0.1"
+                authors = []
 
-            [lib]
-            name = "builder"
-            crate-type = ["dylib"]
-        "#,
+                [lib]
+                name = "builder"
+                crate-type = ["dylib"]
+            "#,
         )
         .file("src/lib.rs", "#[no_mangle] pub extern fn foo() {}")
         .build();
@@ -1610,62 +2190,62 @@ fn build_script_with_dynamic_native_dependency() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            build = "build.rs"
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                build = "build.rs"
 
-            [build-dependencies.bar]
-            path = "bar"
-        "#,
+                [build-dependencies.bar]
+                path = "bar"
+            "#,
         )
         .file("build.rs", "extern crate bar; fn main() { bar::bar() }")
         .file("src/lib.rs", "")
         .file(
             "bar/Cargo.toml",
             r#"
-            [package]
-            name = "bar"
-            version = "0.0.1"
-            authors = []
-            build = "build.rs"
-        "#,
+                [package]
+                name = "bar"
+                version = "0.0.1"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file(
             "bar/build.rs",
             r#"
-            use std::env;
-            use std::fs;
-            use std::path::PathBuf;
+                use std::env;
+                use std::fs;
+                use std::path::PathBuf;
 
-            fn main() {
-                let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-                let root = PathBuf::from(env::var("BUILDER_ROOT").unwrap());
-                let file = format!("{}builder{}",
-                    env::consts::DLL_PREFIX,
-                    env::consts::DLL_SUFFIX);
-                let src = root.join(&file);
-                let dst = out_dir.join(&file);
-                fs::copy(src, dst).unwrap();
-                if cfg!(windows) {
-                    fs::copy(root.join("builder.dll.lib"),
-                             out_dir.join("builder.dll.lib")).unwrap();
+                fn main() {
+                    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+                    let root = PathBuf::from(env::var("BUILDER_ROOT").unwrap());
+                    let file = format!("{}builder{}",
+                        env::consts::DLL_PREFIX,
+                        env::consts::DLL_SUFFIX);
+                    let src = root.join(&file);
+                    let dst = out_dir.join(&file);
+                    fs::copy(src, dst).unwrap();
+                    if cfg!(target_env = "msvc") {
+                        fs::copy(root.join("builder.dll.lib"),
+                                 out_dir.join("builder.dll.lib")).unwrap();
+                    }
+                    println!("cargo:rustc-link-search=native={}", out_dir.display());
                 }
-                println!("cargo:rustc-link-search=native={}", out_dir.display());
-            }
-        "#,
+            "#,
         )
         .file(
             "bar/src/lib.rs",
             r#"
-            pub fn bar() {
-                #[cfg_attr(not(target_env = "msvc"), link(name = "builder"))]
-                #[cfg_attr(target_env = "msvc", link(name = "builder.dll"))]
-                extern { fn foo(); }
-                unsafe { foo() }
-            }
-        "#,
+                pub fn bar() {
+                    #[cfg_attr(not(target_env = "msvc"), link(name = "builder"))]
+                    #[cfg_attr(target_env = "msvc", link(name = "builder.dll"))]
+                    extern { fn foo(); }
+                    unsafe { foo() }
+                }
+            "#,
         )
         .build();
 
@@ -1687,25 +2267,25 @@ fn profile_and_opt_level_set_correctly() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            build = "build.rs"
-        "#,
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "build.rs",
             r#"
-              use std::env;
+                  use std::env;
 
-              fn main() {
-                  assert_eq!(env::var("OPT_LEVEL").unwrap(), "3");
-                  assert_eq!(env::var("PROFILE").unwrap(), "release");
-                  assert_eq!(env::var("DEBUG").unwrap(), "false");
-              }
-        "#,
+                  fn main() {
+                      assert_eq!(env::var("OPT_LEVEL").unwrap(), "3");
+                      assert_eq!(env::var("PROFILE").unwrap(), "release");
+                      assert_eq!(env::var("DEBUG").unwrap(), "false");
+                  }
+            "#,
         )
         .build();
     p.cargo("bench").run();
@@ -1717,26 +2297,26 @@ fn profile_debug_0() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
+                [package]
+                name = "foo"
+                version = "0.0.1"
 
-            [profile.dev]
-            debug = 0
-        "#,
+                [profile.dev]
+                debug = 0
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "build.rs",
             r#"
-              use std::env;
+                  use std::env;
 
-              fn main() {
-                  assert_eq!(env::var("OPT_LEVEL").unwrap(), "0");
-                  assert_eq!(env::var("PROFILE").unwrap(), "debug");
-                  assert_eq!(env::var("DEBUG").unwrap(), "false");
-              }
-        "#,
+                  fn main() {
+                      assert_eq!(env::var("OPT_LEVEL").unwrap(), "0");
+                      assert_eq!(env::var("PROFILE").unwrap(), "debug");
+                      assert_eq!(env::var("DEBUG").unwrap(), "false");
+                  }
+            "#,
         )
         .build();
     p.cargo("build").run();
@@ -1748,15 +2328,15 @@ fn build_script_with_lto() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            build = "build.rs"
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                build = "build.rs"
 
-            [profile.dev]
-            lto = true
-        "#,
+                [profile.dev]
+                lto = true
+            "#,
         )
         .file("src/lib.rs", "")
         .file("build.rs", "fn main() {}")
@@ -1770,32 +2350,32 @@ fn test_duplicate_deps() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
-            build = "build.rs"
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
+                build = "build.rs"
 
-            [dependencies.bar]
-            path = "bar"
+                [dependencies.bar]
+                path = "bar"
 
-            [build-dependencies.bar]
-            path = "bar"
-        "#,
+                [build-dependencies.bar]
+                path = "bar"
+            "#,
         )
         .file(
             "src/main.rs",
             r#"
-            extern crate bar;
-            fn main() { bar::do_nothing() }
-        "#,
+                extern crate bar;
+                fn main() { bar::do_nothing() }
+            "#,
         )
         .file(
             "build.rs",
             r#"
-            extern crate bar;
-            fn main() { bar::do_nothing() }
-        "#,
+                extern crate bar;
+                fn main() { bar::do_nothing() }
+            "#,
         )
         .file("bar/Cargo.toml", &basic_manifest("bar", "0.1.0"))
         .file("bar/src/lib.rs", "pub fn do_nothing() {}")
@@ -1810,12 +2390,12 @@ fn cfg_feedback() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            build = "build.rs"
-        "#,
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file("src/main.rs", "#[cfg(foo)] fn main() {}")
         .file(
@@ -1834,13 +2414,13 @@ fn cfg_override() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            links = "a"
-            build = "build.rs"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                links = "a"
+                build = "build.rs"
+            "#,
         )
         .file("src/main.rs", "#[cfg(foo)] fn main() {}")
         .file("build.rs", "")
@@ -1848,9 +2428,9 @@ fn cfg_override() {
             ".cargo/config",
             &format!(
                 r#"
-            [target.{}.a]
-            rustc-cfg = ["foo"]
-        "#,
+                    [target.{}.a]
+                    rustc-cfg = ["foo"]
+                "#,
                 target
             ),
         )
@@ -1865,12 +2445,12 @@ fn cfg_test() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            build = "build.rs"
-        "#,
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file(
             "build.rs",
@@ -1879,24 +2459,24 @@ fn cfg_test() {
         .file(
             "src/lib.rs",
             r#"
-            ///
-            /// ```
-            /// extern crate foo;
-            ///
-            /// fn main() {
-            ///     foo::foo()
-            /// }
-            /// ```
-            ///
-            #[cfg(foo)]
-            pub fn foo() {}
+                ///
+                /// ```
+                /// extern crate foo;
+                ///
+                /// fn main() {
+                ///     foo::foo()
+                /// }
+                /// ```
+                ///
+                #[cfg(foo)]
+                pub fn foo() {}
 
-            #[cfg(foo)]
-            #[test]
-            fn test_foo() {
-                foo()
-            }
-        "#,
+                #[cfg(foo)]
+                #[test]
+                fn test_foo() {
+                    foo()
+                }
+            "#,
         )
         .file("tests/test.rs", "#[cfg(foo)] #[test] fn test_bar() {}")
         .build();
@@ -1927,15 +2507,15 @@ fn cfg_doc() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            build = "build.rs"
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                build = "build.rs"
 
-            [dependencies.bar]
-            path = "bar"
-        "#,
+                [dependencies.bar]
+                path = "bar"
+            "#,
         )
         .file(
             "build.rs",
@@ -1945,12 +2525,12 @@ fn cfg_doc() {
         .file(
             "bar/Cargo.toml",
             r#"
-            [package]
-            name = "bar"
-            version = "0.0.1"
-            authors = []
-            build = "build.rs"
-        "#,
+                [package]
+                name = "bar"
+                version = "0.0.1"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file(
             "bar/build.rs",
@@ -1970,46 +2550,46 @@ fn cfg_override_test() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            build = "build.rs"
-            links = "a"
-        "#,
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                build = "build.rs"
+                links = "a"
+            "#,
         )
         .file("build.rs", "")
         .file(
             ".cargo/config",
             &format!(
                 r#"
-            [target.{}.a]
-            rustc-cfg = ["foo"]
-        "#,
+                    [target.{}.a]
+                    rustc-cfg = ["foo"]
+                "#,
                 rustc_host()
             ),
         )
         .file(
             "src/lib.rs",
             r#"
-            ///
-            /// ```
-            /// extern crate foo;
-            ///
-            /// fn main() {
-            ///     foo::foo()
-            /// }
-            /// ```
-            ///
-            #[cfg(foo)]
-            pub fn foo() {}
+                ///
+                /// ```
+                /// extern crate foo;
+                ///
+                /// fn main() {
+                ///     foo::foo()
+                /// }
+                /// ```
+                ///
+                #[cfg(foo)]
+                pub fn foo() {}
 
-            #[cfg(foo)]
-            #[test]
-            fn test_foo() {
-                foo()
-            }
-        "#,
+                #[cfg(foo)]
+                #[test]
+                fn test_foo() {
+                    foo()
+                }
+            "#,
         )
         .file("tests/test.rs", "#[cfg(foo)] #[test] fn test_bar() {}")
         .build();
@@ -2038,26 +2618,26 @@ fn cfg_override_doc() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            build = "build.rs"
-            links = "a"
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                build = "build.rs"
+                links = "a"
 
-            [dependencies.bar]
-            path = "bar"
-        "#,
+                [dependencies.bar]
+                path = "bar"
+            "#,
         )
         .file(
             ".cargo/config",
             &format!(
                 r#"
-            [target.{target}.a]
-            rustc-cfg = ["foo"]
-            [target.{target}.b]
-            rustc-cfg = ["bar"]
-        "#,
+                    [target.{target}.a]
+                    rustc-cfg = ["foo"]
+                    [target.{target}.b]
+                    rustc-cfg = ["bar"]
+                "#,
                 target = rustc_host()
             ),
         )
@@ -2066,13 +2646,13 @@ fn cfg_override_doc() {
         .file(
             "bar/Cargo.toml",
             r#"
-            [package]
-            name = "bar"
-            version = "0.0.1"
-            authors = []
-            build = "build.rs"
-            links = "b"
-        "#,
+                [package]
+                name = "bar"
+                version = "0.0.1"
+                authors = []
+                build = "build.rs"
+                links = "b"
+            "#,
         )
         .file("bar/build.rs", "")
         .file("bar/src/lib.rs", "#[cfg(bar)] pub fn bar() {}")
@@ -2089,21 +2669,21 @@ fn env_build() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            build = "build.rs"
-        "#,
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file(
             "src/main.rs",
             r#"
-            const FOO: &'static str = env!("FOO");
-            fn main() {
-                println!("{}", FOO);
-            }
-        "#,
+                const FOO: &'static str = env!("FOO");
+                fn main() {
+                    println!("{}", FOO);
+                }
+            "#,
         )
         .file(
             "build.rs",
@@ -2120,12 +2700,12 @@ fn env_test() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            build = "build.rs"
-        "#,
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file(
             "build.rs",
@@ -2138,13 +2718,13 @@ fn env_test() {
         .file(
             "tests/test.rs",
             r#"
-            extern crate foo;
+                extern crate foo;
 
-            #[test]
-            fn test_foo() {
-                assert_eq!("foo", foo::FOO);
-            }
-        "#,
+                #[test]
+                fn test_foo() {
+                    assert_eq!("foo", foo::FOO);
+                }
+            "#,
         )
         .build();
     p.cargo("test -v")
@@ -2173,19 +2753,19 @@ fn env_doc() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            build = "build.rs"
-        "#,
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file(
             "src/main.rs",
             r#"
-            const FOO: &'static str = env!("FOO");
-            fn main() {}
-        "#,
+                const FOO: &'static str = env!("FOO");
+                fn main() {}
+            "#,
         )
         .file(
             "build.rs",
@@ -2201,47 +2781,47 @@ fn flags_go_into_tests() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
 
-            [dependencies]
-            b = { path = "b" }
-        "#,
+                [dependencies]
+                b = { path = "b" }
+            "#,
         )
         .file("src/lib.rs", "")
         .file("tests/foo.rs", "")
         .file(
             "b/Cargo.toml",
             r#"
-            [project]
-            name = "b"
-            version = "0.5.0"
-            authors = []
-            [dependencies]
-            a = { path = "../a" }
-        "#,
+                [project]
+                name = "b"
+                version = "0.5.0"
+                authors = []
+                [dependencies]
+                a = { path = "../a" }
+            "#,
         )
         .file("b/src/lib.rs", "")
         .file(
             "a/Cargo.toml",
             r#"
-            [project]
-            name = "a"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-        "#,
+                [project]
+                name = "a"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file("a/src/lib.rs", "")
         .file(
             "a/build.rs",
             r#"
-            fn main() {
-                println!("cargo:rustc-link-search=test");
-            }
-        "#,
+                fn main() {
+                    println!("cargo:rustc-link-search=test");
+                }
+            "#,
         )
         .build();
 
@@ -2282,60 +2862,60 @@ fn diamond_passes_args_only_once() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
 
-            [dependencies]
-            a = { path = "a" }
-            b = { path = "b" }
-        "#,
+                [dependencies]
+                a = { path = "a" }
+                b = { path = "b" }
+            "#,
         )
         .file("src/lib.rs", "")
         .file("tests/foo.rs", "")
         .file(
             "a/Cargo.toml",
             r#"
-            [project]
-            name = "a"
-            version = "0.5.0"
-            authors = []
-            [dependencies]
-            b = { path = "../b" }
-            c = { path = "../c" }
-        "#,
+                [project]
+                name = "a"
+                version = "0.5.0"
+                authors = []
+                [dependencies]
+                b = { path = "../b" }
+                c = { path = "../c" }
+            "#,
         )
         .file("a/src/lib.rs", "")
         .file(
             "b/Cargo.toml",
             r#"
-            [project]
-            name = "b"
-            version = "0.5.0"
-            authors = []
-            [dependencies]
-            c = { path = "../c" }
-        "#,
+                [project]
+                name = "b"
+                version = "0.5.0"
+                authors = []
+                [dependencies]
+                c = { path = "../c" }
+            "#,
         )
         .file("b/src/lib.rs", "")
         .file(
             "c/Cargo.toml",
             r#"
-            [project]
-            name = "c"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-        "#,
+                [project]
+                name = "c"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file(
             "c/build.rs",
             r#"
-            fn main() {
-                println!("cargo:rustc-link-search=native=test");
-            }
-        "#,
+                fn main() {
+                    println!("cargo:rustc-link-search=native=test");
+                }
+            "#,
         )
         .file("c/src/lib.rs", "")
         .build();
@@ -2366,23 +2946,23 @@ fn adding_an_override_invalidates() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            links = "foo"
-            build = "build.rs"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                links = "foo"
+                build = "build.rs"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(".cargo/config", "")
         .file(
             "build.rs",
             r#"
-            fn main() {
-                println!("cargo:rustc-link-search=native=foo");
-            }
-        "#,
+                fn main() {
+                    println!("cargo:rustc-link-search=native=foo");
+                }
+            "#,
         )
         .build();
 
@@ -2398,19 +2978,16 @@ fn adding_an_override_invalidates() {
         )
         .run();
 
-    File::create(p.root().join(".cargo/config"))
-        .unwrap()
-        .write_all(
-            format!(
-                "
-        [target.{}.foo]
-        rustc-link-search = [\"native=bar\"]
-    ",
-                target
-            )
-            .as_bytes(),
-        )
-        .unwrap();
+    p.change_file(
+        ".cargo/config",
+        &format!(
+            "
+                [target.{}.foo]
+                rustc-link-search = [\"native=bar\"]
+            ",
+            target
+        ),
+    );
 
     p.cargo("build -v")
         .with_stderr(
@@ -2430,13 +3007,13 @@ fn changing_an_override_invalidates() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            links = "foo"
-            build = "build.rs"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                links = "foo"
+                build = "build.rs"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
@@ -2462,19 +3039,16 @@ fn changing_an_override_invalidates() {
         )
         .run();
 
-    File::create(p.root().join(".cargo/config"))
-        .unwrap()
-        .write_all(
-            format!(
-                "
-        [target.{}.foo]
-        rustc-link-search = [\"native=bar\"]
-    ",
-                target
-            )
-            .as_bytes(),
-        )
-        .unwrap();
+    p.change_file(
+        ".cargo/config",
+        &format!(
+            "
+                [target.{}.foo]
+                rustc-link-search = [\"native=bar\"]
+            ",
+            target
+        ),
+    );
 
     p.cargo("build -v")
         .with_stderr(
@@ -2495,13 +3069,13 @@ fn fresh_builds_possible_with_link_libs() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            links = "nativefoo"
-            build = "build.rs"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                links = "nativefoo"
+                build = "build.rs"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
@@ -2547,13 +3121,13 @@ fn fresh_builds_possible_with_multiple_metadata_overrides() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            links = "foo"
-            build = "build.rs"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                links = "foo"
+                build = "build.rs"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
@@ -2595,27 +3169,107 @@ fn fresh_builds_possible_with_multiple_metadata_overrides() {
 }
 
 #[cargo_test]
+fn generate_good_d_files() {
+    // this is here to stop regression on an issue where build.rs rerun-if-changed paths aren't
+    // made absolute properly, which in turn interacts poorly with the dep-info-basedir setting,
+    // and the dep-info files have other-crate-relative paths spat out in them
+    let p = project()
+        .file(
+            "awoo/Cargo.toml",
+            r#"
+                [project]
+                name = "awoo"
+                version = "0.5.0"
+                build = "build.rs"
+            "#,
+        )
+        .file("awoo/src/lib.rs", "")
+        .file(
+            "awoo/build.rs",
+            r#"
+                fn main() {
+                    println!("cargo:rerun-if-changed=build.rs");
+                    println!("cargo:rerun-if-changed=barkbarkbark");
+                }
+            "#,
+        )
+        .file(
+            "Cargo.toml",
+            r#"
+                [project]
+                name = "meow"
+                version = "0.5.0"
+                [dependencies]
+                awoo = { path = "awoo" }
+            "#,
+        )
+        .file("src/main.rs", "fn main() {}")
+        .build();
+
+    p.cargo("build -v").run();
+
+    let dot_d_path = p.bin("meow").with_extension("d");
+    println!("*meow at* {:?}", dot_d_path);
+    let dot_d = fs::read_to_string(&dot_d_path).unwrap();
+
+    println!("*.d file content*: {}", &dot_d);
+
+    assert_match_exact(
+        "[..]/target/debug/meow[EXE]: [..]/awoo/barkbarkbark [..]/awoo/build.rs[..]",
+        &dot_d,
+    );
+
+    // paths relative to dependency roots should not be allowed
+    assert!(!dot_d
+        .split_whitespace()
+        .any(|v| v == "barkbarkbark" || v == "build.rs"));
+
+    p.change_file(
+        ".cargo/config.toml",
+        r#"
+        [build]
+        dep-info-basedir="."
+    "#,
+    );
+    p.cargo("build -v").run();
+
+    let dot_d = fs::read_to_string(&dot_d_path).unwrap();
+
+    println!("*.d file content with dep-info-basedir*: {}", &dot_d);
+
+    assert_match_exact(
+        "target/debug/meow[EXE]: awoo/barkbarkbark awoo/build.rs[..]",
+        &dot_d,
+    );
+
+    // paths relative to dependency roots should not be allowed
+    assert!(!dot_d
+        .split_whitespace()
+        .any(|v| v == "barkbarkbark" || v == "build.rs"));
+}
+
+#[cargo_test]
 fn rebuild_only_on_explicit_paths() {
     let p = project()
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "build.rs",
             r#"
-            fn main() {
-                println!("cargo:rerun-if-changed=foo");
-                println!("cargo:rerun-if-changed=bar");
-            }
-        "#,
+                fn main() {
+                    println!("cargo:rerun-if-changed=foo");
+                    println!("cargo:rerun-if-changed=bar");
+                }
+            "#,
         )
         .build();
 
@@ -2635,8 +3289,8 @@ fn rebuild_only_on_explicit_paths() {
         .run();
 
     sleep_ms(1000);
-    File::create(p.root().join("foo")).unwrap();
-    File::create(p.root().join("bar")).unwrap();
+    p.change_file("foo", "");
+    p.change_file("bar", "");
     sleep_ms(1000); // make sure the to-be-created outfile has a timestamp distinct from the infiles
 
     // now the exist, so run once, catch the mtime, then shouldn't run again
@@ -2666,7 +3320,7 @@ fn rebuild_only_on_explicit_paths() {
 
     // random other files do not affect freshness
     println!("run baz");
-    File::create(p.root().join("baz")).unwrap();
+    p.change_file("baz", "");
     p.cargo("build -v")
         .with_stderr(
             "\
@@ -2678,7 +3332,7 @@ fn rebuild_only_on_explicit_paths() {
 
     // but changing dependent files does
     println!("run foo change");
-    File::create(p.root().join("foo")).unwrap();
+    p.change_file("foo", "");
     p.cargo("build -v")
         .with_stderr(
             "\
@@ -2711,40 +3365,40 @@ fn doctest_receives_build_link_args() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            [dependencies.a]
-            path = "a"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                [dependencies.a]
+                path = "a"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "a/Cargo.toml",
             r#"
-            [project]
-            name = "a"
-            version = "0.5.0"
-            authors = []
-            links = "bar"
-            build = "build.rs"
-        "#,
+                [project]
+                name = "a"
+                version = "0.5.0"
+                authors = []
+                links = "bar"
+                build = "build.rs"
+            "#,
         )
         .file("a/src/lib.rs", "")
         .file(
             "a/build.rs",
             r#"
-            fn main() {
-                println!("cargo:rustc-link-search=native=bar");
-            }
-        "#,
+                fn main() {
+                    println!("cargo:rustc-link-search=native=bar");
+                }
+            "#,
         )
         .build();
 
     p.cargo("test -v")
         .with_stderr_contains(
-            "[RUNNING] `rustdoc [..]--test [..] --crate-name foo [..]-L native=bar[..]`",
+            "[RUNNING] `rustdoc [..]--crate-name foo --test [..]-L native=bar[..]`",
         )
         .run();
 }
@@ -2755,44 +3409,44 @@ fn please_respect_the_dag() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
 
-            [dependencies]
-            a = { path = 'a' }
-        "#,
+                [dependencies]
+                a = { path = 'a' }
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "build.rs",
             r#"
-            fn main() {
-                println!("cargo:rustc-link-search=native=foo");
-            }
-        "#,
+                fn main() {
+                    println!("cargo:rustc-link-search=native=foo");
+                }
+            "#,
         )
         .file(
             "a/Cargo.toml",
             r#"
-            [project]
-            name = "a"
-            version = "0.5.0"
-            authors = []
-            links = "bar"
-            build = "build.rs"
-        "#,
+                [project]
+                name = "a"
+                version = "0.5.0"
+                authors = []
+                links = "bar"
+                build = "build.rs"
+            "#,
         )
         .file("a/src/lib.rs", "")
         .file(
             "a/build.rs",
             r#"
-            fn main() {
-                println!("cargo:rustc-link-search=native=bar");
-            }
-        "#,
+                fn main() {
+                    println!("cargo:rustc-link-search=native=bar");
+                }
+            "#,
         )
         .build();
 
@@ -2807,30 +3461,30 @@ fn non_utf8_output() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file(
             "build.rs",
             r#"
-            use std::io::prelude::*;
+                use std::io::prelude::*;
 
-            fn main() {
-                let mut out = std::io::stdout();
-                // print something that's not utf8
-                out.write_all(b"\xff\xff\n").unwrap();
+                fn main() {
+                    let mut out = std::io::stdout();
+                    // print something that's not utf8
+                    out.write_all(b"\xff\xff\n").unwrap();
 
-                // now print some cargo metadata that's utf8
-                println!("cargo:rustc-cfg=foo");
+                    // now print some cargo metadata that's utf8
+                    println!("cargo:rustc-cfg=foo");
 
-                // now print more non-utf8
-                out.write_all(b"\xff\xff\n").unwrap();
-            }
-        "#,
+                    // now print more non-utf8
+                    out.write_all(b"\xff\xff\n").unwrap();
+                }
+            "#,
         )
         .file("src/main.rs", "#[cfg(foo)] fn main() {}")
         .build();
@@ -2844,32 +3498,32 @@ fn custom_target_dir() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
 
-            [dependencies]
-            a = { path = "a" }
-        "#,
+                [dependencies]
+                a = { path = "a" }
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             ".cargo/config",
             r#"
-            [build]
-            target-dir = 'test'
-        "#,
+                [build]
+                target-dir = 'test'
+            "#,
         )
         .file(
             "a/Cargo.toml",
             r#"
-            [project]
-            name = "a"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-        "#,
+                [project]
+                name = "a"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file("a/build.rs", "fn main() {}")
         .file("a/src/lib.rs", "")
@@ -2884,17 +3538,17 @@ fn panic_abort_with_build_scripts() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
 
-            [profile.release]
-            panic = 'abort'
+                [profile.release]
+                panic = 'abort'
 
-            [dependencies]
-            a = { path = "a" }
-        "#,
+                [dependencies]
+                a = { path = "a" }
+            "#,
         )
         .file(
             "src/lib.rs",
@@ -2904,15 +3558,15 @@ fn panic_abort_with_build_scripts() {
         .file(
             "a/Cargo.toml",
             r#"
-            [project]
-            name = "a"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
+                [project]
+                name = "a"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
 
-            [build-dependencies]
-            b = { path = "../b" }
-        "#,
+                [build-dependencies]
+                b = { path = "../b" }
+            "#,
         )
         .file("a/src/lib.rs", "")
         .file(
@@ -2922,11 +3576,11 @@ fn panic_abort_with_build_scripts() {
         .file(
             "b/Cargo.toml",
             r#"
-            [project]
-            name = "b"
-            version = "0.5.0"
-            authors = []
-        "#,
+                [project]
+                name = "b"
+                version = "0.5.0"
+                authors = []
+            "#,
         )
         .file("b/src/lib.rs", "")
         .build();
@@ -2946,22 +3600,22 @@ fn warnings_emitted() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "build.rs",
             r#"
-            fn main() {
-                println!("cargo:warning=foo");
-                println!("cargo:warning=bar");
-            }
-        "#,
+                fn main() {
+                    println!("cargo:warning=foo");
+                    println!("cargo:warning=bar");
+                }
+            "#,
         )
         .build();
 
@@ -2977,6 +3631,39 @@ warning: bar
 [FINISHED] dev [unoptimized + debuginfo] target(s) in [..]
 ",
         )
+        .run();
+}
+
+#[cargo_test]
+fn warnings_emitted_when_build_script_panics() {
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .file(
+            "build.rs",
+            r#"
+                fn main() {
+                    println!("cargo:warning=foo");
+                    println!("cargo:warning=bar");
+                    panic!();
+                }
+            "#,
+        )
+        .build();
+
+    p.cargo("build")
+        .with_status(101)
+        .with_stdout("")
+        .with_stderr_contains("warning: foo\nwarning: bar")
         .run();
 }
 
@@ -3009,14 +3696,14 @@ fn warnings_hidden_for_upstream() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
 
-            [dependencies]
-            bar = "*"
-        "#,
+                [dependencies]
+                bar = "*"
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -3068,14 +3755,14 @@ fn warnings_printed_on_vv() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
 
-            [dependencies]
-            bar = "*"
-        "#,
+                [dependencies]
+                bar = "*"
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -3106,24 +3793,24 @@ fn output_shows_on_vv() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "build.rs",
             r#"
-            use std::io::prelude::*;
+                use std::io::prelude::*;
 
-            fn main() {
-                std::io::stderr().write_all(b"stderr\n").unwrap();
-                std::io::stdout().write_all(b"stdout\n").unwrap();
-            }
-        "#,
+                fn main() {
+                    std::io::stderr().write_all(b"stderr\n").unwrap();
+                    std::io::stdout().write_all(b"stdout\n").unwrap();
+                }
+            "#,
         )
         .build();
 
@@ -3150,30 +3837,30 @@ fn links_with_dots() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            build = "build.rs"
-            links = "a.b"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                build = "build.rs"
+                links = "a.b"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "build.rs",
             r#"
-            fn main() {
-                println!("cargo:rustc-link-search=bar")
-            }
-        "#,
+                fn main() {
+                    println!("cargo:rustc-link-search=bar")
+                }
+            "#,
         )
         .file(
             ".cargo/config",
             &format!(
                 r#"
-            [target.{}.'a.b']
-            rustc-link-search = ["foo"]
-        "#,
+                    [target.{}.'a.b']
+                    rustc-link-search = ["foo"]
+                "#,
                 target
             ),
         )
@@ -3190,24 +3877,24 @@ fn rustc_and_rustdoc_set_correctly() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            build = "build.rs"
-        "#,
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "build.rs",
             r#"
-              use std::env;
+                  use std::env;
 
-              fn main() {
-                  assert_eq!(env::var("RUSTC").unwrap(), "rustc");
-                  assert_eq!(env::var("RUSTDOC").unwrap(), "rustdoc");
-              }
-        "#,
+                  fn main() {
+                      assert_eq!(env::var("RUSTC").unwrap(), "rustc");
+                      assert_eq!(env::var("RUSTDOC").unwrap(), "rustdoc");
+                  }
+            "#,
         )
         .build();
     p.cargo("bench").run();
@@ -3219,28 +3906,28 @@ fn cfg_env_vars_available() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            build = "build.rs"
-        "#,
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "build.rs",
             r#"
-            use std::env;
+                use std::env;
 
-            fn main() {
-                let fam = env::var("CARGO_CFG_TARGET_FAMILY").unwrap();
-                if cfg!(unix) {
-                    assert_eq!(fam, "unix");
-                } else {
-                    assert_eq!(fam, "windows");
+                fn main() {
+                    let fam = env::var("CARGO_CFG_TARGET_FAMILY").unwrap();
+                    if cfg!(unix) {
+                        assert_eq!(fam, "unix");
+                    } else {
+                        assert_eq!(fam, "windows");
+                    }
                 }
-            }
-        "#,
+            "#,
         )
         .build();
     p.cargo("bench").run();
@@ -3252,44 +3939,42 @@ fn switch_features_rerun() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            build = "build.rs"
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                build = "build.rs"
 
-            [features]
-            foo = []
-        "#,
+                [features]
+                foo = []
+            "#,
         )
         .file(
             "src/main.rs",
             r#"
-            fn main() {
-                println!(include_str!(concat!(env!("OUT_DIR"), "/output")));
-            }
-        "#,
+                fn main() {
+                    println!(include_str!(concat!(env!("OUT_DIR"), "/output")));
+                }
+            "#,
         )
         .file(
             "build.rs",
             r#"
-            use std::env;
-            use std::fs::File;
-            use std::io::Write;
-            use std::path::Path;
+                use std::env;
+                use std::fs;
+                use std::path::Path;
 
-            fn main() {
-                let out_dir = env::var_os("OUT_DIR").unwrap();
-                let out_dir = Path::new(&out_dir).join("output");
-                let mut f = File::create(&out_dir).unwrap();
+                fn main() {
+                    let out_dir = env::var_os("OUT_DIR").unwrap();
+                    let output = Path::new(&out_dir).join("output");
 
-                if env::var_os("CARGO_FEATURE_FOO").is_some() {
-                    f.write_all(b"foo").unwrap();
-                } else {
-                    f.write_all(b"bar").unwrap();
+                    if env::var_os("CARGO_FEATURE_FOO").is_some() {
+                        fs::write(output, "foo").unwrap();
+                    } else {
+                        fs::write(output, "bar").unwrap();
+                    }
                 }
-            }
-        "#,
+            "#,
         )
         .build();
 
@@ -3309,20 +3994,20 @@ fn assume_build_script_when_build_rs_present() {
         .file(
             "src/main.rs",
             r#"
-            fn main() {
-                if ! cfg!(foo) {
-                    panic!("the build script was not run");
+                fn main() {
+                    if ! cfg!(foo) {
+                        panic!("the build script was not run");
+                    }
                 }
-            }
-        "#,
+            "#,
         )
         .file(
             "build.rs",
             r#"
-            fn main() {
-                println!("cargo:rustc-cfg=foo");
-            }
-        "#,
+                fn main() {
+                    println!("cargo:rustc-cfg=foo");
+                }
+            "#,
         )
         .build();
 
@@ -3335,30 +4020,30 @@ fn if_build_set_to_false_dont_treat_build_rs_as_build_script() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            build = false
-        "#,
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                build = false
+            "#,
         )
         .file(
             "src/main.rs",
             r#"
-            fn main() {
-                if cfg!(foo) {
-                    panic!("the build script was run");
+                fn main() {
+                    if cfg!(foo) {
+                        panic!("the build script was run");
+                    }
                 }
-            }
-        "#,
+            "#,
         )
         .file(
             "build.rs",
             r#"
-            fn main() {
-                println!("cargo:rustc-cfg=foo");
-            }
-        "#,
+                fn main() {
+                    println!("cargo:rustc-cfg=foo");
+                }
+            "#,
         )
         .build();
 
@@ -3459,17 +4144,17 @@ fn deterministic_rustc_dependency_flags() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            dep1 = "*"
-            dep2 = "*"
-            dep3 = "*"
-            dep4 = "*"
-        "#,
+                [dependencies]
+                dep1 = "*"
+                dep2 = "*"
+                dep3 = "*"
+                dep4 = "*"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .build();
@@ -3491,46 +4176,46 @@ fn links_duplicates_with_cycle() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            links = "a"
-            build = "build.rs"
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                links = "a"
+                build = "build.rs"
 
-            [dependencies.a]
-            path = "a"
+                [dependencies.a]
+                path = "a"
 
-            [dev-dependencies]
-            b = { path = "b" }
-        "#,
+                [dev-dependencies]
+                b = { path = "b" }
+            "#,
         )
         .file("src/lib.rs", "")
         .file("build.rs", "")
         .file(
             "a/Cargo.toml",
             r#"
-            [project]
-            name = "a"
-            version = "0.5.0"
-            authors = []
-            links = "a"
-            build = "build.rs"
-        "#,
+                [project]
+                name = "a"
+                version = "0.5.0"
+                authors = []
+                links = "a"
+                build = "build.rs"
+            "#,
         )
         .file("a/src/lib.rs", "")
         .file("a/build.rs", "")
         .file(
             "b/Cargo.toml",
             r#"
-            [project]
-            name = "b"
-            version = "0.5.0"
-            authors = []
+                [project]
+                name = "b"
+                version = "0.5.0"
+                authors = []
 
-            [dependencies]
-            foo = { path = ".." }
-        "#,
+                [dependencies]
+                foo = { path = ".." }
+            "#,
         )
         .file("b/src/lib.rs", "")
         .build();
@@ -3543,6 +4228,7 @@ versions that meet the requirements `*` are: 0.5.0
 
 the package `a` links to the native library `a`, but it conflicts with a previous package which links to `a` as well:
 package `foo v0.5.0 ([..])`
+Only one package in the dependency graph may specify the same links value. This helps ensure that only one copy of a native library is linked in the final binary. Try to adjust your dependencies so that only one package uses the links ='a' value. For more information, see https://doc.rust-lang.org/cargo/reference/resolver.html#links.
 
 failed to select a version for `a` which could resolve this conflict
 ").run();
@@ -3574,14 +4260,14 @@ fn _rename_with_link_search_path(cross: bool) {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
 
-            [lib]
-            crate-type = ["cdylib"]
-        "#,
+                [lib]
+                crate-type = ["cdylib"]
+            "#,
         )
         .file(
             "src/lib.rs",
@@ -3597,48 +4283,48 @@ fn _rename_with_link_search_path(cross: bool) {
         .file(
             "build.rs",
             r#"
-            use std::env;
-            use std::fs;
-            use std::path::PathBuf;
+                use std::env;
+                use std::fs;
+                use std::path::PathBuf;
 
-            fn main() {
-                // Move the `libfoo.so` from the root of our project into the
-                // build directory. This way Cargo should automatically manage
-                // `LD_LIBRARY_PATH` and such.
-                let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
-                let file = format!("{}foo{}", env::consts::DLL_PREFIX, env::consts::DLL_SUFFIX);
-                let src = root.join(&file);
+                fn main() {
+                    // Move the `libfoo.so` from the root of our project into the
+                    // build directory. This way Cargo should automatically manage
+                    // `LD_LIBRARY_PATH` and such.
+                    let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
+                    let file = format!("{}foo{}", env::consts::DLL_PREFIX, env::consts::DLL_SUFFIX);
+                    let src = root.join(&file);
 
-                let dst_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-                let dst = dst_dir.join(&file);
+                    let dst_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+                    let dst = dst_dir.join(&file);
 
-                fs::copy(&src, &dst).unwrap();
-                // handle windows, like below
-                drop(fs::copy(root.join("foo.dll.lib"), dst_dir.join("foo.dll.lib")));
+                    fs::copy(&src, &dst).unwrap();
+                    // handle windows, like below
+                    drop(fs::copy(root.join("foo.dll.lib"), dst_dir.join("foo.dll.lib")));
 
-                println!("cargo:rerun-if-changed=build.rs");
-                if cfg!(target_env = "msvc") {
-                    println!("cargo:rustc-link-lib=foo.dll");
-                } else {
-                    println!("cargo:rustc-link-lib=foo");
+                    println!("cargo:rerun-if-changed=build.rs");
+                    if cfg!(target_env = "msvc") {
+                        println!("cargo:rustc-link-lib=foo.dll");
+                    } else {
+                        println!("cargo:rustc-link-lib=foo");
+                    }
+                    println!("cargo:rustc-link-search=all={}",
+                             dst.parent().unwrap().display());
                 }
-                println!("cargo:rustc-link-search=all={}",
-                         dst.parent().unwrap().display());
-            }
-        "#,
+            "#,
         )
         .file(
             "src/main.rs",
             r#"
-            extern {
-                #[link_name = "cargo_test_foo"]
-                fn foo();
-            }
+                extern {
+                    #[link_name = "cargo_test_foo"]
+                    fn foo();
+                }
 
-            fn main() {
-                unsafe { foo(); }
-            }
-        "#,
+                fn main() {
+                    unsafe { foo(); }
+                }
+            "#,
         );
     let p2 = p2.build();
 
@@ -3730,17 +4416,17 @@ fn optional_build_script_dep() {
         .file(
             "build.rs",
             r#"
-            #[cfg(feature = "bar")]
-            extern crate bar;
+                #[cfg(feature = "bar")]
+                extern crate bar;
 
-            fn main() {
-                #[cfg(feature = "bar")] {
-                    println!("cargo:rustc-env=FOO={}", bar::bar());
-                    return
+                fn main() {
+                    #[cfg(feature = "bar")] {
+                        println!("cargo:rustc-env=FOO={}", bar::bar());
+                        return
+                    }
+                    println!("cargo:rustc-env=FOO=0");
                 }
-                println!("cargo:rustc-env=FOO=0");
-            }
-        "#,
+            "#,
         )
         .file(
             "src/main.rs",
@@ -3937,20 +4623,31 @@ fn links_interrupted_can_restart() {
 fn build_script_scan_eacces() {
     // build.rs causes a scan of the whole project, which can be a problem if
     // a directory is not accessible.
+    use cargo_test_support::git;
     use std::os::unix::fs::PermissionsExt;
+
     let p = project()
         .file("src/lib.rs", "")
         .file("build.rs", "fn main() {}")
         .file("secrets/stuff", "")
         .build();
     let path = p.root().join("secrets");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0)).unwrap();
-    // "Caused by" is a string from libc such as the following:
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o0)).unwrap();
+    // The last "Caused by" is a string from libc such as the following:
     //   Permission denied (os error 13)
     p.cargo("build")
         .with_stderr(
             "\
-[ERROR] cannot read \"[..]/foo/secrets\"
+[ERROR] failed to determine package fingerprint for build script for foo v0.0.1 ([..]/foo)
+
+Caused by:
+  failed to determine the most recently modified file in [..]/foo
+
+Caused by:
+  failed to determine list of files in [..]/foo
+
+Caused by:
+  cannot read \"[..]/foo/secrets\"
 
 Caused by:
   [..]
@@ -3958,5 +4655,290 @@ Caused by:
         )
         .with_status(101)
         .run();
+
+    // Try `package.exclude` to skip a directory.
+    p.change_file(
+        "Cargo.toml",
+        r#"
+        [package]
+        name = "foo"
+        version = "0.0.1"
+        exclude = ["secrets"]
+        "#,
+    );
+    p.cargo("build").run();
+
+    // Try with git. This succeeds because the git status walker ignores
+    // directories it can't access.
+    p.change_file("Cargo.toml", &basic_manifest("foo", "0.0.1"));
+    p.build_dir().rm_rf();
+    let repo = git::init(&p.root());
+    git::add(&repo);
+    git::commit(&repo);
+    p.cargo("build").run();
+
+    // Restore permissions so that the directory can be deleted.
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cargo_test]
+fn dev_dep_with_links() {
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [package]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
+                links = "x"
+
+                [dev-dependencies]
+                bar = { path = "./bar" }
+            "#,
+        )
+        .file("build.rs", "fn main() {}")
+        .file("src/lib.rs", "")
+        .file(
+            "bar/Cargo.toml",
+            r#"
+                [package]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
+                links = "y"
+
+                [dependencies]
+                foo = { path = ".." }
+            "#,
+        )
+        .file("bar/build.rs", "fn main() {}")
+        .file("bar/src/lib.rs", "")
+        .build();
+    p.cargo("check --tests").run()
+}
+
+#[cargo_test]
+fn rerun_if_directory() {
+    if !symlink_supported() {
+        return;
+    }
+
+    // rerun-if-changed of a directory should rerun if any file in the directory changes.
+    let p = project()
+        .file("Cargo.toml", &basic_manifest("foo", "0.1.0"))
+        .file("src/lib.rs", "")
+        .file(
+            "build.rs",
+            r#"
+                fn main() {
+                    println!("cargo:rerun-if-changed=somedir");
+                }
+            "#,
+        )
+        .build();
+
+    let dirty = || {
+        p.cargo("check")
+            .with_stderr(
+                "[COMPILING] foo [..]\n\
+                 [FINISHED] [..]",
+            )
+            .run();
+    };
+
+    let fresh = || {
+        p.cargo("check").with_stderr("[FINISHED] [..]").run();
+    };
+
+    // Start with a missing directory.
+    dirty();
+    // Because the directory doesn't exist, it will trigger a rebuild every time.
+    // https://github.com/rust-lang/cargo/issues/6003
+    dirty();
+
+    if is_coarse_mtime() {
+        sleep_ms(1000);
+    }
+
+    // Empty directory.
+    fs::create_dir(p.root().join("somedir")).unwrap();
+    dirty();
+    fresh();
+
+    if is_coarse_mtime() {
+        sleep_ms(1000);
+    }
+
+    // Add a file.
+    p.change_file("somedir/foo", "");
+    p.change_file("somedir/bar", "");
+    dirty();
+    fresh();
+
+    if is_coarse_mtime() {
+        sleep_ms(1000);
+    }
+
+    // Add a symlink.
+    p.symlink("foo", "somedir/link");
+    dirty();
+    fresh();
+
+    if is_coarse_mtime() {
+        sleep_ms(1000);
+    }
+
+    // Move the symlink.
+    fs::remove_file(p.root().join("somedir/link")).unwrap();
+    p.symlink("bar", "somedir/link");
+    dirty();
+    fresh();
+
+    if is_coarse_mtime() {
+        sleep_ms(1000);
+    }
+
+    // Remove a file.
+    fs::remove_file(p.root().join("somedir/foo")).unwrap();
+    dirty();
+    fresh();
+}
+
+#[cargo_test]
+fn test_with_dep_metadata() {
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [package]
+                name = "foo"
+                version = "0.1.0"
+
+                [dependencies]
+                bar = { path = 'bar' }
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .file(
+            "build.rs",
+            r#"
+                fn main() {
+                    assert_eq!(std::env::var("DEP_BAR_FOO").unwrap(), "bar");
+                }
+            "#,
+        )
+        .file(
+            "bar/Cargo.toml",
+            r#"
+                [package]
+                name = "bar"
+                version = "0.1.0"
+                links = 'bar'
+            "#,
+        )
+        .file("bar/src/lib.rs", "")
+        .file(
+            "bar/build.rs",
+            r#"
+                fn main() {
+                    println!("cargo:foo=bar");
+                }
+            "#,
+        )
+        .build();
+    p.cargo("test --lib").run();
+}
+
+#[cargo_test]
+fn duplicate_script_with_extra_env() {
+    // Test where a build script is run twice, that emits different rustc-env
+    // and rustc-cfg values. In this case, one is run for host, the other for
+    // target.
+    if !cross_compile::can_run_on_host() {
+        return;
+    }
+
+    let target = cross_compile::alternate();
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [workspace]
+                members = ["foo", "pm"]
+            "#,
+        )
+        .file(
+            "foo/Cargo.toml",
+            r#"
+                [package]
+                name = "foo"
+                version = "0.1.0"
+
+                [dependencies]
+                pm = { path = "../pm" }
+            "#,
+        )
+        .file(
+            "foo/src/lib.rs",
+            &r#"
+                //! ```rust
+                //! #[cfg(not(mycfg="{target}"))]
+                //! compile_error!{"expected mycfg set"}
+                //! assert_eq!(env!("CRATE_TARGET"), "{target}");
+                //! assert_eq!(std::env::var("CRATE_TARGET").unwrap(), "{target}");
+                //! ```
+
+                #[test]
+                fn check_target() {
+                    #[cfg(not(mycfg="{target}"))]
+                    compile_error!{"expected mycfg set"}
+                    // Compile-time assertion.
+                    assert_eq!(env!("CRATE_TARGET"), "{target}");
+                    // Run-time assertion.
+                    assert_eq!(std::env::var("CRATE_TARGET").unwrap(), "{target}");
+                }
+            "#
+            .replace("{target}", target),
+        )
+        .file(
+            "foo/build.rs",
+            r#"
+                fn main() {
+                    println!("cargo:rustc-env=CRATE_TARGET={}", std::env::var("TARGET").unwrap());
+                    println!("cargo:rustc-cfg=mycfg=\"{}\"", std::env::var("TARGET").unwrap());
+                }
+            "#,
+        )
+        .file(
+            "pm/Cargo.toml",
+            r#"
+                [package]
+                name = "pm"
+                version = "0.1.0"
+
+                [lib]
+                proc-macro = true
+                # This is just here to speed things up.
+                doctest = false
+
+                [dev-dependencies]
+                foo = { path = "../foo" }
+            "#,
+        )
+        .file("pm/src/lib.rs", "")
+        .build();
+
+    p.cargo("test --workspace --target")
+        .arg(&target)
+        .with_stdout_contains("test check_target ... ok")
+        .run();
+
+    if cargo_test_support::is_nightly() {
+        p.cargo("test --workspace -Z doctest-xcompile --doc --target")
+            .arg(&target)
+            .masquerade_as_nightly_cargo()
+            .with_stdout_contains("test src/lib.rs - (line 2) ... ok")
+            .run();
+    }
 }

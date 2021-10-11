@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::{iter, mem, thread, time};
 
-use tempdir::TempDir;
+use tempfile::Builder;
 
 use tar::{GnuHeader, Header, HeaderMode};
 
@@ -139,6 +139,12 @@ fn set_path() {
         assert_eq!(t!(h.path()).to_str(), Some("foo\\bar"));
     }
 
+    // set_path documentation explictly states it removes any ".", signfying the
+    // current directory, from the path. This test ensures that documented
+    // beavhior occurs
+    t!(h.set_path("./control"));
+    assert_eq!(t!(h.path()).to_str(), Some("control"));
+
     let long_name = iter::repeat("foo").take(100).collect::<String>();
     let medium1 = iter::repeat("foo").take(52).collect::<String>();
     let medium2 = iter::repeat("fo/").take(52).collect::<String>();
@@ -147,6 +153,10 @@ fn set_path() {
     assert!(h.set_path(&medium1).is_err());
     assert!(h.set_path(&medium2).is_err());
     assert!(h.set_path("\0").is_err());
+
+    assert!(h.set_path("..").is_err());
+    assert!(h.set_path("foo/..").is_err());
+    assert!(h.set_path("foo/../bar").is_err());
 
     h = Header::new_ustar();
     t!(h.set_path("foo"));
@@ -168,7 +178,7 @@ fn set_ustar_path_hard() {
 
 #[test]
 fn set_metadata_deterministic() {
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(Builder::new().prefix("tar-rs").tempdir());
     let tmppath = td.path().join("tmpfile");
 
     fn mk_header(path: &Path, readonly: bool) -> Result<Header, io::Error> {

@@ -1,19 +1,21 @@
 use crate::core::compiler::{BuildConfig, MessageFormat};
-use crate::core::InternedString;
-use crate::core::Workspace;
+use crate::core::resolver::CliFeatures;
+use crate::core::{Edition, Workspace};
 use crate::ops::{CompileFilter, CompileOptions, NewOptions, Packages, VersionControl};
 use crate::sources::CRATES_IO_REGISTRY;
 use crate::util::important_paths::find_root_manifest_for_wd;
-use crate::util::{paths, toml::TomlProfile, validate_package_name};
+use crate::util::interning::InternedString;
+use crate::util::restricted_names::is_glob_pattern;
 use crate::util::{
     print_available_benches, print_available_binaries, print_available_examples,
-    print_available_tests,
+    print_available_packages, print_available_tests,
 };
+use crate::util::{toml::TomlProfile, validate_package_name};
 use crate::CargoResult;
 use anyhow::bail;
+use cargo_util::paths;
 use clap::{self, SubCommand};
 use std::ffi::{OsStr, OsString};
-use std::fs;
 use std::path::PathBuf;
 
 pub use crate::core::compiler::CompileMode;
@@ -37,12 +39,30 @@ pub trait AppExt: Sized {
             ._arg(multi_opt("exclude", "SPEC", exclude))
     }
 
+    /// Variant of arg_package_spec that does not include the `--all` flag
+    /// (but does include `--workspace`). Used to avoid confusion with
+    /// historical uses of `--all`.
+    fn arg_package_spec_no_all(
+        self,
+        package: &'static str,
+        all: &'static str,
+        exclude: &'static str,
+    ) -> Self {
+        self.arg_package_spec_simple(package)
+            ._arg(opt("workspace", all))
+            ._arg(multi_opt("exclude", "SPEC", exclude))
+    }
+
     fn arg_package_spec_simple(self, package: &'static str) -> Self {
-        self._arg(multi_opt("package", "SPEC", package).short("p"))
+        self._arg(optional_multi_opt("package", "SPEC", package).short("p"))
     }
 
     fn arg_package(self, package: &'static str) -> Self {
-        self._arg(opt("package", package).short("p").value_name("SPEC"))
+        self._arg(
+            optional_opt("package", package)
+                .short("p")
+                .value_name("SPEC"),
+        )
     }
 
     fn arg_jobs(self) -> Self {
@@ -104,7 +124,7 @@ pub trait AppExt: Sized {
         self._arg(multi_opt(
             "features",
             "FEATURES",
-            "Space-separated list of features to activate",
+            "Space or comma separated list of features to activate",
         ))
         ._arg(opt("all-features", "Activate all available features"))
         ._arg(opt(
@@ -126,7 +146,7 @@ pub trait AppExt: Sized {
     }
 
     fn arg_target_triple(self, target: &'static str) -> Self {
-        self._arg(opt("target", target).value_name("TRIPLE"))
+        self._arg(multi_opt("target", "TRIPLE", target))
     }
 
     fn arg_target_dir(self) -> Self {
@@ -150,6 +170,10 @@ pub trait AppExt: Sized {
         ))
     }
 
+    fn arg_unit_graph(self) -> Self {
+        self._arg(opt("unit-graph", "Output build graph in JSON (unstable)"))
+    }
+
     fn arg_new_opts(self) -> Self {
         self._arg(
             opt(
@@ -166,7 +190,7 @@ pub trait AppExt: Sized {
         ._arg(opt("lib", "Use a library template"))
         ._arg(
             opt("edition", "Edition to set for the crate generated")
-                .possible_values(&["2015", "2018"])
+                .possible_values(Edition::CLI_VALUES)
                 .value_name("YEAR"),
         )
         ._arg(
@@ -190,6 +214,20 @@ pub trait AppExt: Sized {
     fn arg_dry_run(self, dry_run: &'static str) -> Self {
         self._arg(opt("dry-run", dry_run))
     }
+
+    fn arg_ignore_rust_version(self) -> Self {
+        self._arg(opt(
+            "ignore-rust-version",
+            "Ignore `rust-version` specification in packages (unstable)",
+        ))
+    }
+
+    fn arg_future_incompat_report(self) -> Self {
+        self._arg(opt(
+            "future-incompat-report",
+            "Outputs a future incompatibility report at the end of the build (unstable)",
+        ))
+    }
 }
 
 impl AppExt for App {
@@ -200,6 +238,10 @@ impl AppExt for App {
 
 pub fn opt(name: &'static str, help: &'static str) -> Arg<'static, 'static> {
     Arg::with_name(name).long(name).help(help)
+}
+
+pub fn optional_opt(name: &'static str, help: &'static str) -> Arg<'static, 'static> {
+    opt(name, help).min_values(0)
 }
 
 pub fn optional_multi_opt(
@@ -239,8 +281,14 @@ pub fn subcommand(name: &'static str) -> App {
 
 // Determines whether or not to gate `--profile` as unstable when resolving it.
 pub enum ProfileChecking {
-    Checked,
-    Unchecked,
+    // `cargo rustc` historically has allowed "test", "bench", and "check". This
+    // variant explicitly allows those.
+    LegacyRustc,
+    // `cargo check` and `cargo fix` historically has allowed "test". This variant
+    // explicitly allows that on stable.
+    LegacyTestOnly,
+    // All other commands, which allow any valid custom named profile.
+    Custom,
 }
 
 pub trait ArgMatchesExt {
@@ -267,7 +315,7 @@ pub trait ArgMatchesExt {
             if !path.ends_with("Cargo.toml") {
                 anyhow::bail!("the manifest-path must be a path to a Cargo.toml file")
             }
-            if fs::metadata(&path).is_err() {
+            if !path.exists() {
                 anyhow::bail!(
                     "manifest path `{}` does not exist",
                     self._value_of("manifest-path").unwrap()
@@ -284,19 +332,6 @@ pub trait ArgMatchesExt {
         if config.cli_unstable().avoid_dev_deps {
             ws.set_require_optional_deps(false);
         }
-        if ws.is_virtual() && !config.cli_unstable().package_features {
-            // --all-features is actually honored. In general, workspaces and
-            // feature flags are a bit of a mess right now.
-            for flag in &["features", "no-default-features"] {
-                if self._is_present(flag) {
-                    bail!(
-                        "--{} is not allowed in the root of a virtual workspace\n\
-                         note: while this was previously accepted, it didn't actually do anything",
-                        flag
-                    );
-                }
-            }
-        }
         Ok(ws)
     }
 
@@ -304,8 +339,8 @@ pub trait ArgMatchesExt {
         self.value_of_u32("jobs")
     }
 
-    fn target(&self) -> Option<String> {
-        self._value_of("target").map(|s| s.to_string())
+    fn targets(&self) -> Vec<String> {
+        self._values_of("target")
     }
 
     fn get_profile_name(
@@ -314,64 +349,77 @@ pub trait ArgMatchesExt {
         default: &str,
         profile_checking: ProfileChecking,
     ) -> CargoResult<InternedString> {
-        let specified_profile = match self._value_of("profile") {
-            None => None,
-            Some(name) => {
-                TomlProfile::validate_name(name, "profile name")?;
-                Some(InternedString::new(name))
+        let specified_profile = self._value_of("profile");
+
+        // Check for allowed legacy names.
+        // This is an early exit, since it allows combination with `--release`.
+        match (specified_profile, profile_checking) {
+            // `cargo rustc` has legacy handling of these names
+            (Some(name @ ("test" | "bench" | "check")), ProfileChecking::LegacyRustc) |
+            // `cargo fix` and `cargo check` has legacy handling of this profile name
+            (Some(name @ "test"), ProfileChecking::LegacyTestOnly) => return Ok(InternedString::new(name)),
+            _ => {}
+        }
+
+        if specified_profile.is_some() && !config.cli_unstable().unstable_options {
+            bail!("usage of `--profile` requires `-Z unstable-options`");
+        }
+
+        let conflict = |flag: &str, equiv: &str, specified: &str| -> anyhow::Error {
+            anyhow::format_err!(
+                "conflicting usage of --profile={} and --{flag}\n\
+                 The `--{flag}` flag is the same as `--profile={equiv}`.\n\
+                 Remove one flag or the other to continue.",
+                specified,
+                flag = flag,
+                equiv = equiv
+            )
+        };
+
+        let name = match (
+            self._is_present("release"),
+            self._is_present("debug"),
+            specified_profile,
+        ) {
+            (false, false, None) => default,
+            (true, _, None | Some("release")) => "release",
+            (true, _, Some(name)) => return Err(conflict("release", "release", name)),
+            (_, true, None | Some("dev")) => "dev",
+            (_, true, Some(name)) => return Err(conflict("debug", "dev", name)),
+            // `doc` is separate from all the other reservations because
+            // [profile.doc] was historically allowed, but is deprecated and
+            // has no effect. To avoid potentially breaking projects, it is a
+            // warning in Cargo.toml, but since `--profile` is new, we can
+            // reject it completely here.
+            (_, _, Some("doc")) => {
+                bail!("profile `doc` is reserved and not allowed to be explicitly specified")
+            }
+            (_, _, Some(name)) => {
+                TomlProfile::validate_name(name)?;
+                name
             }
         };
 
-        match profile_checking {
-            ProfileChecking::Unchecked => {}
-            ProfileChecking::Checked => {
-                if specified_profile.is_some() && !config.cli_unstable().unstable_options {
-                    anyhow::bail!("Usage of `--profile` requires `-Z unstable-options`")
-                }
-            }
-        }
-
-        if self._is_present("release") {
-            if !config.cli_unstable().unstable_options {
-                Ok(InternedString::new("release"))
-            } else {
-                match specified_profile {
-                    Some(name) if name != "release" => {
-                        anyhow::bail!("Conflicting usage of --profile and --release")
-                    }
-                    _ => Ok(InternedString::new("release")),
-                }
-            }
-        } else if self._is_present("debug") {
-            if !config.cli_unstable().unstable_options {
-                Ok(InternedString::new("dev"))
-            } else {
-                match specified_profile {
-                    Some(name) if name != "dev" => {
-                        anyhow::bail!("Conflicting usage of --profile and --debug")
-                    }
-                    _ => Ok(InternedString::new("dev")),
-                }
-            }
-        } else {
-            Ok(specified_profile.unwrap_or_else(|| InternedString::new(default)))
-        }
+        Ok(InternedString::new(name))
     }
 
-    fn compile_options<'a>(
-        &self,
-        config: &'a Config,
-        mode: CompileMode,
-        workspace: Option<&Workspace<'a>>,
-        profile_checking: ProfileChecking,
-    ) -> CargoResult<CompileOptions<'a>> {
-        let spec = Packages::from_flags(
+    fn packages_from_flags(&self) -> CargoResult<Packages> {
+        Packages::from_flags(
             // TODO Integrate into 'workspace'
             self._is_present("workspace") || self._is_present("all"),
             self._values_of("exclude"),
             self._values_of("package"),
-        )?;
+        )
+    }
 
+    fn compile_options(
+        &self,
+        config: &Config,
+        mode: CompileMode,
+        workspace: Option<&Workspace<'_>>,
+        profile_checking: ProfileChecking,
+    ) -> CargoResult<CompileOptions> {
+        let spec = self.packages_from_flags()?;
         let mut message_format = None;
         let default_json = MessageFormat::Json {
             short: false,
@@ -434,22 +482,37 @@ pub trait ArgMatchesExt {
             }
         }
 
-        let mut build_config = BuildConfig::new(config, self.jobs()?, &self.target(), mode)?;
+        let mut build_config = BuildConfig::new(config, self.jobs()?, &self.targets(), mode)?;
         build_config.message_format = message_format.unwrap_or(MessageFormat::Human);
         build_config.requested_profile = self.get_profile_name(config, "dev", profile_checking)?;
         build_config.build_plan = self._is_present("build-plan");
+        build_config.unit_graph = self._is_present("unit-graph");
+        build_config.future_incompat_report = self._is_present("future-incompat-report");
         if build_config.build_plan {
             config
                 .cli_unstable()
                 .fail_if_stable_opt("--build-plan", 5579)?;
         };
+        if build_config.unit_graph {
+            config
+                .cli_unstable()
+                .fail_if_stable_opt("--unit-graph", 8002)?;
+        }
+        if build_config.future_incompat_report {
+            config
+                .cli_unstable()
+                .fail_if_stable_opt("--future-incompat-report", 9241)?;
+
+            if !config.cli_unstable().future_incompat_report {
+                anyhow::bail!(
+                    "Usage of `--future-incompat-report` requires `-Z future-incompat-report`"
+                )
+            }
+        }
 
         let opts = CompileOptions {
-            config,
             build_config,
-            features: self._values_of("features"),
-            all_features: self._is_present("all-features"),
-            no_default_features: self._is_present("no-default-features"),
+            cli_features: self.cli_features()?,
             spec,
             filter: CompileFilter::from_raw_arguments(
                 self._is_present("lib"),
@@ -467,25 +530,51 @@ pub trait ArgMatchesExt {
             target_rustc_args: None,
             local_rustdoc_args: None,
             rustdoc_document_private_items: false,
-            export_dir: None,
+            honor_rust_version: !self._is_present("ignore-rust-version"),
         };
+
+        if !opts.honor_rust_version {
+            config
+                .cli_unstable()
+                .fail_if_stable_opt("--ignore-rust-version", 8072)?;
+        }
 
         if let Some(ws) = workspace {
             self.check_optional_opts(ws, &opts)?;
+        } else if self.is_present_with_zero_values("package") {
+            // As for cargo 0.50.0, this won't occur but if someone sneaks in
+            // we can still provide this informative message for them.
+            anyhow::bail!(
+                "\"--package <SPEC>\" requires a SPEC format value, \
+                which can be any package ID specifier in the dependency graph.\n\
+                Run `cargo help pkgid` for more information about SPEC format."
+            )
         }
 
         Ok(opts)
     }
 
-    fn compile_options_for_single_package<'a>(
+    fn cli_features(&self) -> CargoResult<CliFeatures> {
+        CliFeatures::from_command_line(
+            &self._values_of("features"),
+            self._is_present("all-features"),
+            !self._is_present("no-default-features"),
+        )
+    }
+
+    fn compile_options_for_single_package(
         &self,
-        config: &'a Config,
+        config: &Config,
         mode: CompileMode,
-        workspace: Option<&Workspace<'a>>,
+        workspace: Option<&Workspace<'_>>,
         profile_checking: ProfileChecking,
-    ) -> CargoResult<CompileOptions<'a>> {
+    ) -> CargoResult<CompileOptions> {
         let mut compile_opts = self.compile_options(config, mode, workspace, profile_checking)?;
-        compile_opts.spec = Packages::Packages(self._values_of("package"));
+        let spec = self._values_of("package");
+        if spec.iter().any(is_glob_pattern) {
+            anyhow::bail!("Glob patterns on package selection are not supported.")
+        }
+        compile_opts.spec = Packages::Packages(spec);
         Ok(compile_opts)
     }
 
@@ -556,8 +645,12 @@ about this warning.";
     fn check_optional_opts(
         &self,
         workspace: &Workspace<'_>,
-        compile_opts: &CompileOptions<'_>,
+        compile_opts: &CompileOptions,
     ) -> CargoResult<()> {
+        if self.is_present_with_zero_values("package") {
+            print_available_packages(workspace)?
+        }
+
         if self.is_present_with_zero_values("example") {
             print_available_examples(workspace, compile_opts)?;
         }

@@ -30,7 +30,13 @@ pub const X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY: c_int = 20;
 pub const X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE: c_int = 21;
 pub const X509_V_ERR_CERT_CHAIN_TOO_LONG: c_int = 22;
 pub const X509_V_ERR_CERT_REVOKED: c_int = 23;
-pub const X509_V_ERR_INVALID_CA: c_int = 24;
+cfg_if! {
+    if #[cfg(ossl300)] {
+        pub const X509_V_ERR_NO_ISSUER_PUBLIC_KEY: c_int = 24;
+    } else {
+        pub const X509_V_ERR_INVALID_CA: c_int = 24;
+    }
+}
 pub const X509_V_ERR_PATH_LENGTH_EXCEEDED: c_int = 25;
 pub const X509_V_ERR_INVALID_PURPOSE: c_int = 26;
 pub const X509_V_ERR_CERT_UNTRUSTED: c_int = 27;
@@ -95,6 +101,71 @@ cfg_if! {
     }
 }
 
+#[cfg(not(ossl110))]
+pub const X509_V_FLAG_CB_ISSUER_CHECK: c_ulong = 0x1;
+#[cfg(ossl110)]
+pub const X509_V_FLAG_CB_ISSUER_CHECK: c_ulong = 0x0;
+pub const X509_V_FLAG_USE_CHECK_TIME: c_ulong = 0x2;
+pub const X509_V_FLAG_CRL_CHECK: c_ulong = 0x4;
+pub const X509_V_FLAG_CRL_CHECK_ALL: c_ulong = 0x8;
+pub const X509_V_FLAG_IGNORE_CRITICAL: c_ulong = 0x10;
+pub const X509_V_FLAG_X509_STRICT: c_ulong = 0x20;
+pub const X509_V_FLAG_ALLOW_PROXY_CERTS: c_ulong = 0x40;
+pub const X509_V_FLAG_POLICY_CHECK: c_ulong = 0x80;
+pub const X509_V_FLAG_EXPLICIT_POLICY: c_ulong = 0x100;
+pub const X509_V_FLAG_INHIBIT_ANY: c_ulong = 0x200;
+pub const X509_V_FLAG_INHIBIT_MAP: c_ulong = 0x400;
+pub const X509_V_FLAG_NOTIFY_POLICY: c_ulong = 0x800;
+pub const X509_V_FLAG_EXTENDED_CRL_SUPPORT: c_ulong = 0x1000;
+pub const X509_V_FLAG_USE_DELTAS: c_ulong = 0x2000;
+pub const X509_V_FLAG_CHECK_SS_SIGNATURE: c_ulong = 0x4000;
+#[cfg(ossl102)]
+pub const X509_V_FLAG_TRUSTED_FIRST: c_ulong = 0x8000;
+#[cfg(ossl102)]
+pub const X509_V_FLAG_SUITEB_128_LOS_ONLY: c_ulong = 0x10000;
+#[cfg(ossl102)]
+pub const X509_V_FLAG_SUITEB_192_LOS: c_ulong = 0x20000;
+#[cfg(ossl102)]
+pub const X509_V_FLAG_SUITEB_128_LOS: c_ulong = 0x30000;
+#[cfg(ossl102)]
+pub const X509_V_FLAG_PARTIAL_CHAIN: c_ulong = 0x80000;
+#[cfg(ossl110)]
+pub const X509_V_FLAG_NO_ALT_CHAINS: c_ulong = 0x100000;
+#[cfg(ossl110)]
+pub const X509_V_FLAG_NO_CHECK_TIME: c_ulong = 0x200000;
+
+extern "C" {
+    #[cfg(ossl110)]
+    pub fn X509_LOOKUP_meth_free(method: *mut X509_LOOKUP_METHOD);
+}
+
+extern "C" {
+    pub fn X509_LOOKUP_free(ctx: *mut X509_LOOKUP);
+    pub fn X509_LOOKUP_hash_dir() -> *mut X509_LOOKUP_METHOD;
+    pub fn X509_LOOKUP_ctrl(
+        ctx: *mut X509_LOOKUP,
+        cmd: c_int,
+        argc: *const c_char,
+        argl: c_long,
+        ret: *mut *mut c_char,
+    ) -> c_int;
+}
+
+pub unsafe fn X509_LOOKUP_add_dir(
+    ctx: *mut X509_LOOKUP,
+    name: *const c_char,
+    _type: c_int,
+) -> c_int {
+    const X509_L_ADD_DIR: c_int = 2;
+    X509_LOOKUP_ctrl(
+        ctx,
+        X509_L_ADD_DIR,
+        name,
+        _type as c_long,
+        std::ptr::null_mut(),
+    )
+}
+
 extern "C" {
     pub fn X509_STORE_new() -> *mut X509_STORE;
     pub fn X509_STORE_free(store: *mut X509_STORE);
@@ -112,18 +183,32 @@ extern "C" {
 
     pub fn X509_STORE_add_cert(store: *mut X509_STORE, x: *mut X509) -> c_int;
 
-    pub fn X509_STORE_set_default_paths(store: *mut X509_STORE) -> c_int;
+    pub fn X509_STORE_add_lookup(
+        store: *mut X509_STORE,
+        meth: *mut X509_LOOKUP_METHOD,
+    ) -> *mut X509_LOOKUP;
 
-    pub fn X509_STORE_CTX_get_ex_data(ctx: *mut X509_STORE_CTX, idx: c_int) -> *mut c_void;
-    pub fn X509_STORE_CTX_get_error(ctx: *mut X509_STORE_CTX) -> c_int;
+    pub fn X509_STORE_set_default_paths(store: *mut X509_STORE) -> c_int;
+    pub fn X509_STORE_set_flags(store: *mut X509_STORE, flags: c_ulong) -> c_int;
+}
+
+const_ptr_api! {
+    extern "C" {
+        pub fn X509_STORE_CTX_get_ex_data(ctx: #[const_ptr_if(ossl300)] X509_STORE_CTX, idx: c_int) -> *mut c_void;
+        pub fn X509_STORE_CTX_get_error(ctx: #[const_ptr_if(ossl300)] X509_STORE_CTX) -> c_int;
+        pub fn X509_STORE_CTX_get_error_depth(ctx: #[const_ptr_if(ossl300)] X509_STORE_CTX) -> c_int;
+        pub fn X509_STORE_CTX_get_current_cert(ctx: #[const_ptr_if(ossl300)] X509_STORE_CTX) -> *mut X509;
+    }
+}
+extern "C" {
     pub fn X509_STORE_CTX_set_error(ctx: *mut X509_STORE_CTX, error: c_int);
-    pub fn X509_STORE_CTX_get_error_depth(ctx: *mut X509_STORE_CTX) -> c_int;
-    pub fn X509_STORE_CTX_get_current_cert(ctx: *mut X509_STORE_CTX) -> *mut X509;
 }
 cfg_if! {
     if #[cfg(ossl110)] {
-        extern "C" {
-            pub fn X509_STORE_CTX_get0_chain(ctx: *mut X509_STORE_CTX) -> *mut stack_st_X509;
+        const_ptr_api! {
+            extern "C" {
+                pub fn X509_STORE_CTX_get0_chain(ctx: #[const_ptr_if(ossl300)] X509_STORE_CTX) -> *mut stack_st_X509;
+            }
         }
     } else {
         extern "C" {
@@ -136,6 +221,19 @@ extern "C" {
     #[cfg(any(ossl102, libressl261))]
     pub fn X509_VERIFY_PARAM_free(param: *mut X509_VERIFY_PARAM);
 
+    #[cfg(any(ossl102, libressl261))]
+    pub fn X509_VERIFY_PARAM_set_flags(param: *mut X509_VERIFY_PARAM, flags: c_ulong) -> c_int;
+    #[cfg(any(ossl102, libressl261))]
+    pub fn X509_VERIFY_PARAM_clear_flags(param: *mut X509_VERIFY_PARAM, flags: c_ulong) -> c_int;
+}
+const_ptr_api! {
+    extern "C" {
+        #[cfg(any(ossl102, libressl261))]
+        pub fn X509_VERIFY_PARAM_get_flags(param: #[const_ptr_if(ossl300)] X509_VERIFY_PARAM) -> c_ulong;
+    }
+}
+
+extern "C" {
     #[cfg(any(ossl102, libressl261))]
     pub fn X509_VERIFY_PARAM_set1_host(
         param: *mut X509_VERIFY_PARAM,

@@ -8,29 +8,31 @@
 //! # Example
 //!
 //! ```rust
-//! extern crate openssl;
-//!
 //! use openssl::x509::extension::BasicConstraints;
 //! use openssl::x509::X509Extension;
 //!
-//! fn main() {
-//!     let mut bc = BasicConstraints::new();
-//!     let bc = bc.critical().ca().pathlen(1);
+//! let mut bc = BasicConstraints::new();
+//! let bc = bc.critical().ca().pathlen(1);
 //!
-//!     let extension: X509Extension = bc.build().unwrap();
-//! }
+//! let extension: X509Extension = bc.build().unwrap();
 //! ```
 use std::fmt::Write;
 
-use error::ErrorStack;
-use nid::Nid;
-use x509::{X509Extension, X509v3Context};
+use crate::error::ErrorStack;
+use crate::nid::Nid;
+use crate::x509::{X509Extension, X509v3Context};
 
 /// An extension which indicates whether a certificate is a CA certificate.
 pub struct BasicConstraints {
     critical: bool,
     ca: bool,
     pathlen: Option<u32>,
+}
+
+impl Default for BasicConstraints {
+    fn default() -> BasicConstraints {
+        BasicConstraints::new()
+    }
 }
 
 impl BasicConstraints {
@@ -93,6 +95,12 @@ pub struct KeyUsage {
     crl_sign: bool,
     encipher_only: bool,
     decipher_only: bool,
+}
+
+impl Default for KeyUsage {
+    fn default() -> KeyUsage {
+        KeyUsage::new()
+    }
 }
 
 impl KeyUsage {
@@ -228,6 +236,12 @@ pub struct ExtendedKeyUsage {
     other: Vec<String>,
 }
 
+impl Default for ExtendedKeyUsage {
+    fn default() -> ExtendedKeyUsage {
+        ExtendedKeyUsage::new()
+    }
+}
+
 impl ExtendedKeyUsage {
     /// Construct a new `ExtendedKeyUsage` extension.
     pub fn new() -> ExtendedKeyUsage {
@@ -269,6 +283,12 @@ impl ExtendedKeyUsage {
     /// Sets the `codeSigning` flag to `true`.
     pub fn code_signing(&mut self) -> &mut ExtendedKeyUsage {
         self.code_signing = true;
+        self
+    }
+
+    /// Sets the `emailProtection` flag to `true`.
+    pub fn email_protection(&mut self) -> &mut ExtendedKeyUsage {
+        self.email_protection = true;
         self
     }
 
@@ -354,6 +374,12 @@ pub struct SubjectKeyIdentifier {
     critical: bool,
 }
 
+impl Default for SubjectKeyIdentifier {
+    fn default() -> SubjectKeyIdentifier {
+        SubjectKeyIdentifier::new()
+    }
+}
+
 impl SubjectKeyIdentifier {
     /// Construct a new `SubjectKeyIdentifier` extension.
     pub fn new() -> SubjectKeyIdentifier {
@@ -367,7 +393,7 @@ impl SubjectKeyIdentifier {
     }
 
     /// Return a `SubjectKeyIdentifier` extension as an `X509Extension`.
-    pub fn build(&self, ctx: &X509v3Context) -> Result<X509Extension, ErrorStack> {
+    pub fn build(&self, ctx: &X509v3Context<'_>) -> Result<X509Extension, ErrorStack> {
         let mut value = String::new();
         let mut first = true;
         append(&mut value, &mut first, self.critical, "critical");
@@ -382,6 +408,12 @@ pub struct AuthorityKeyIdentifier {
     critical: bool,
     keyid: Option<bool>,
     issuer: Option<bool>,
+}
+
+impl Default for AuthorityKeyIdentifier {
+    fn default() -> AuthorityKeyIdentifier {
+        AuthorityKeyIdentifier::new()
+    }
 }
 
 impl AuthorityKeyIdentifier {
@@ -413,7 +445,7 @@ impl AuthorityKeyIdentifier {
     }
 
     /// Return a `AuthorityKeyIdentifier` extension as an `X509Extension`.
-    pub fn build(&self, ctx: &X509v3Context) -> Result<X509Extension, ErrorStack> {
+    pub fn build(&self, ctx: &X509v3Context<'_>) -> Result<X509Extension, ErrorStack> {
         let mut value = String::new();
         let mut first = true;
         append(&mut value, &mut first, self.critical, "critical");
@@ -436,6 +468,12 @@ impl AuthorityKeyIdentifier {
 pub struct SubjectAlternativeName {
     critical: bool,
     names: Vec<String>,
+}
+
+impl Default for SubjectAlternativeName {
+    fn default() -> SubjectAlternativeName {
+        SubjectAlternativeName::new()
+    }
 }
 
 impl SubjectAlternativeName {
@@ -496,7 +534,7 @@ impl SubjectAlternativeName {
     }
 
     /// Return a `SubjectAlternativeName` extension as an `X509Extension`.
-    pub fn build(&self, ctx: &X509v3Context) -> Result<X509Extension, ErrorStack> {
+    pub fn build(&self, ctx: &X509v3Context<'_>) -> Result<X509Extension, ErrorStack> {
         let mut value = String::new();
         let mut first = true;
         append(&mut value, &mut first, self.critical, "critical");

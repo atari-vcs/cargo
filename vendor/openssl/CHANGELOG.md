@@ -2,6 +2,115 @@
 
 ## [Unreleased]
 
+## [v0.10.36] - 2021-08-17
+
+### Added
+
+* Added `Asn1Object::as_slice`.
+* Added `PKeyRef::{raw_public_key, raw_private_key, private_key_to_pkcs8_passphrase}` and
+    `PKey::{private_key_from_raw_bytes, public_key_from_raw_bytes}`.
+* Added `Cipher::{seed_cbc, seed_cfb128, seed_ecb, seed_ofb}`.
+
+## [v0.10.35] - 2021-06-18
+
+### Fixed
+
+* Fixed a memory leak in `Deriver`.
+
+### Added
+
+* Added support for OpenSSL 3.x.x.
+* Added `SslStream::peek`.
+
+## [v0.10.34] - 2021-04-28
+
+### Added
+
+* Added `Dh::set_private_key` and `DhRef::private_key`.
+* Added `EcPointRef::affine_coordinates`.
+* Added `TryFrom` implementations to convert between `PKey` and specific key types.
+* Added `X509StoreBuilderRef::set_flags`.
+
+## [v0.10.33] - 2021-03-13
+
+### Fixed
+
+* `Dh::generate_params` now uses `DH_generate_params_ex` rather than the deprecated `DH_generated_params` function.
+
+### Added
+
+* Added `Asn1Type`.
+* Added `CmsContentInfoRef::decrypt_without_cert_check`.
+* Added `EcPointRef::{is_infinity, is_on_curve}`.
+* Added `Encrypter::set_rsa_oaep_label`.
+* Added `MessageDigest::sm3`.
+* Added `Pkcs7Ref::signers`.
+* Added `Cipher::nid`.
+* Added `X509Ref::authority_info` and `AccessDescription::{method, location}`.
+* Added `X509NameBuilder::{append_entry_by_text_with_type, append_entry_by_nid_with_type}`.
+
+## [v0.10.32] - 2020-12-24
+
+### Fixed
+
+* Fixed `Ssl::new` to take a `&SslContextRef` rather than `&SslContext`.
+
+### Added
+
+* Added the `encrypt` module to support asymmetric encryption and decryption with `PKey`s.
+* Added `MessageDigest::from_name`.
+* Added `ConnectConfiguration::into_ssl`.
+* Added the ability to create unconnected `SslStream`s directly from an `Ssl` and transport stream
+    without performing any part of the handshake with `SslStream::new`.
+* Added `SslStream::{read_early_data, write_early_data, connect, accept, do_handshake, stateless}`.
+* Implemented `ToOwned` for `SslContextRef`.
+* Added `SslRef::{set_connect_state, set_accept_state}`.
+
+### Deprecated
+
+* Deprecated `SslStream::from_raw_parts` in favor of `Ssl::from_ptr` and `SslStream::new`.
+* Deprecated `SslStreamBuilder` in favor of methods on `Ssl` and `SslStream`.
+
+## [v0.10.31] - 2020-12-09
+
+### Added
+
+* Added `Asn1Object::from_str`.
+* Added `Dh::from_pgq`, `DhRef::prime_p`, `DhRef::prime_q`, `DhRef::generator`, `DhRef::generate_params`,
+    `DhRef::generate_key`, `DhRef::public_key`, and `DhRef::compute_key`.
+* Added `Pkcs7::from_der` and `Pkcs7Ref::to_der`.
+* Added `Id::X25519`, `Id::X448`, `PKey::generate_x25519`, and `PKey::generate_x448`.
+* Added `SrtpProfileId::SRTP_AEAD_AES_128_GCM` and `SrtpProfileId::SRTP_AEAD_AES_256_GCM`.
+* Added `SslContextBuilder::verify_param` and `SslContextBuilder::verify_param_mut`.
+* Added `X509Ref::subject_name_hash` and `X509Ref::version`.
+* Added `X509StoreBuilderRef::add_lookup`, and the `X509Lookup` type.
+* Added `X509VerifyFlags`, `X509VerifyParamRef::set_flags`, `X509VerifyParamRef::clear_flags`
+    `X509VerifyParamRef::get_flags`.
+
+## [v0.10.30] - 2020-06-25
+
+### Fixed
+
+* `DsaRef::private_key_to_pem` can no longer be called without a private key.
+
+### Changed
+
+* Improved the `Debug` implementations of many types.
+
+### Added
+
+* Added `is_empty` implementations for `Asn1StringRef` and `Asn1BitStringRef`.
+* Added `EcPointRef::{to_pem, to_dir}` and `EcKeyRef::{public_key_from_pem, public_key_from_der}`.
+* Added `Default` implementations for many types.
+* Added `Debug` implementations for many types.
+* Added `SslStream::from_raw_parts`.
+* Added `SslRef::set_mtu`.
+* Added `Cipher::{aes_128_ocb, aes_192_ocb, aes_256_ocb}`.
+
+### Deprecated
+
+* Deprecated `SslStreamBuilder::set_dtls_mtu_size` in favor of `SslRef::set_mtu`.
+
 ## [v0.10.29] - 2020-04-07
 
 ### Fixed
@@ -447,7 +556,14 @@
 
 Look at the [release tags] for information about older releases.
 
-[Unreleased]: https://github.com/sfackler/rust-openssl/compare/openssl-v0.10.29...master
+[Unreleased]: https://github.com/sfackler/rust-openssl/compare/openssl-v0.10.36...master
+[v0.10.36]: https://github.com/sfackler/rust-openssl/compare/openssl-v0.10.35...openssl-v0.10.36
+[v0.10.35]: https://github.com/sfackler/rust-openssl/compare/openssl-v0.10.34...openssl-v0.10.35
+[v0.10.34]: https://github.com/sfackler/rust-openssl/compare/openssl-v0.10.33...openssl-v0.10.34
+[v0.10.33]: https://github.com/sfackler/rust-openssl/compare/openssl-v0.10.32...openssl-v0.10.33
+[v0.10.32]: https://github.com/sfackler/rust-openssl/compare/openssl-v0.10.31...openssl-v0.10.32
+[v0.10.31]: https://github.com/sfackler/rust-openssl/compare/openssl-v0.10.30...openssl-v0.10.31
+[v0.10.30]: https://github.com/sfackler/rust-openssl/compare/openssl-v0.10.29...openssl-v0.10.30
 [v0.10.29]: https://github.com/sfackler/rust-openssl/compare/openssl-v0.10.28...openssl-v0.10.29
 [v0.10.28]: https://github.com/sfackler/rust-openssl/compare/openssl-v0.10.27...openssl-v0.10.28
 [v0.10.27]: https://github.com/sfackler/rust-openssl/compare/openssl-v0.10.26...openssl-v0.10.27

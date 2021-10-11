@@ -1,129 +1,24 @@
-/*
-# Introduction to `support`.
+//! # Cargo test support.
+//!
+//! See <https://rust-lang.github.io/cargo/contrib/> for a guide on writing tests.
 
-Cargo has a wide variety of integration tests that execute the `cargo` binary
-and verify its behavior. The `support` module contains many helpers to make
-this process easy.
-
-The general form of a test involves creating a "project", running cargo, and
-checking the result. Projects are created with the `ProjectBuilder` where you
-specify some files to create. The general form looks like this:
-
-```
-let p = project()
-    .file("src/main.rs", r#"fn main() { println!("hi!"); }"#)
-    .build();
-```
-
-If you do not specify a `Cargo.toml` manifest using `file()`, one is
-automatically created with a project name of `foo` using `basic_manifest()`.
-
-To run cargo, call the `cargo` method and make assertions on the execution:
-
-```
-p.cargo("run --bin foo")
-    .with_stderr(
-        "\
-[COMPILING] foo [..]
-[FINISHED] [..]
-[RUNNING] `target/debug/foo`
-",
-    )
-    .with_stdout("hi!")
-    .run();
-```
-
-The project creates a mini sandbox under the "cargo integration test"
-directory with each test getting a separate directory such as
-`/path/to/cargo/target/cit/t123/`. Each project appears as a separate
-directory. There is also an empty `home` directory created that will be used
-as a home directory instead of your normal home directory.
-
-See `support::lines_match` for an explanation of the string pattern matching.
-
-Browse the `pub` functions in the `support` module for a variety of other
-helpful utilities.
-
-## Testing Nightly Features
-
-If you are testing a Cargo feature that only works on "nightly" cargo, then
-you need to call `masquerade_as_nightly_cargo` on the process builder like
-this:
-
-```
-p.cargo("build").masquerade_as_nightly_cargo()
-```
-
-If you are testing a feature that only works on *nightly rustc* (such as
-benchmarks), then you should exit the test if it is not running with nightly
-rust, like this:
-
-```
-if !is_nightly() {
-    // Add a comment here explaining why this is necessary.
-    return;
-}
-```
-
-## Platform-specific Notes
-
-When checking output, use `/` for paths even on Windows: the actual output
-of `\` on Windows will be replaced with `/`.
-
-Be careful when executing binaries on Windows. You should not rename, delete,
-or overwrite a binary immediately after running it. Under some conditions
-Windows will fail with errors like "directory not empty" or "failed to remove"
-or "access is denied".
-
-## Specifying Dependencies
-
-You should not write any tests that use the network such as contacting
-crates.io. Typically, simple path dependencies are the easiest way to add a
-dependency. Example:
-
-```
-let p = project()
-    .file("Cargo.toml", r#"
-        [package]
-        name = "foo"
-        version = "1.0.0"
-
-        [dependencies]
-        bar = {path = "bar"}
-    "#)
-    .file("src/lib.rs", "extern crate bar;")
-    .file("bar/Cargo.toml", &basic_manifest("bar", "1.0.0"))
-    .file("bar/src/lib.rs", "")
-    .build();
-```
-
-If you need to test with registry dependencies, see
-`support::registry::Package` for creating packages you can depend on.
-
-If you need to test git dependencies, see `support::git` to create a git
-dependency.
-
-*/
-
-#![allow(clippy::needless_doctest_main)] // according to @ehuss this lint is fussy
-#![allow(clippy::inefficient_to_string)] // this causes suggestions that result in `(*s).to_string()`
+#![allow(clippy::all)]
+#![warn(clippy::needless_borrow)]
+#![warn(clippy::redundant_clone)]
 
 use std::env;
 use std::ffi::OsStr;
-use std::fmt;
+use std::fmt::Write;
 use std::fs;
-use std::io::prelude::*;
 use std::os;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::str;
 use std::time::{self, Duration};
-use std::usize;
 
-use cargo;
-use cargo::util::{is_ci, CargoResult, ProcessBuilder, ProcessError, Rustc};
-use filetime;
-use serde_json::{self, Value};
+use anyhow::{bail, Result};
+use cargo_util::{is_ci, ProcessBuilder, ProcessError};
+use serde_json;
 use url::Url;
 
 use self::paths::CargoPathExt;
@@ -133,18 +28,37 @@ macro_rules! t {
     ($e:expr) => {
         match $e {
             Ok(e) => e,
-            Err(e) => panic!("{} failed with {}", stringify!($e), e),
+            Err(e) => $crate::panic_error(&format!("failed running {}", stringify!($e)), e),
         }
     };
 }
 
+#[track_caller]
+pub fn panic_error(what: &str, err: impl Into<anyhow::Error>) -> ! {
+    let err = err.into();
+    pe(what, err);
+    #[track_caller]
+    fn pe(what: &str, err: anyhow::Error) -> ! {
+        let mut result = format!("{}\nerror: {}", what, err);
+        for cause in err.chain().skip(1) {
+            drop(writeln!(result, "\nCaused by:"));
+            drop(write!(result, "{}", cause));
+        }
+        panic!("\n{}", result);
+    }
+}
+
 pub use cargo_test_macro::cargo_test;
 
+pub mod compare;
 pub mod cross_compile;
+mod diff;
 pub mod git;
+pub mod install;
 pub mod paths;
 pub mod publish;
 pub mod registry;
+pub mod tools;
 
 /*
  *
@@ -168,11 +82,8 @@ impl FileBuilder {
 
     fn mk(&self) {
         self.dirname().mkdir_p();
-
-        let mut file = fs::File::create(&self.path)
+        fs::write(&self.path, &self.body)
             .unwrap_or_else(|e| panic!("could not create file {}: {}", self.path.display(), e));
-
-        t!(file.write_all(self.body.as_bytes()));
     }
 
     fn dirname(&self) -> &Path {
@@ -460,25 +371,15 @@ impl Project {
 
     /// Returns the contents of a path in the project root
     pub fn read_file(&self, path: &str) -> String {
-        let mut buffer = String::new();
-        fs::File::open(self.root().join(path))
-            .unwrap()
-            .read_to_string(&mut buffer)
-            .unwrap();
-        buffer
+        let full = self.root().join(path);
+        fs::read_to_string(&full)
+            .unwrap_or_else(|e| panic!("could not read file {}: {}", full.display(), e))
     }
 
     /// Modifies `Cargo.toml` to remove all commented lines.
     pub fn uncomment_root_manifest(&self) {
-        let mut contents = String::new();
-        fs::File::open(self.root().join("Cargo.toml"))
-            .unwrap()
-            .read_to_string(&mut contents)
-            .unwrap();
-        fs::File::create(self.root().join("Cargo.toml"))
-            .unwrap()
-            .write_all(contents.replace("#", "").as_bytes())
-            .unwrap();
+        let contents = self.read_file("Cargo.toml").replace("#", "");
+        fs::write(self.root().join("Cargo.toml"), contents).unwrap();
     }
 
     pub fn symlink(&self, src: impl AsRef<Path>, dst: impl AsRef<Path>) {
@@ -531,19 +432,6 @@ pub fn main_file(println: &str, deps: &[&str]) -> String {
     buf
 }
 
-trait ErrMsg<T> {
-    fn with_err_msg(self, val: String) -> Result<T, String>;
-}
-
-impl<T, E: fmt::Display> ErrMsg<T> for Result<T, E> {
-    fn with_err_msg(self, val: String) -> Result<T, String> {
-        match self {
-            Ok(val) => Ok(val),
-            Err(err) => Err(format!("{}; original={}", val, err)),
-        }
-    }
-}
-
 // Path to cargo executables
 pub fn cargo_dir() -> PathBuf {
     env::var_os("CARGO_BIN_PATH")
@@ -564,13 +452,18 @@ pub fn cargo_exe() -> PathBuf {
     cargo_dir().join(format!("cargo{}", env::consts::EXE_SUFFIX))
 }
 
-/*
- *
- * ===== Matchers =====
- *
- */
-
-pub type MatchResult = Result<(), String>;
+/// This is the raw output from the process.
+///
+/// This is similar to `std::process::Output`, however the `status` is
+/// translated to the raw `code`. This is necessary because `ProcessError`
+/// does not have access to the raw `ExitStatus` because `ProcessError` needs
+/// to be serializable (for the Rustc cache), and `ExitStatus` does not
+/// provide a constructor.
+pub struct RawOutput {
+    pub code: Option<i32>,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
 
 #[must_use]
 #[derive(Clone)]
@@ -583,15 +476,13 @@ pub struct Execs {
     expect_exit_code: Option<i32>,
     expect_stdout_contains: Vec<String>,
     expect_stderr_contains: Vec<String>,
-    expect_either_contains: Vec<String>,
     expect_stdout_contains_n: Vec<(String, usize)>,
     expect_stdout_not_contains: Vec<String>,
     expect_stderr_not_contains: Vec<String>,
     expect_stderr_unordered: Vec<String>,
-    expect_neither_contains: Vec<String>,
     expect_stderr_with_without: Vec<(Vec<String>, Vec<String>)>,
-    expect_json: Option<Vec<String>>,
-    expect_json_contains_unordered: Vec<String>,
+    expect_json: Option<String>,
+    expect_json_contains_unordered: Option<String>,
     stream_output: bool,
 }
 
@@ -602,14 +493,14 @@ impl Execs {
     }
 
     /// Verifies that stdout is equal to the given lines.
-    /// See `lines_match` for supported patterns.
+    /// See [`compare`] for supported patterns.
     pub fn with_stdout<S: ToString>(&mut self, expected: S) -> &mut Self {
         self.expect_stdout = Some(expected.to_string());
         self
     }
 
     /// Verifies that stderr is equal to the given lines.
-    /// See `lines_match` for supported patterns.
+    /// See [`compare`] for supported patterns.
     pub fn with_stderr<S: ToString>(&mut self, expected: S) -> &mut Self {
         self.expect_stderr = Some(expected.to_string());
         self
@@ -633,7 +524,8 @@ impl Execs {
 
     /// Verifies that stdout contains the given contiguous lines somewhere in
     /// its output.
-    /// See `lines_match` for supported patterns.
+    ///
+    /// See [`compare`] for supported patterns.
     pub fn with_stdout_contains<S: ToString>(&mut self, expected: S) -> &mut Self {
         self.expect_stdout_contains.push(expected.to_string());
         self
@@ -641,23 +533,17 @@ impl Execs {
 
     /// Verifies that stderr contains the given contiguous lines somewhere in
     /// its output.
-    /// See `lines_match` for supported patterns.
+    ///
+    /// See [`compare`] for supported patterns.
     pub fn with_stderr_contains<S: ToString>(&mut self, expected: S) -> &mut Self {
         self.expect_stderr_contains.push(expected.to_string());
         self
     }
 
-    /// Verifies that either stdout or stderr contains the given contiguous
-    /// lines somewhere in its output.
-    /// See `lines_match` for supported patterns.
-    pub fn with_either_contains<S: ToString>(&mut self, expected: S) -> &mut Self {
-        self.expect_either_contains.push(expected.to_string());
-        self
-    }
-
     /// Verifies that stdout contains the given contiguous lines somewhere in
     /// its output, and should be repeated `number` times.
-    /// See `lines_match` for supported patterns.
+    ///
+    /// See [`compare`] for supported patterns.
     pub fn with_stdout_contains_n<S: ToString>(&mut self, expected: S, number: usize) -> &mut Self {
         self.expect_stdout_contains_n
             .push((expected.to_string(), number));
@@ -665,15 +551,18 @@ impl Execs {
     }
 
     /// Verifies that stdout does not contain the given contiguous lines.
-    /// See `lines_match` for supported patterns.
-    /// See note on `with_stderr_does_not_contain`.
+    ///
+    /// See [`compare`] for supported patterns.
+    ///
+    /// See note on [`Self::with_stderr_does_not_contain`].
     pub fn with_stdout_does_not_contain<S: ToString>(&mut self, expected: S) -> &mut Self {
         self.expect_stdout_not_contains.push(expected.to_string());
         self
     }
 
     /// Verifies that stderr does not contain the given contiguous lines.
-    /// See `lines_match` for supported patterns.
+    ///
+    /// See [`compare`] for supported patterns.
     ///
     /// Care should be taken when using this method because there is a
     /// limitless number of possible things that *won't* appear. A typo means
@@ -687,7 +576,9 @@ impl Execs {
 
     /// Verifies that all of the stderr output is equal to the given lines,
     /// ignoring the order of the lines.
-    /// See `lines_match` for supported patterns.
+    ///
+    /// See [`compare`] for supported patterns.
+    ///
     /// This is useful when checking the output of `cargo build -v` since
     /// the order of the output is not always deterministic.
     /// Recommend use `with_stderr_contains` instead unless you really want to
@@ -697,8 +588,10 @@ impl Execs {
     /// with multiple lines that might match, and this is not smart enough to
     /// do anything like longest-match. For example, avoid something like:
     ///
-    ///     [RUNNING] `rustc [..]
-    ///     [RUNNING] `rustc --crate-name foo [..]
+    /// ```text
+    ///  [RUNNING] `rustc [..]
+    ///  [RUNNING] `rustc --crate-name foo [..]
+    /// ```
     ///
     /// This will randomly fail if the other crate name is `bar`, and the
     /// order changes.
@@ -739,28 +632,28 @@ impl Execs {
     }
 
     /// Verifies the JSON output matches the given JSON.
-    /// Typically used when testing cargo commands that emit JSON.
+    ///
+    /// This is typically used when testing cargo commands that emit JSON.
     /// Each separate JSON object should be separated by a blank line.
     /// Example:
-    ///     assert_that(
-    ///         p.cargo("metadata"),
-    ///         execs().with_json(r#"
-    ///             {"example": "abc"}
     ///
-    ///             {"example": "def"}
-    ///         "#)
-    ///      );
-    /// Objects should match in the order given.
-    /// The order of arrays is ignored.
-    /// Strings support patterns described in `lines_match`.
-    /// Use `{...}` to match any object.
+    /// ```rust,ignore
+    /// assert_that(
+    ///     p.cargo("metadata"),
+    ///     execs().with_json(r#"
+    ///         {"example": "abc"}
+    ///
+    ///         {"example": "def"}
+    ///     "#)
+    ///  );
+    /// ```
+    ///
+    /// - Objects should match in the order given.
+    /// - The order of arrays is ignored.
+    /// - Strings support patterns described in [`compare`].
+    /// - Use `"{...}"` to match any object.
     pub fn with_json(&mut self, expected: &str) -> &mut Self {
-        self.expect_json = Some(
-            expected
-                .split("\n\n")
-                .map(|line| line.to_string())
-                .collect(),
-        );
+        self.expect_json = Some(expected.to_string());
         self
     }
 
@@ -774,8 +667,13 @@ impl Execs {
     ///
     /// See `with_json` for more detail.
     pub fn with_json_contains_unordered(&mut self, expected: &str) -> &mut Self {
-        self.expect_json_contains_unordered
-            .extend(expected.split("\n\n").map(|line| line.to_string()));
+        match &mut self.expect_json_contains_unordered {
+            None => self.expect_json_contains_unordered = Some(expected.to_string()),
+            Some(e) => {
+                e.push_str("\n\n");
+                e.push_str(expected);
+            }
+        }
         self
     }
 
@@ -807,6 +705,10 @@ impl Execs {
         self
     }
 
+    fn get_cwd(&self) -> Option<&Path> {
+        self.process_builder.as_ref().and_then(|p| p.get_cwd())
+    }
+
     pub fn env<T: AsRef<OsStr>>(&mut self, key: &str, val: T) -> &mut Self {
         if let Some(ref mut p) = self.process_builder {
             p.env(key, val);
@@ -821,7 +723,7 @@ impl Execs {
         self
     }
 
-    pub fn exec_with_output(&mut self) -> CargoResult<Output> {
+    pub fn exec_with_output(&mut self) -> Result<Output> {
         self.ran = true;
         // TODO avoid unwrap
         let p = (&self.process_builder).clone().unwrap();
@@ -842,49 +744,78 @@ impl Execs {
         self
     }
 
+    pub fn enable_mac_dsym(&mut self) -> &mut Self {
+        if cfg!(target_os = "macos") {
+            self.env("CARGO_PROFILE_DEV_SPLIT_DEBUGINFO", "packed")
+                .env("CARGO_PROFILE_TEST_SPLIT_DEBUGINFO", "packed")
+                .env("CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO", "packed")
+                .env("CARGO_PROFILE_BENCH_SPLIT_DEBUGINFO", "packed");
+        }
+        self
+    }
+
+    #[track_caller]
     pub fn run(&mut self) {
         self.ran = true;
         let p = (&self.process_builder).clone().unwrap();
         if let Err(e) = self.match_process(&p) {
-            panic!("\nExpected: {:?}\n    but: {}", self, e)
+            panic_error(&format!("test failed running {}", p), e);
         }
     }
 
+    /// Runs the process, checks the expected output, and returns the first
+    /// JSON object on stdout.
+    #[track_caller]
+    pub fn run_json(&mut self) -> serde_json::Value {
+        self.ran = true;
+        let p = (&self.process_builder).clone().unwrap();
+        match self.match_process(&p) {
+            Err(e) => panic_error(&format!("test failed running {}", p), e),
+            Ok(output) => serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+                panic!(
+                    "\nfailed to parse JSON: {}\n\
+                     output was:\n{}\n",
+                    e,
+                    String::from_utf8_lossy(&output.stdout)
+                );
+            }),
+        }
+    }
+
+    #[track_caller]
     pub fn run_output(&mut self, output: &Output) {
         self.ran = true;
-        if let Err(e) = self.match_output(output) {
-            panic!("\nExpected: {:?}\n    but: {}", self, e)
+        if let Err(e) = self.match_output(output.status.code(), &output.stdout, &output.stderr) {
+            panic_error("process did not return the expected result", e)
         }
     }
 
-    fn verify_checks_output(&self, output: &Output) {
+    fn verify_checks_output(&self, stdout: &[u8], stderr: &[u8]) {
         if self.expect_exit_code.unwrap_or(0) != 0
             && self.expect_stdout.is_none()
             && self.expect_stdin.is_none()
             && self.expect_stderr.is_none()
             && self.expect_stdout_contains.is_empty()
             && self.expect_stderr_contains.is_empty()
-            && self.expect_either_contains.is_empty()
             && self.expect_stdout_contains_n.is_empty()
             && self.expect_stdout_not_contains.is_empty()
             && self.expect_stderr_not_contains.is_empty()
             && self.expect_stderr_unordered.is_empty()
-            && self.expect_neither_contains.is_empty()
             && self.expect_stderr_with_without.is_empty()
             && self.expect_json.is_none()
-            && self.expect_json_contains_unordered.is_empty()
+            && self.expect_json_contains_unordered.is_none()
         {
             panic!(
                 "`with_status()` is used, but no output is checked.\n\
                  The test must check the output to ensure the correct error is triggered.\n\
                  --- stdout\n{}\n--- stderr\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr),
+                String::from_utf8_lossy(stdout),
+                String::from_utf8_lossy(stderr),
             );
         }
     }
 
-    fn match_process(&self, process: &ProcessBuilder) -> MatchResult {
+    fn match_process(&self, process: &ProcessBuilder) -> Result<RawOutput> {
         println!("running {}", process);
         let res = if self.stream_output {
             if is_ci() {
@@ -906,444 +837,88 @@ impl Execs {
         };
 
         match res {
-            Ok(out) => self.match_output(&out),
+            Ok(out) => {
+                self.match_output(out.status.code(), &out.stdout, &out.stderr)?;
+                return Ok(RawOutput {
+                    stdout: out.stdout,
+                    stderr: out.stderr,
+                    code: out.status.code(),
+                });
+            }
             Err(e) => {
-                let err = e.downcast_ref::<ProcessError>();
-                if let Some(&ProcessError {
-                    output: Some(ref out),
+                if let Some(ProcessError {
+                    stdout: Some(stdout),
+                    stderr: Some(stderr),
+                    code,
                     ..
-                }) = err
+                }) = e.downcast_ref::<ProcessError>()
                 {
-                    return self.match_output(out);
+                    self.match_output(*code, stdout, stderr)?;
+                    return Ok(RawOutput {
+                        stdout: stdout.to_vec(),
+                        stderr: stderr.to_vec(),
+                        code: *code,
+                    });
                 }
-                Err(format!("could not exec process {}: {:?}", process, e))
+                bail!("could not exec process {}: {:?}", process, e)
             }
         }
     }
 
-    fn match_output(&self, actual: &Output) -> MatchResult {
-        self.verify_checks_output(actual);
-        self.match_status(actual)
-            .and(self.match_stdout(actual))
-            .and(self.match_stderr(actual))
-    }
+    fn match_output(&self, code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> Result<()> {
+        self.verify_checks_output(stdout, stderr);
+        let stdout = str::from_utf8(stdout).expect("stdout is not utf8");
+        let stderr = str::from_utf8(stderr).expect("stderr is not utf8");
+        let cwd = self.get_cwd();
 
-    fn match_status(&self, actual: &Output) -> MatchResult {
         match self.expect_exit_code {
-            None => Ok(()),
-            Some(code) if actual.status.code() == Some(code) => Ok(()),
-            Some(_) => Err(format!(
-                "exited with {}\n--- stdout\n{}\n--- stderr\n{}",
-                actual.status,
-                String::from_utf8_lossy(&actual.stdout),
-                String::from_utf8_lossy(&actual.stderr)
-            )),
+            None => {}
+            Some(expected) if code == Some(expected) => {}
+            Some(expected) => bail!(
+                "process exited with code {} (expected {})\n--- stdout\n{}\n--- stderr\n{}",
+                code.unwrap_or(-1),
+                expected,
+                stdout,
+                stderr
+            ),
         }
-    }
 
-    fn match_stdout(&self, actual: &Output) -> MatchResult {
-        self.match_std(
-            self.expect_stdout.as_ref(),
-            &actual.stdout,
-            "stdout",
-            &actual.stderr,
-            MatchKind::Exact,
-        )?;
+        if let Some(expect_stdout) = &self.expect_stdout {
+            compare::match_exact(expect_stdout, stdout, "stdout", stderr, cwd)?;
+        }
+        if let Some(expect_stderr) = &self.expect_stderr {
+            compare::match_exact(expect_stderr, stderr, "stderr", stdout, cwd)?;
+        }
         for expect in self.expect_stdout_contains.iter() {
-            self.match_std(
-                Some(expect),
-                &actual.stdout,
-                "stdout",
-                &actual.stderr,
-                MatchKind::Partial,
-            )?;
+            compare::match_contains(expect, stdout, cwd)?;
         }
         for expect in self.expect_stderr_contains.iter() {
-            self.match_std(
-                Some(expect),
-                &actual.stderr,
-                "stderr",
-                &actual.stdout,
-                MatchKind::Partial,
-            )?;
+            compare::match_contains(expect, stderr, cwd)?;
         }
         for &(ref expect, number) in self.expect_stdout_contains_n.iter() {
-            self.match_std(
-                Some(expect),
-                &actual.stdout,
-                "stdout",
-                &actual.stderr,
-                MatchKind::PartialN(number),
-            )?;
+            compare::match_contains_n(expect, number, stdout, cwd)?;
         }
         for expect in self.expect_stdout_not_contains.iter() {
-            self.match_std(
-                Some(expect),
-                &actual.stdout,
-                "stdout",
-                &actual.stderr,
-                MatchKind::NotPresent,
-            )?;
+            compare::match_does_not_contain(expect, stdout, cwd)?;
         }
         for expect in self.expect_stderr_not_contains.iter() {
-            self.match_std(
-                Some(expect),
-                &actual.stderr,
-                "stderr",
-                &actual.stdout,
-                MatchKind::NotPresent,
-            )?;
+            compare::match_does_not_contain(expect, stderr, cwd)?;
         }
         for expect in self.expect_stderr_unordered.iter() {
-            self.match_std(
-                Some(expect),
-                &actual.stderr,
-                "stderr",
-                &actual.stdout,
-                MatchKind::Unordered,
-            )?;
+            compare::match_unordered(expect, stderr, cwd)?;
         }
-        for expect in self.expect_neither_contains.iter() {
-            self.match_std(
-                Some(expect),
-                &actual.stdout,
-                "stdout",
-                &actual.stdout,
-                MatchKind::NotPresent,
-            )?;
-
-            self.match_std(
-                Some(expect),
-                &actual.stderr,
-                "stderr",
-                &actual.stderr,
-                MatchKind::NotPresent,
-            )?;
-        }
-
-        for expect in self.expect_either_contains.iter() {
-            let match_std = self.match_std(
-                Some(expect),
-                &actual.stdout,
-                "stdout",
-                &actual.stdout,
-                MatchKind::Partial,
-            );
-            let match_err = self.match_std(
-                Some(expect),
-                &actual.stderr,
-                "stderr",
-                &actual.stderr,
-                MatchKind::Partial,
-            );
-
-            if let (Err(_), Err(_)) = (match_std, match_err) {
-                return Err(format!(
-                    "expected to find:\n\
-                     {}\n\n\
-                     did not find in either output.",
-                    expect
-                ));
-            }
-        }
-
         for (with, without) in self.expect_stderr_with_without.iter() {
-            self.match_with_without(&actual.stderr, with, without)?;
+            compare::match_with_without(stderr, with, without, cwd)?;
         }
 
-        if let Some(ref objects) = self.expect_json {
-            let stdout = str::from_utf8(&actual.stdout)
-                .map_err(|_| "stdout was not utf8 encoded".to_owned())?;
-            let lines = stdout
-                .lines()
-                .filter(|line| line.starts_with('{'))
-                .collect::<Vec<_>>();
-            if lines.len() != objects.len() {
-                return Err(format!(
-                    "expected {} json lines, got {}, stdout:\n{}",
-                    objects.len(),
-                    lines.len(),
-                    stdout
-                ));
-            }
-            for (obj, line) in objects.iter().zip(lines) {
-                self.match_json(obj, line)?;
-            }
+        if let Some(ref expect_json) = self.expect_json {
+            compare::match_json(expect_json, stdout, cwd)?;
         }
 
-        if !self.expect_json_contains_unordered.is_empty() {
-            let stdout = str::from_utf8(&actual.stdout)
-                .map_err(|_| "stdout was not utf8 encoded".to_owned())?;
-            let mut lines = stdout
-                .lines()
-                .filter(|line| line.starts_with('{'))
-                .collect::<Vec<_>>();
-            for obj in &self.expect_json_contains_unordered {
-                match lines
-                    .iter()
-                    .position(|line| self.match_json(obj, line).is_ok())
-                {
-                    Some(index) => lines.remove(index),
-                    None => {
-                        return Err(format!(
-                            "Did not find expected JSON:\n\
-                             {}\n\
-                             Remaining available output:\n\
-                             {}\n",
-                            serde_json::to_string_pretty(obj).unwrap(),
-                            lines.join("\n")
-                        ));
-                    }
-                };
-            }
+        if let Some(ref expected) = self.expect_json_contains_unordered {
+            compare::match_json_contains_unordered(expected, stdout, cwd)?;
         }
         Ok(())
-    }
-
-    fn match_stderr(&self, actual: &Output) -> MatchResult {
-        self.match_std(
-            self.expect_stderr.as_ref(),
-            &actual.stderr,
-            "stderr",
-            &actual.stdout,
-            MatchKind::Exact,
-        )
-    }
-
-    fn normalize_actual(&self, description: &str, actual: &[u8]) -> Result<String, String> {
-        let actual = match str::from_utf8(actual) {
-            Err(..) => return Err(format!("{} was not utf8 encoded", description)),
-            Ok(actual) => actual,
-        };
-        Ok(self.normalize_matcher(actual))
-    }
-
-    fn normalize_matcher(&self, matcher: &str) -> String {
-        normalize_matcher(
-            matcher,
-            self.process_builder.as_ref().and_then(|p| p.get_cwd()),
-        )
-    }
-
-    fn match_std(
-        &self,
-        expected: Option<&String>,
-        actual: &[u8],
-        description: &str,
-        extra: &[u8],
-        kind: MatchKind,
-    ) -> MatchResult {
-        let out = match expected {
-            Some(out) => self.normalize_matcher(out),
-            None => return Ok(()),
-        };
-
-        let actual = self.normalize_actual(description, actual)?;
-
-        match kind {
-            MatchKind::Exact => {
-                let a = actual.lines();
-                let e = out.lines();
-
-                let diffs = self.diff_lines(a, e, false);
-                if diffs.is_empty() {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "differences:\n\
-                         {}\n\n\
-                         other output:\n\
-                         `{}`",
-                        diffs.join("\n"),
-                        String::from_utf8_lossy(extra)
-                    ))
-                }
-            }
-            MatchKind::Partial => {
-                let mut a = actual.lines();
-                let e = out.lines();
-
-                let mut diffs = self.diff_lines(a.clone(), e.clone(), true);
-                while a.next().is_some() {
-                    let a = self.diff_lines(a.clone(), e.clone(), true);
-                    if a.len() < diffs.len() {
-                        diffs = a;
-                    }
-                }
-                if diffs.is_empty() {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "expected to find:\n\
-                         {}\n\n\
-                         did not find in output:\n\
-                         {}",
-                        out, actual
-                    ))
-                }
-            }
-            MatchKind::PartialN(number) => {
-                let mut a = actual.lines();
-                let e = out.lines();
-
-                let mut matches = 0;
-
-                while let Some(..) = {
-                    if self.diff_lines(a.clone(), e.clone(), true).is_empty() {
-                        matches += 1;
-                    }
-                    a.next()
-                } {}
-
-                if matches == number {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "expected to find {} occurrences:\n\
-                         {}\n\n\
-                         did not find in output:\n\
-                         {}",
-                        number, out, actual
-                    ))
-                }
-            }
-            MatchKind::NotPresent => {
-                let mut a = actual.lines();
-                let e = out.lines();
-
-                let mut diffs = self.diff_lines(a.clone(), e.clone(), true);
-                while a.next().is_some() {
-                    let a = self.diff_lines(a.clone(), e.clone(), true);
-                    if a.len() < diffs.len() {
-                        diffs = a;
-                    }
-                }
-                if diffs.is_empty() {
-                    Err(format!(
-                        "expected not to find:\n\
-                         {}\n\n\
-                         but found in output:\n\
-                         {}",
-                        out, actual
-                    ))
-                } else {
-                    Ok(())
-                }
-            }
-            MatchKind::Unordered => {
-                let mut a = actual.lines().collect::<Vec<_>>();
-                let e = out.lines();
-
-                for e_line in e {
-                    match a.iter().position(|a_line| lines_match(e_line, a_line)) {
-                        Some(index) => a.remove(index),
-                        None => {
-                            return Err(format!(
-                                "Did not find expected line:\n\
-                                 {}\n\
-                                 Remaining available output:\n\
-                                 {}\n",
-                                e_line,
-                                a.join("\n")
-                            ));
-                        }
-                    };
-                }
-                if !a.is_empty() {
-                    Err(format!(
-                        "Output included extra lines:\n\
-                         {}\n",
-                        a.join("\n")
-                    ))
-                } else {
-                    Ok(())
-                }
-            }
-        }
-    }
-
-    fn match_with_without(
-        &self,
-        actual: &[u8],
-        with: &[String],
-        without: &[String],
-    ) -> MatchResult {
-        let actual = self.normalize_actual("stderr", actual)?;
-        let contains = |s, line| {
-            let mut s = self.normalize_matcher(s);
-            s.insert_str(0, "[..]");
-            s.push_str("[..]");
-            lines_match(&s, line)
-        };
-        let matches: Vec<&str> = actual
-            .lines()
-            .filter(|line| with.iter().all(|with| contains(with, line)))
-            .filter(|line| !without.iter().any(|without| contains(without, line)))
-            .collect();
-        match matches.len() {
-            0 => Err(format!(
-                "Could not find expected line in output.\n\
-                 With contents: {:?}\n\
-                 Without contents: {:?}\n\
-                 Actual stderr:\n\
-                 {}\n",
-                with, without, actual
-            )),
-            1 => Ok(()),
-            _ => Err(format!(
-                "Found multiple matching lines, but only expected one.\n\
-                 With contents: {:?}\n\
-                 Without contents: {:?}\n\
-                 Matching lines:\n\
-                 {}\n",
-                with,
-                without,
-                matches.join("\n")
-            )),
-        }
-    }
-
-    fn match_json(&self, expected: &str, line: &str) -> MatchResult {
-        let expected = self.normalize_matcher(expected);
-        let line = self.normalize_matcher(line);
-        let actual = match line.parse() {
-            Err(e) => return Err(format!("invalid json, {}:\n`{}`", e, line)),
-            Ok(actual) => actual,
-        };
-        let expected = match expected.parse() {
-            Err(e) => return Err(format!("invalid json, {}:\n`{}`", e, line)),
-            Ok(expected) => expected,
-        };
-
-        find_json_mismatch(&expected, &actual)
-    }
-
-    fn diff_lines<'a>(
-        &self,
-        actual: str::Lines<'a>,
-        expected: str::Lines<'a>,
-        partial: bool,
-    ) -> Vec<String> {
-        let actual = actual.take(if partial {
-            expected.clone().count()
-        } else {
-            usize::MAX
-        });
-        zip_all(actual, expected)
-            .enumerate()
-            .filter_map(|(i, (a, e))| match (a, e) {
-                (Some(a), Some(e)) => {
-                    if lines_match(e, a) {
-                        None
-                    } else {
-                        Some(format!("{:3} - |{}|\n    + |{}|\n", i, e, a))
-                    }
-                }
-                (Some(a), None) => Some(format!("{:3} -\n    + |{}|\n", i, a)),
-                (None, Some(e)) => Some(format!("{:3} - |{}|\n    +\n", i, e)),
-                (None, None) => panic!("Cannot get here"),
-            })
-            .collect()
     }
 }
 
@@ -1352,202 +927,6 @@ impl Drop for Execs {
         if !self.ran && !std::thread::panicking() {
             panic!("forgot to run this command");
         }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum MatchKind {
-    Exact,
-    Partial,
-    PartialN(usize),
-    NotPresent,
-    Unordered,
-}
-
-/// Compares a line with an expected pattern.
-/// - Use `[..]` as a wildcard to match 0 or more characters on the same line
-///   (similar to `.*` in a regex).
-/// - Use `[EXE]` to optionally add `.exe` on Windows (empty string on other
-///   platforms).
-/// - There is a wide range of macros (such as `[COMPILING]` or `[WARNING]`)
-///   to match cargo's "status" output and allows you to ignore the alignment.
-///   See `substitute_macros` for a complete list of macros.
-/// - `[ROOT]` the path to the test directory's root
-/// - `[CWD]` is the working directory of the process that was run.
-pub fn lines_match(expected: &str, mut actual: &str) -> bool {
-    let expected = substitute_macros(expected);
-    for (i, part) in expected.split("[..]").enumerate() {
-        match actual.find(part) {
-            Some(j) => {
-                if i == 0 && j != 0 {
-                    return false;
-                }
-                actual = &actual[j + part.len()..];
-            }
-            None => return false,
-        }
-    }
-    actual.is_empty() || expected.ends_with("[..]")
-}
-
-/// Variant of `lines_match` that applies normalization to the strings.
-pub fn normalized_lines_match(expected: &str, actual: &str, cwd: Option<&Path>) -> bool {
-    let expected = normalize_matcher(expected, cwd);
-    let actual = normalize_matcher(actual, cwd);
-    lines_match(&expected, &actual)
-}
-
-fn normalize_matcher(matcher: &str, cwd: Option<&Path>) -> String {
-    // Let's not deal with / vs \ (windows...)
-    let matcher = matcher.replace("\\\\", "/").replace("\\", "/");
-
-    // Weirdness for paths on Windows extends beyond `/` vs `\` apparently.
-    // Namely paths like `c:\` and `C:\` are equivalent and that can cause
-    // issues. The return value of `env::current_dir()` may return a
-    // lowercase drive name, but we round-trip a lot of values through `Url`
-    // which will auto-uppercase the drive name. To just ignore this
-    // distinction we try to canonicalize as much as possible, taking all
-    // forms of a path and canonicalizing them to one.
-    let replace_path = |s: &str, path: &Path, with: &str| {
-        let path_through_url = Url::from_file_path(path).unwrap().to_file_path().unwrap();
-        let path1 = path.display().to_string().replace("\\", "/");
-        let path2 = path_through_url.display().to_string().replace("\\", "/");
-        s.replace(&path1, with)
-            .replace(&path2, with)
-            .replace(with, &path1)
-    };
-
-    // Do the template replacements on the expected string.
-    let matcher = match cwd {
-        None => matcher,
-        Some(p) => replace_path(&matcher, p, "[CWD]"),
-    };
-
-    // Similar to cwd above, perform similar treatment to the root path
-    // which in theory all of our paths should otherwise get rooted at.
-    let root = paths::root();
-    let matcher = replace_path(&matcher, &root, "[ROOT]");
-
-    // Let's not deal with \r\n vs \n on windows...
-    let matcher = matcher.replace("\r", "");
-
-    // It's easier to read tabs in outputs if they don't show up as literal
-    // hidden characters
-    matcher.replace("\t", "<tab>")
-}
-
-#[test]
-fn lines_match_works() {
-    assert!(lines_match("a b", "a b"));
-    assert!(lines_match("a[..]b", "a b"));
-    assert!(lines_match("a[..]", "a b"));
-    assert!(lines_match("[..]", "a b"));
-    assert!(lines_match("[..]b", "a b"));
-
-    assert!(!lines_match("[..]b", "c"));
-    assert!(!lines_match("b", "c"));
-    assert!(!lines_match("b", "cb"));
-}
-
-/// Compares JSON object for approximate equality.
-/// You can use `[..]` wildcard in strings (useful for OS-dependent things such
-/// as paths). You can use a `"{...}"` string literal as a wildcard for
-/// arbitrary nested JSON (useful for parts of object emitted by other programs
-/// (e.g., rustc) rather than Cargo itself). Arrays are sorted before comparison.
-pub fn find_json_mismatch(expected: &Value, actual: &Value) -> Result<(), String> {
-    match find_json_mismatch_r(expected, actual) {
-        Some((expected_part, actual_part)) => Err(format!(
-            "JSON mismatch\nExpected:\n{}\nWas:\n{}\nExpected part:\n{}\nActual part:\n{}\n",
-            serde_json::to_string_pretty(expected).unwrap(),
-            serde_json::to_string_pretty(&actual).unwrap(),
-            serde_json::to_string_pretty(expected_part).unwrap(),
-            serde_json::to_string_pretty(actual_part).unwrap(),
-        )),
-        None => Ok(()),
-    }
-}
-
-fn find_json_mismatch_r<'a>(
-    expected: &'a Value,
-    actual: &'a Value,
-) -> Option<(&'a Value, &'a Value)> {
-    use serde_json::Value::*;
-    match (expected, actual) {
-        (&Number(ref l), &Number(ref r)) if l == r => None,
-        (&Bool(l), &Bool(r)) if l == r => None,
-        (&String(ref l), &String(ref r)) if lines_match(l, r) => None,
-        (&Array(ref l), &Array(ref r)) => {
-            if l.len() != r.len() {
-                return Some((expected, actual));
-            }
-
-            let mut l = l.iter().collect::<Vec<_>>();
-            let mut r = r.iter().collect::<Vec<_>>();
-
-            l.retain(
-                |l| match r.iter().position(|r| find_json_mismatch_r(l, r).is_none()) {
-                    Some(i) => {
-                        r.remove(i);
-                        false
-                    }
-                    None => true,
-                },
-            );
-
-            if !l.is_empty() {
-                assert!(!r.is_empty());
-                Some((l[0], r[0]))
-            } else {
-                assert_eq!(r.len(), 0);
-                None
-            }
-        }
-        (&Object(ref l), &Object(ref r)) => {
-            let same_keys = l.len() == r.len() && l.keys().all(|k| r.contains_key(k));
-            if !same_keys {
-                return Some((expected, actual));
-            }
-
-            l.values()
-                .zip(r.values())
-                .filter_map(|(l, r)| find_json_mismatch_r(l, r))
-                .next()
-        }
-        (&Null, &Null) => None,
-        // Magic string literal `"{...}"` acts as wildcard for any sub-JSON.
-        (&String(ref l), _) if l == "{...}" => None,
-        _ => Some((expected, actual)),
-    }
-}
-
-struct ZipAll<I1: Iterator, I2: Iterator> {
-    first: I1,
-    second: I2,
-}
-
-impl<T, I1: Iterator<Item = T>, I2: Iterator<Item = T>> Iterator for ZipAll<I1, I2> {
-    type Item = (Option<T>, Option<T>);
-    fn next(&mut self) -> Option<(Option<T>, Option<T>)> {
-        let first = self.first.next();
-        let second = self.second.next();
-
-        match (first, second) {
-            (None, None) => None,
-            (a, b) => Some((a, b)),
-        }
-    }
-}
-
-fn zip_all<T, I1: Iterator<Item = T>, I2: Iterator<Item = T>>(a: I1, b: I2) -> ZipAll<I1, I2> {
-    ZipAll {
-        first: a,
-        second: b,
-    }
-}
-
-impl fmt::Debug for Execs {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "execs")
     }
 }
 
@@ -1561,27 +940,14 @@ pub fn execs() -> Execs {
         expect_exit_code: Some(0),
         expect_stdout_contains: Vec::new(),
         expect_stderr_contains: Vec::new(),
-        expect_either_contains: Vec::new(),
         expect_stdout_contains_n: Vec::new(),
         expect_stdout_not_contains: Vec::new(),
         expect_stderr_not_contains: Vec::new(),
         expect_stderr_unordered: Vec::new(),
-        expect_neither_contains: Vec::new(),
         expect_stderr_with_without: Vec::new(),
         expect_json: None,
-        expect_json_contains_unordered: Vec::new(),
+        expect_json_contains_unordered: None,
         stream_output: false,
-    }
-}
-
-pub trait Tap {
-    fn tap<F: FnOnce(&mut Self)>(self, callback: F) -> Self;
-}
-
-impl<T> Tap for T {
-    fn tap<F: FnOnce(&mut Self)>(mut self, callback: F) -> T {
-        callback(&mut self);
-        self
     }
 }
 
@@ -1635,74 +1001,57 @@ pub fn path2url<P: AsRef<Path>>(p: P) -> Url {
     Url::from_file_path(p).ok().unwrap()
 }
 
-fn substitute_macros(input: &str) -> String {
-    let macros = [
-        ("[RUNNING]", "     Running"),
-        ("[COMPILING]", "   Compiling"),
-        ("[CHECKING]", "    Checking"),
-        ("[COMPLETED]", "   Completed"),
-        ("[CREATED]", "     Created"),
-        ("[FINISHED]", "    Finished"),
-        ("[ERROR]", "error:"),
-        ("[WARNING]", "warning:"),
-        ("[DOCUMENTING]", " Documenting"),
-        ("[FRESH]", "       Fresh"),
-        ("[UPDATING]", "    Updating"),
-        ("[ADDING]", "      Adding"),
-        ("[REMOVING]", "    Removing"),
-        ("[DOCTEST]", "   Doc-tests"),
-        ("[PACKAGING]", "   Packaging"),
-        ("[DOWNLOADING]", " Downloading"),
-        ("[DOWNLOADED]", "  Downloaded"),
-        ("[UPLOADING]", "   Uploading"),
-        ("[VERIFYING]", "   Verifying"),
-        ("[ARCHIVING]", "   Archiving"),
-        ("[INSTALLING]", "  Installing"),
-        ("[REPLACING]", "   Replacing"),
-        ("[UNPACKING]", "   Unpacking"),
-        ("[SUMMARY]", "     Summary"),
-        ("[FIXING]", "      Fixing"),
-        ("[EXE]", env::consts::EXE_SUFFIX),
-        ("[IGNORED]", "     Ignored"),
-        ("[INSTALLED]", "   Installed"),
-        ("[REPLACED]", "    Replaced"),
-        ("[NOTE]", "        Note"),
-    ];
-    let mut result = input.to_owned();
-    for &(pat, subst) in &macros {
-        result = result.replace(pat, subst)
-    }
-    result
+struct RustcInfo {
+    verbose_version: String,
+    host: String,
 }
 
-pub mod install;
+impl RustcInfo {
+    fn new() -> RustcInfo {
+        let output = ProcessBuilder::new("rustc")
+            .arg("-vV")
+            .exec_with_output()
+            .expect("rustc should exec");
+        let verbose_version = String::from_utf8(output.stdout).expect("utf8 output");
+        let host = verbose_version
+            .lines()
+            .filter_map(|line| line.strip_prefix("host: "))
+            .next()
+            .expect("verbose version has host: field")
+            .to_string();
+        RustcInfo {
+            verbose_version,
+            host,
+        }
+    }
+}
 
-thread_local!(
-pub static RUSTC: Rustc = Rustc::new(
-    PathBuf::from("rustc"),
-    None,
-    Path::new("should be path to rustup rustc, but we don't care in tests"),
-    None,
-).unwrap()
-);
+lazy_static::lazy_static! {
+    static ref RUSTC_INFO: RustcInfo = RustcInfo::new();
+}
 
 /// The rustc host such as `x86_64-unknown-linux-gnu`.
-pub fn rustc_host() -> String {
-    RUSTC.with(|r| r.host.to_string())
+pub fn rustc_host() -> &'static str {
+    &RUSTC_INFO.host
+}
+
+/// The host triple suitable for use in a cargo environment variable (uppercased).
+pub fn rustc_host_env() -> String {
+    rustc_host().to_uppercase().replace('-', "_")
 }
 
 pub fn is_nightly() -> bool {
+    let vv = &RUSTC_INFO.verbose_version;
     env::var("CARGO_TEST_DISABLE_NIGHTLY").is_err()
-        && RUSTC
-            .with(|r| r.verbose_version.contains("-nightly") || r.verbose_version.contains("-dev"))
+        && (vv.contains("-nightly") || vv.contains("-dev"))
 }
 
-pub fn process<T: AsRef<OsStr>>(t: T) -> cargo::util::ProcessBuilder {
+pub fn process<T: AsRef<OsStr>>(t: T) -> ProcessBuilder {
     _process(t.as_ref())
 }
 
-fn _process(t: &OsStr) -> cargo::util::ProcessBuilder {
-    let mut p = cargo::util::process(t);
+fn _process(t: &OsStr) -> ProcessBuilder {
+    let mut p = ProcessBuilder::new(t);
 
     // In general just clear out all cargo-specific configuration already in the
     // environment. Our tests all assume a "default configuration" unless
@@ -1711,6 +1060,32 @@ fn _process(t: &OsStr) -> cargo::util::ProcessBuilder {
         if k.starts_with("CARGO_") {
             p.env_remove(&k);
         }
+    }
+    if env::var_os("RUSTUP_TOOLCHAIN").is_some() {
+        // Override the PATH to avoid executing the rustup wrapper thousands
+        // of times. This makes the testsuite run substantially faster.
+        lazy_static::lazy_static! {
+            static ref RUSTC_DIR: PathBuf = {
+                match ProcessBuilder::new("rustup")
+                    .args(&["which", "rustc"])
+                    .exec_with_output()
+                {
+                    Ok(output) => {
+                        let s = str::from_utf8(&output.stdout).expect("utf8").trim();
+                        let mut p = PathBuf::from(s);
+                        p.pop();
+                        p
+                    }
+                    Err(e) => {
+                        panic!("RUSTUP_TOOLCHAIN was set, but could not run rustup: {}", e);
+                    }
+                }
+            };
+        }
+        let path = env::var_os("PATH").unwrap_or_default();
+        let paths = env::split_paths(&path);
+        let new_path = env::join_paths(std::iter::once(RUSTC_DIR.clone()).chain(paths)).unwrap();
+        p.env("PATH", new_path);
     }
 
     p.cwd(&paths::root())
@@ -1730,6 +1105,7 @@ fn _process(t: &OsStr) -> cargo::util::ProcessBuilder {
         .env_remove("RUSTDOC")
         .env_remove("RUSTC_WRAPPER")
         .env_remove("RUSTFLAGS")
+        .env_remove("RUSTDOCFLAGS")
         .env_remove("XDG_CONFIG_HOME") // see #2345
         .env("GIT_CONFIG_NOSYSTEM", "1") // keep trying to sandbox ourselves
         .env_remove("EMAIL")
@@ -1752,15 +1128,19 @@ pub trait ChannelChanger: Sized {
     fn masquerade_as_nightly_cargo(&mut self) -> &mut Self;
 }
 
-impl ChannelChanger for cargo::util::ProcessBuilder {
+impl ChannelChanger for ProcessBuilder {
     fn masquerade_as_nightly_cargo(&mut self) -> &mut Self {
         self.env("__CARGO_TEST_CHANNEL_OVERRIDE_DO_NOT_USE_THIS", "nightly")
     }
 }
 
 fn split_and_add_args(p: &mut ProcessBuilder, s: &str) {
-    for arg in s.split_whitespace() {
-        if arg.contains('"') || arg.contains('\'') {
+    for mut arg in s.split_whitespace() {
+        if (arg.starts_with('"') && arg.ends_with('"'))
+            || (arg.starts_with('\'') && arg.ends_with('\''))
+        {
+            arg = &arg[1..(arg.len() - 1).max(1)];
+        } else if arg.contains(&['"', '\''][..]) {
             panic!("shell-style argument parsing is not supported")
         }
         p.arg(arg);
@@ -1805,9 +1185,9 @@ pub fn slow_cpu_multiplier(main: u64) -> Duration {
     Duration::from_secs(*SLOW_CPU_MULTIPLIER * main)
 }
 
-pub fn clippy_is_available() -> bool {
-    if let Err(e) = process("clippy-driver").arg("-V").exec_with_output() {
-        eprintln!("clippy-driver not available, skipping clippy test");
+pub fn command_is_available(cmd: &str) -> bool {
+    if let Err(e) = process(cmd).arg("-V").exec_with_output() {
+        eprintln!("{} not available, skipping tests", cmd);
         eprintln!("{:?}", e);
         false
     } else {
@@ -1848,10 +1228,6 @@ pub fn symlink_supported() -> bool {
 }
 
 /// The error message for ENOENT.
-///
-/// It's generally not good to match against OS error messages, but I think
-/// this one is relatively stable.
-#[cfg(windows)]
-pub const NO_SUCH_FILE_ERR_MSG: &str = "The system cannot find the file specified. (os error 2)";
-#[cfg(not(windows))]
-pub const NO_SUCH_FILE_ERR_MSG: &str = "No such file or directory (os error 2)";
+pub fn no_such_file_err_msg() -> String {
+    std::io::Error::from_raw_os_error(2).to_string()
+}

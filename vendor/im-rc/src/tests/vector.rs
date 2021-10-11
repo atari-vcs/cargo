@@ -93,7 +93,7 @@ where
                 }
                 Action::SplitLeft(ref index) => {
                     let index = cap_index(expected.len(), *index);
-                    expected.split_off(index);
+                    expected.truncate(index);
                     writeln!(out, "vec.split_off({:?});", index)?
                 }
                 Action::SplitRight(ref index) => {
@@ -216,4 +216,17 @@ proptest! {
             assert_eq!(Vector::from_iter(nat.iter().cloned()), vec);
         }
     }
+}
+
+#[test]
+fn test_inserts() {
+    const N: usize = 2000;
+    let mut v = Vector::new();
+    for i in 0..N {
+        v.insert(v.len() / 2, i);
+    }
+    let mut rv: Vec<usize> = Vec::new();
+    rv.extend((0..N).skip(1).step_by(2));
+    rv.extend((0..N).step_by(2).rev());
+    assert_eq!(Vector::from_iter(rv.iter().cloned()), v);
 }

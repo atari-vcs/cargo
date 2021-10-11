@@ -2,7 +2,7 @@
 
 use std::env;
 
-use cargo_test_support::project;
+use cargo_test_support::{is_nightly, project};
 
 #[cargo_test]
 fn profile_overrides() {
@@ -10,17 +10,17 @@ fn profile_overrides() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
+                [package]
 
-            name = "test"
-            version = "0.0.0"
-            authors = []
+                name = "test"
+                version = "0.0.0"
+                authors = []
 
-            [profile.dev]
-            opt-level = 1
-            debug = false
-            rpath = true
-        "#,
+                [profile.dev]
+                opt-level = 1
+                debug = false
+                rpath = true
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -29,8 +29,8 @@ fn profile_overrides() {
             "\
 [COMPILING] test v0.0.0 ([CWD])
 [RUNNING] `rustc --crate-name test src/lib.rs [..]--crate-type lib \
-        --emit=[..]link \
-        -C opt-level=1 \
+        --emit=[..]link[..]\
+        -C opt-level=1[..]\
         -C debug-assertions=on \
         -C metadata=[..] \
         -C rpath \
@@ -48,15 +48,15 @@ fn opt_level_override_0() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
+                [package]
 
-            name = "test"
-            version = "0.0.0"
-            authors = []
+                name = "test"
+                version = "0.0.0"
+                authors = []
 
-            [profile.dev]
-            opt-level = 0
-        "#,
+                [profile.dev]
+                opt-level = 0
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -65,7 +65,7 @@ fn opt_level_override_0() {
             "\
 [COMPILING] test v0.0.0 ([CWD])
 [RUNNING] `rustc --crate-name test src/lib.rs [..]--crate-type lib \
-        --emit=[..]link \
+        --emit=[..]link[..]\
         -C debuginfo=2 \
         -C metadata=[..] \
         --out-dir [..] \
@@ -82,14 +82,14 @@ fn debug_override_1() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "test"
-            version = "0.0.0"
-            authors = []
+                [package]
+                name = "test"
+                version = "0.0.0"
+                authors = []
 
-            [profile.dev]
-            debug = 1
-        "#,
+                [profile.dev]
+                debug = 1
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -98,7 +98,7 @@ fn debug_override_1() {
             "\
 [COMPILING] test v0.0.0 ([CWD])
 [RUNNING] `rustc --crate-name test src/lib.rs [..]--crate-type lib \
-        --emit=[..]link \
+        --emit=[..]link[..]\
         -C debuginfo=1 \
         -C metadata=[..] \
         --out-dir [..] \
@@ -115,15 +115,15 @@ fn check_opt_level_override(profile_level: &str, rustc_level: &str) {
             "Cargo.toml",
             &format!(
                 r#"
-            [package]
+                    [package]
 
-            name = "test"
-            version = "0.0.0"
-            authors = []
+                    name = "test"
+                    version = "0.0.0"
+                    authors = []
 
-            [profile.dev]
-            opt-level = {level}
-        "#,
+                    [profile.dev]
+                    opt-level = {level}
+                "#,
                 level = profile_level
             ),
         )
@@ -135,7 +135,7 @@ fn check_opt_level_override(profile_level: &str, rustc_level: &str) {
 [COMPILING] test v0.0.0 ([CWD])
 [RUNNING] `rustc --crate-name test src/lib.rs [..]--crate-type lib \
         --emit=[..]link \
-        -C opt-level={level} \
+        -C opt-level={level}[..]\
         -C debuginfo=2 \
         -C debug-assertions=on \
         -C metadata=[..] \
@@ -167,38 +167,38 @@ fn top_level_overrides_deps() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
+                [package]
 
-            name = "test"
-            version = "0.0.0"
-            authors = []
+                name = "test"
+                version = "0.0.0"
+                authors = []
 
-            [profile.release]
-            opt-level = 1
-            debug = true
+                [profile.release]
+                opt-level = 1
+                debug = true
 
-            [dependencies.foo]
-            path = "foo"
-        "#,
+                [dependencies.foo]
+                path = "foo"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "foo/Cargo.toml",
             r#"
-            [package]
+                [package]
 
-            name = "foo"
-            version = "0.0.0"
-            authors = []
+                name = "foo"
+                version = "0.0.0"
+                authors = []
 
-            [profile.release]
-            opt-level = 0
-            debug = false
+                [profile.release]
+                opt-level = 0
+                debug = false
 
-            [lib]
-            name = "foo"
-            crate_type = ["dylib", "rlib"]
-        "#,
+                [lib]
+                name = "foo"
+                crate_type = ["dylib", "rlib"]
+            "#,
         )
         .file("foo/src/lib.rs", "")
         .build();
@@ -210,7 +210,7 @@ fn top_level_overrides_deps() {
         --crate-type dylib --crate-type rlib \
         --emit=[..]link \
         -C prefer-dynamic \
-        -C opt-level=1 \
+        -C opt-level=1[..]\
         -C debuginfo=2 \
         -C metadata=[..] \
         --out-dir [CWD]/target/release/deps \
@@ -218,7 +218,7 @@ fn top_level_overrides_deps() {
 [COMPILING] test v0.0.0 ([CWD])
 [RUNNING] `rustc --crate-name test src/lib.rs [..]--crate-type lib \
         --emit=[..]link \
-        -C opt-level=1 \
+        -C opt-level=1[..]\
         -C debuginfo=2 \
         -C metadata=[..] \
         --out-dir [..] \
@@ -240,31 +240,31 @@ fn profile_in_non_root_manifest_triggers_a_warning() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [workspace]
-            members = ["bar"]
+                [workspace]
+                members = ["bar"]
 
-            [profile.dev]
-            debug = false
-        "#,
+                [profile.dev]
+                debug = false
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
-            workspace = ".."
+                [project]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
+                workspace = ".."
 
-            [profile.dev]
-            opt-level = 1
-        "#,
+                [profile.dev]
+                opt-level = 1
+            "#,
         )
         .file("bar/src/main.rs", "fn main() {}")
         .build();
@@ -289,24 +289,24 @@ fn profile_in_virtual_manifest_works() {
         .file(
             "Cargo.toml",
             r#"
-            [workspace]
-            members = ["bar"]
+                [workspace]
+                members = ["bar"]
 
-            [profile.dev]
-            opt-level = 1
-            debug = false
-        "#,
+                [profile.dev]
+                opt-level = 1
+                debug = false
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
-            workspace = ".."
-        "#,
+                [project]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
+                workspace = ".."
+            "#,
         )
         .file("bar/src/main.rs", "fn main() {}")
         .build();
@@ -328,16 +328,16 @@ fn profile_panic_test_bench() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
+                [package]
+                name = "foo"
+                version = "0.0.1"
 
-            [profile.test]
-            panic = "abort"
+                [profile.test]
+                panic = "abort"
 
-            [profile.bench]
-            panic = "abort"
-        "#,
+                [profile.bench]
+                panic = "abort"
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -358,13 +358,13 @@ fn profile_doc_deprecated() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
+                [package]
+                name = "foo"
+                version = "0.0.1"
 
-            [profile.doc]
-            opt-level = 0
-        "#,
+                [profile.doc]
+                opt-level = 0
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -446,14 +446,14 @@ fn thin_lto_works() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "top"
-            version = "0.5.0"
-            authors = []
+                [project]
+                name = "top"
+                version = "0.5.0"
+                authors = []
 
-            [profile.release]
-            lto = 'thin'
-        "#,
+                [profile.release]
+                lto = 'thin'
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .build();
@@ -466,5 +466,188 @@ fn thin_lto_works() {
 [FINISHED] [..]
 ",
         )
+        .run();
+}
+
+#[cargo_test]
+// Strip doesn't work on macos.
+#[cfg_attr(target_os = "macos", ignore)]
+fn strip_works() {
+    if !is_nightly() {
+        // -Zstrip is unstable
+        return;
+    }
+
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                cargo-features = ["strip"]
+
+                [package]
+                name = "foo"
+                version = "0.1.0"
+
+                [profile.release]
+                strip = 'symbols'
+            "#,
+        )
+        .file("src/main.rs", "fn main() {}")
+        .build();
+
+    p.cargo("build --release -v")
+        .masquerade_as_nightly_cargo()
+        .with_stderr(
+            "\
+[COMPILING] foo [..]
+[RUNNING] `rustc [..] -Z strip=symbols [..]`
+[FINISHED] [..]
+",
+        )
+        .run();
+}
+
+#[cargo_test]
+fn strip_requires_cargo_feature() {
+    if !is_nightly() {
+        // -Zstrip is unstable
+        return;
+    }
+
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [package]
+                name = "foo"
+                version = "0.1.0"
+
+                [profile.release]
+                strip = 'symbols'
+            "#,
+        )
+        .file("src/main.rs", "fn main() {}")
+        .build();
+
+    p.cargo("build --release -v")
+        .masquerade_as_nightly_cargo()
+        .with_status(101)
+        .with_stderr(
+            "\
+[ERROR] failed to parse manifest at `[CWD]/Cargo.toml`
+
+Caused by:
+  feature `strip` is required
+
+  The package requires the Cargo feature called `strip`, but that feature is \
+  not stabilized in this version of Cargo (1.[..]).
+  Consider adding `cargo-features = [\"strip\"]` to the top of Cargo.toml \
+  (above the [package] table) to tell Cargo you are opting in to use this unstable feature.
+  See https://doc.rust-lang.org/nightly/cargo/reference/unstable.html#profile-strip-option \
+  for more information about the status of this feature.
+",
+        )
+        .run();
+}
+
+#[cargo_test]
+fn strip_passes_unknown_option_to_rustc() {
+    if !is_nightly() {
+        // -Zstrip is unstable
+        return;
+    }
+
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                cargo-features = ["strip"]
+
+                [package]
+                name = "foo"
+                version = "0.1.0"
+
+                [profile.release]
+                strip = 'unknown'
+            "#,
+        )
+        .file("src/main.rs", "fn main() {}")
+        .build();
+
+    p.cargo("build --release -v")
+        .masquerade_as_nightly_cargo()
+        .with_status(101)
+        .with_stderr_contains(
+            "\
+[COMPILING] foo [..]
+[RUNNING] `rustc [..] -Z strip=unknown [..]`
+error: incorrect value `unknown` for debugging option `strip` - either `none`, `debuginfo`, or `symbols` was expected
+",
+        )
+        .run();
+}
+
+#[cargo_test]
+fn strip_accepts_true_to_strip_symbols() {
+    if !is_nightly() {
+        // -Zstrip is unstable
+        return;
+    }
+
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                cargo-features = ["strip"]
+
+                [package]
+                name = "foo"
+                version = "0.1.0"
+
+                [profile.release]
+                strip = true
+            "#,
+        )
+        .file("src/main.rs", "fn main() {}")
+        .build();
+
+    p.cargo("build --release -v")
+        .masquerade_as_nightly_cargo()
+        .with_stderr(
+            "\
+[COMPILING] foo [..]
+[RUNNING] `rustc [..] -Z strip=symbols [..]`
+[FINISHED] [..]
+",
+        )
+        .run();
+}
+
+#[cargo_test]
+fn strip_accepts_false_to_disable_strip() {
+    if !is_nightly() {
+        // -Zstrip is unstable
+        return;
+    }
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                cargo-features = ["strip"]
+
+                [package]
+                name = "foo"
+                version = "0.1.0"
+
+                [profile.release]
+                strip = false
+            "#,
+        )
+        .file("src/main.rs", "fn main() {}")
+        .build();
+
+    p.cargo("build --release -v")
+        .masquerade_as_nightly_cargo()
+        .with_stderr_does_not_contain("-Z strip")
         .run();
 }

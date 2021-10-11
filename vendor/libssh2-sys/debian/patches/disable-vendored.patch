@@ -6,6 +6,6 @@
  [features]
 -vendored-openssl = ["openssl-sys/vendored"]
 +vendored-openssl = []
+ zlib-ng-compat = ["libz-sys/zlib-ng"]
  [target."cfg(target_env = \"msvc\")".build-dependencies.vcpkg]
  version = "0.2"
- [target."cfg(unix)".dependencies.openssl-sys]

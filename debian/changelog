@@ -1,3 +1,42 @@
+cargo (0.56.0-0.1) UNRELEASED; urgency=medium
+
+  * New upstream release
+
+ -- Sjoerd Simons <sjoerd@debian.org>  Mon, 11 Oct 2021 21:15:29 +0200
+
+cargo (0.47.0-3) unstable; urgency=medium
+
+  * Disable close_output test for now, it is flaky. This is a test problem not
+    a cargo problem and will be re-enabled in 0.49.0.
+
+ -- Ximin Luo <infinity0@debian.org>  Tue, 08 Dec 2020 01:43:58 +0000
+
+cargo (0.47.0-2) unstable; urgency=medium
+
+  * Backport a patch to fix a test on i386.
+  * Add +xgot to work around mips64el limitations.
+
+ -- Ximin Luo <infinity0@debian.org>  Tue, 08 Dec 2020 00:29:08 +0000
+
+cargo (0.47.0-1) unstable; urgency=medium
+
+  * Upload to unstable. (Closes: #976434)
+
+ -- Ximin Luo <infinity0@debian.org>  Sun, 06 Dec 2020 12:39:49 +0000
+
+cargo (0.47.0-1~exp1) experimental; urgency=medium
+
+  * New upstream release.
+
+ -- Ximin Luo <infinity0@debian.org>  Fri, 02 Oct 2020 02:04:10 +0100
+
+cargo (0.43.1-4) unstable; urgency=medium
+
+  * Team upload.
+  * Fix build by applying two upstream patches. (Closes: #975857)
+
+ -- Jan Niehusmann <jan@debian.org>  Sat, 28 Nov 2020 11:07:20 +0100
+
 cargo (0.43.1-3) unstable; urgency=medium
 
   * Reupload, actually include the fix described in the previous entry.

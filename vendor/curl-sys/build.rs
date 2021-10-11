@@ -1,14 +1,11 @@
-extern crate cc;
-extern crate pkg_config;
-#[cfg(target_env = "msvc")]
-extern crate vcpkg;
-
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
+    println!("cargo:rerun-if-changed=curl");
+    let host = env::var("HOST").unwrap();
     let target = env::var("TARGET").unwrap();
     let windows = target.contains("windows");
 
@@ -19,14 +16,20 @@ fn main() {
         return println!("cargo:rustc-flags=-l curl");
     }
 
-    // If the static-curl feature is disabled, probe for a system-wide libcurl.
-    if !cfg!(feature = "static-curl") {
-        // OSX and Haiku ships libcurl by default, so we just use that version
+    // When cross-compiling for Haiku, use the system's default supplied
+    // libcurl (it supports http2). This is in the case where rustc and
+    // cargo are built for Haiku, which is done from a Linux host.
+    if host != target && target.contains("haiku") {
+        return println!("cargo:rustc-flags=-l curl");
+    }
+
+    // On Debian, always probe for a system-wide libcurl even when linking statically
+    if true {
+        if cfg!(feature = "static-curl") { println!("cargo:static=1"); }
+        // OSX ships libcurl by default, so we just use that version
         // so long as it has the right features enabled.
-        if target.contains("apple") || target.contains("haiku") {
-            if !cfg!(feature = "http2") || curl_config_reports_http2() {
-                return println!("cargo:rustc-flags=-l curl");
-            }
+        if target.contains("apple") && (!cfg!(feature = "http2") || curl_config_reports_http2()) {
+            return println!("cargo:rustc-flags=-l curl");
         }
 
         // Next, fall back and try to use pkg-config if its available.
@@ -34,10 +37,8 @@ fn main() {
             if try_vcpkg() {
                 return;
             }
-        } else {
-            if try_pkg_config() {
-                return;
-            }
+        } else if try_pkg_config() {
+            return;
         }
     }
 
@@ -64,32 +65,29 @@ fn main() {
     println!("cargo:root={}", dst.display());
     println!("cargo:include={}", include.display());
     println!("cargo:static=1");
+    println!("cargo:rustc-cfg=libcurl_vendored");
     fs::create_dir_all(include.join("curl")).unwrap();
-    fs::copy("curl/include/curl/curl.h", include.join("curl/curl.h")).unwrap();
-    fs::copy(
-        "curl/include/curl/curlver.h",
-        include.join("curl/curlver.h"),
-    )
-    .unwrap();
-    fs::copy("curl/include/curl/easy.h", include.join("curl/easy.h")).unwrap();
-    fs::copy(
-        "curl/include/curl/mprintf.h",
-        include.join("curl/mprintf.h"),
-    )
-    .unwrap();
-    fs::copy("curl/include/curl/multi.h", include.join("curl/multi.h")).unwrap();
-    fs::copy(
-        "curl/include/curl/stdcheaders.h",
-        include.join("curl/stdcheaders.h"),
-    )
-    .unwrap();
-    fs::copy("curl/include/curl/system.h", include.join("curl/system.h")).unwrap();
-    fs::copy("curl/include/curl/urlapi.h", include.join("curl/urlapi.h")).unwrap();
-    fs::copy(
-        "curl/include/curl/typecheck-gcc.h",
-        include.join("curl/typecheck-gcc.h"),
-    )
-    .unwrap();
+
+    for header in [
+        "curl.h",
+        "curlver.h",
+        "easy.h",
+        "options.h",
+        "mprintf.h",
+        "multi.h",
+        "stdcheaders.h",
+        "system.h",
+        "urlapi.h",
+        "typecheck-gcc.h",
+    ]
+    .iter()
+    {
+        fs::copy(
+            format!("curl/include/curl/{}", header),
+            include.join("curl").join(header),
+        )
+        .unwrap();
+    }
 
     let pkgconfig = dst.join("lib/pkgconfig");
     fs::create_dir_all(&pkgconfig).unwrap();
@@ -114,7 +112,6 @@ fn main() {
         .include("curl/lib")
         .include("curl/include")
         .define("BUILDING_LIBCURL", None)
-        .define("CURL_DISABLE_CRYPTO_AUTH", None)
         .define("CURL_DISABLE_DICT", None)
         .define("CURL_DISABLE_GOPHER", None)
         .define("CURL_DISABLE_IMAP", None)
@@ -132,9 +129,14 @@ fn main() {
         .define("HAVE_ASSERT_H", None)
         .define("OS", "\"unknown\"") // TODO
         .define("HAVE_ZLIB_H", None)
+        .define("HAVE_LONGLONG", None)
         .define("HAVE_LIBZ", None)
+        .define("HAVE_BOOL_T", None)
+        .define("HAVE_STDBOOL_H", None)
         .file("curl/lib/asyn-thread.c")
+        .file("curl/lib/altsvc.c")
         .file("curl/lib/base64.c")
+        .file("curl/lib/bufref.c")
         .file("curl/lib/conncache.c")
         .file("curl/lib/connect.c")
         .file("curl/lib/content_encoding.c")
@@ -147,6 +149,7 @@ fn main() {
         .file("curl/lib/curl_threads.c")
         .file("curl/lib/dotdot.c")
         .file("curl/lib/doh.c")
+        .file("curl/lib/dynbuf.c")
         .file("curl/lib/easy.c")
         .file("curl/lib/escape.c")
         .file("curl/lib/file.c")
@@ -155,20 +158,26 @@ fn main() {
         .file("curl/lib/getenv.c")
         .file("curl/lib/getinfo.c")
         .file("curl/lib/hash.c")
+        .file("curl/lib/hmac.c")
         .file("curl/lib/hostasyn.c")
         .file("curl/lib/hostcheck.c")
         .file("curl/lib/hostip.c")
         .file("curl/lib/hostip6.c")
+        .file("curl/lib/hsts.c")
         .file("curl/lib/http.c")
         .file("curl/lib/http2.c")
+        .file("curl/lib/http_aws_sigv4.c")
         .file("curl/lib/http_chunks.c")
+        .file("curl/lib/http_digest.c")
         .file("curl/lib/http_proxy.c")
         .file("curl/lib/if2ip.c")
         .file("curl/lib/inet_ntop.c")
         .file("curl/lib/inet_pton.c")
         .file("curl/lib/llist.c")
+        .file("curl/lib/md5.c")
         .file("curl/lib/mime.c")
         .file("curl/lib/mprintf.c")
+        .file("curl/lib/mqtt.c")
         .file("curl/lib/multi.c")
         .file("curl/lib/netrc.c")
         .file("curl/lib/nonblock.c")
@@ -179,6 +188,7 @@ fn main() {
         .file("curl/lib/select.c")
         .file("curl/lib/sendf.c")
         .file("curl/lib/setopt.c")
+        .file("curl/lib/sha256.c")
         .file("curl/lib/share.c")
         .file("curl/lib/slist.c")
         .file("curl/lib/socks.c")
@@ -195,11 +205,15 @@ fn main() {
         .file("curl/lib/url.c")
         .file("curl/lib/urlapi.c")
         .file("curl/lib/version.c")
+        .file("curl/lib/vauth/digest.c")
+        .file("curl/lib/vauth/vauth.c")
+        .file("curl/lib/vtls/keylog.c")
         .file("curl/lib/vtls/vtls.c")
         .file("curl/lib/warnless.c")
         .file("curl/lib/wildcard.c")
         .define("HAVE_GETADDRINFO", None)
         .define("HAVE_GETPEERNAME", None)
+        .define("HAVE_GETSOCKNAME", None)
         .warnings(false);
 
     if cfg!(feature = "protocol-ftp") {
@@ -250,15 +264,21 @@ fn main() {
         }
     } else if cfg!(feature = "ssl") {
         if windows {
+            // For windows, spnego feature is auto on in case ssl feature is on.
+            // Please see definition of USE_SPNEGO in curl_setup.h for more info.
             cfg.define("USE_WINDOWS_SSPI", None)
                 .define("USE_SCHANNEL", None)
+                .file("curl/lib/http_negotiate.c")
                 .file("curl/lib/x509asn1.c")
                 .file("curl/lib/curl_sspi.c")
                 .file("curl/lib/socks_sspi.c")
+                .file("curl/lib/vauth/spnego_sspi.c")
+                .file("curl/lib/vauth/vauth.c")
                 .file("curl/lib/vtls/schannel.c")
                 .file("curl/lib/vtls/schannel_verify.c");
         } else if target.contains("-apple-") {
             cfg.define("USE_SECTRANSP", None)
+                .file("curl/lib/x509asn1.c")
                 .file("curl/lib/vtls/sectransp.c");
             if xcode_major_version().map_or(true, |v| v >= 9) {
                 // On earlier Xcode versions (<9), defining HAVE_BUILTIN_AVAILABLE
@@ -278,26 +298,22 @@ fn main() {
         }
     }
 
+    // Configure platform-specific details.
     if windows {
         cfg.define("WIN32", None)
             .define("USE_THREADS_WIN32", None)
             .define("HAVE_IOCTLSOCKET_FIONBIO", None)
             .define("USE_WINSOCK", None)
-            .file("curl/lib/system_win32.c");
+            .file("curl/lib/bufref.c")
+            .file("curl/lib/system_win32.c")
+            .file("curl/lib/version_win32.c")
+            .file("curl/lib/vauth/digest_sspi.c")
+            .file("curl/lib/curl_multibyte.c");
 
         if cfg!(feature = "spnego") {
             cfg.file("curl/lib/vauth/spnego_sspi.c");
         }
     } else {
-        if target.contains("-apple-") {
-            cfg.define("__APPLE__", None)
-                .define("macintosh", None)
-                .define("HAVE_MACH_ABSOLUTE_TIME", None);
-        } else {
-            cfg.define("HAVE_CLOCK_GETTIME_MONOTONIC", None)
-                .define("HAVE_GETTIMEOFDAY", None);
-        }
-
         cfg.define("RECV_TYPE_ARG1", "int")
             .define("HAVE_PTHREAD_H", None)
             .define("HAVE_ARPA_INET_H", None)
@@ -305,7 +321,7 @@ fn main() {
             .define("HAVE_FCNTL_H", None)
             .define("HAVE_NETDB_H", None)
             .define("HAVE_NETINET_IN_H", None)
-            .define("HAVE_POLL_FINE", None)
+            .define("HAVE_NETINET_TCP_H", None)
             .define("HAVE_POLL_H", None)
             .define("HAVE_FCNTL_O_NONBLOCK", None)
             .define("HAVE_SYS_SELECT_H", None)
@@ -318,7 +334,9 @@ fn main() {
             .define("HAVE_STERRROR_R", None)
             .define("HAVE_SOCKETPAIR", None)
             .define("HAVE_STRUCT_TIMEVAL", None)
+            .define("HAVE_SYS_UN_H", None)
             .define("USE_THREADS_POSIX", None)
+            .define("USE_UNIX_SOCKETS", None)
             .define("RECV_TYPE_ARG2", "void*")
             .define("RECV_TYPE_ARG3", "size_t")
             .define("RECV_TYPE_ARG4", "int")
@@ -333,11 +351,28 @@ fn main() {
             .define("SIZEOF_INT", "4")
             .define("SIZEOF_SHORT", "2");
 
+        if target.contains("-apple-") {
+            cfg.define("__APPLE__", None)
+                .define("macintosh", None)
+                .define("HAVE_MACH_ABSOLUTE_TIME", None);
+        } else {
+            cfg.define("HAVE_CLOCK_GETTIME_MONOTONIC", None)
+                .define("HAVE_GETTIMEOFDAY", None)
+                // poll() on various versions of macOS are janky, so only use it
+                // on non-macOS unix-likes. This matches the official default
+                // build configuration as well.
+                .define("HAVE_POLL_FINE", None);
+        }
+
         if cfg!(feature = "spnego") {
             cfg.define("HAVE_GSSAPI", None)
                 .file("curl/lib/curl_gssapi.c")
                 .file("curl/lib/socks_gssapi.c")
                 .file("curl/lib/vauth/spnego_gssapi.c");
+            if let Some(path) = env::var_os("GSSAPI_ROOT") {
+                let path = PathBuf::from(path);
+                cfg.include(path.join("include"));
+            }
 
             // Link against the MIT gssapi library. It might be desirable to add support for
             // choosing between MIT and Heimdal libraries in the future.
@@ -370,6 +405,7 @@ fn main() {
     if target.contains("-apple-") {
         println!("cargo:rustc-link-lib=framework=Security");
         println!("cargo:rustc-link-lib=framework=CoreFoundation");
+        println!("cargo:rustc-link-lib=framework=SystemConfiguration");
     }
 }
 
@@ -458,7 +494,7 @@ fn try_pkg_config() -> bool {
     for path in lib.include_paths.iter() {
         println!("cargo:include={}", path.display());
     }
-    return true;
+    true
 }
 
 fn xcode_major_version() -> Option<u8> {
@@ -498,7 +534,7 @@ fn curl_config_reports_http2() -> bool {
         return false;
     }
 
-    return true;
+    true
 }
 
 fn macos_link_search_path() -> Option<String> {

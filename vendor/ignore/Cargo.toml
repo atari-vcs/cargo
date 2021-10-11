@@ -11,8 +11,9 @@
 # will likely look very different (and much more reasonable)
 
 [package]
+edition = "2018"
 name = "ignore"
-version = "0.4.14"
+version = "0.4.18"
 authors = ["Andrew Gallant <jamslam@gmail.com>"]
 description = "A fast library for efficiently matching ignore files such as `.gitignore`\nagainst file paths.\n"
 homepage = "https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore"
@@ -25,14 +26,11 @@ repository = "https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore"
 [lib]
 name = "ignore"
 bench = false
-[dependencies.crossbeam-channel]
-version = "0.4.0"
-
 [dependencies.crossbeam-utils]
-version = "0.7.0"
+version = "0.8.0"
 
 [dependencies.globset]
-version = "0.4.3"
+version = "0.4.7"
 
 [dependencies.lazy_static]
 version = "1.1"
@@ -54,6 +52,8 @@ version = "1"
 
 [dependencies.walkdir]
 version = "2.2.7"
+[dev-dependencies.crossbeam-channel]
+version = "0.5.0"
 
 [features]
 simd-accel = ["globset/simd-accel"]

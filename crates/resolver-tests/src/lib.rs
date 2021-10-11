@@ -1,5 +1,4 @@
-#![allow(clippy::many_single_char_names)]
-#![allow(clippy::needless_range_loop)] // false positives
+#![allow(clippy::all)]
 
 use std::cell::RefCell;
 use std::cmp::PartialEq;
@@ -11,7 +10,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use cargo::core::dependency::DepKind;
-use cargo::core::resolver::{self, ResolveOpts};
+use cargo::core::resolver::{self, ResolveOpts, VersionPreferences};
 use cargo::core::source::{GitReference, SourceId};
 use cargo::core::Resolve;
 use cargo::core::{Dependency, PackageId, Registry, Summary};
@@ -24,7 +23,7 @@ use proptest::string::string_regex;
 use varisat::{self, ExtendFormula};
 
 pub fn resolve(deps: Vec<Dependency>, registry: &[Summary]) -> CargoResult<Vec<PackageId>> {
-    resolve_with_config(deps, registry, None)
+    resolve_with_config(deps, registry, &Config::default().unwrap())
 }
 
 pub fn resolve_and_validated(
@@ -32,7 +31,7 @@ pub fn resolve_and_validated(
     registry: &[Summary],
     sat_resolve: Option<SatResolve>,
 ) -> CargoResult<Vec<PackageId>> {
-    let resolve = resolve_with_config_raw(deps.clone(), registry, None);
+    let resolve = resolve_with_config_raw(deps.clone(), registry, &Config::default().unwrap());
 
     match resolve {
         Err(e) => {
@@ -109,7 +108,7 @@ pub fn resolve_and_validated(
 pub fn resolve_with_config(
     deps: Vec<Dependency>,
     registry: &[Summary],
-    config: Option<&Config>,
+    config: &Config,
 ) -> CargoResult<Vec<PackageId>> {
     let resolve = resolve_with_config_raw(deps, registry, config)?;
     Ok(resolve.sort())
@@ -118,12 +117,12 @@ pub fn resolve_with_config(
 pub fn resolve_with_config_raw(
     deps: Vec<Dependency>,
     registry: &[Summary],
-    config: Option<&Config>,
+    config: &Config,
 ) -> CargoResult<Resolve> {
     struct MyRegistry<'a> {
         list: &'a [Summary],
         used: HashSet<PackageId>,
-    };
+    }
     impl<'a> Registry for MyRegistry<'a> {
         fn query(
             &mut self,
@@ -171,11 +170,11 @@ pub fn resolve_with_config_raw(
         used: HashSet::new(),
     };
     let summary = Summary::new(
+        config,
         pkg_id("root"),
         deps,
-        &BTreeMap::<String, Vec<String>>::new(),
+        &BTreeMap::new(),
         None::<&String>,
-        false,
     )
     .unwrap();
     let opts = ResolveOpts::everything();
@@ -184,8 +183,8 @@ pub fn resolve_with_config_raw(
         &[(summary, opts)],
         &[],
         &mut registry,
-        &HashSet::new(),
-        config,
+        &VersionPreferences::default(),
+        Some(config),
         true,
     );
 
@@ -507,7 +506,7 @@ pub trait ToDep {
 
 impl ToDep for &'static str {
     fn to_dep(self) -> Dependency {
-        Dependency::parse_no_deprecated(self, Some("1.0.0"), registry_loc()).unwrap()
+        Dependency::parse(self, Some("1.0.0"), registry_loc()).unwrap()
     }
 }
 
@@ -572,11 +571,11 @@ pub fn pkg_dep<T: ToPkgId>(name: T, dep: Vec<Dependency>) -> Summary {
         None
     };
     Summary::new(
+        &Config::default().unwrap(),
         name.to_pkgid(),
         dep,
-        &BTreeMap::<String, Vec<String>>::new(),
+        &BTreeMap::new(),
         link,
-        false,
     )
     .unwrap()
 }
@@ -600,11 +599,11 @@ pub fn pkg_loc(name: &str, loc: &str) -> Summary {
         None
     };
     Summary::new(
+        &Config::default().unwrap(),
         pkg_id_loc(name, loc),
         Vec::new(),
-        &BTreeMap::<String, Vec<String>>::new(),
+        &BTreeMap::new(),
         link,
-        false,
     )
     .unwrap()
 }
@@ -614,11 +613,11 @@ pub fn remove_dep(sum: &Summary, ind: usize) -> Summary {
     deps.remove(ind);
     // note: more things will need to be copied over in the future, but it works for now.
     Summary::new(
+        &Config::default().unwrap(),
         sum.package_id(),
         deps,
-        &BTreeMap::<String, Vec<String>>::new(),
+        &BTreeMap::new(),
         sum.links().map(|a| a.as_str()),
-        sum.namespaced_features(),
     )
     .unwrap()
 }
@@ -627,7 +626,7 @@ pub fn dep(name: &str) -> Dependency {
     dep_req(name, "*")
 }
 pub fn dep_req(name: &str, req: &str) -> Dependency {
-    Dependency::parse_no_deprecated(name, Some(req), registry_loc()).unwrap()
+    Dependency::parse(name, Some(req), registry_loc()).unwrap()
 }
 pub fn dep_req_kind(name: &str, req: &str, kind: DepKind, public: bool) -> Dependency {
     let mut dep = dep_req(name, req);
@@ -640,7 +639,7 @@ pub fn dep_loc(name: &str, location: &str) -> Dependency {
     let url = location.into_url().unwrap();
     let master = GitReference::Branch("master".to_string());
     let source_id = SourceId::for_git(&url, master).unwrap();
-    Dependency::parse_no_deprecated(name, Some("1.0.0"), source_id).unwrap()
+    Dependency::parse(name, Some("1.0.0"), source_id).unwrap()
 }
 pub fn dep_kind(name: &str, kind: DepKind) -> Dependency {
     dep(name).set_kind(kind).clone()
@@ -734,8 +733,8 @@ fn meta_test_deep_pretty_print_registry() {
         "vec![pkg!((\"foo\", \"1.0.1\") => [dep_req(\"bar\", \"^1\"),]),\
          pkg!((\"foo\", \"1.0.0\") => [dep_req(\"bar\", \"^2\"),]),\
          pkg!((\"foo\", \"2.0.0\") => [dep(\"bar\"),]),\
-         pkg!((\"bar\", \"1.0.0\") => [dep_req(\"baz\", \"= 1.0.2\"),dep_req(\"other\", \"^1\"),]),\
-         pkg!((\"bar\", \"2.0.0\") => [dep_req(\"baz\", \"= 1.0.1\"),]),\
+         pkg!((\"bar\", \"1.0.0\") => [dep_req(\"baz\", \"=1.0.2\"),dep_req(\"other\", \"^1\"),]),\
+         pkg!((\"bar\", \"2.0.0\") => [dep_req(\"baz\", \"=1.0.1\"),]),\
          pkg!((\"baz\", \"1.0.2\") => [dep_req(\"other\", \"^2\"),]),\
          pkg!((\"baz\", \"1.0.1\")),\
          pkg!((\"cat\", \"1.0.2\") => [dep_req_kind(\"other\", \"^2\", DepKind::Build, false),]),\
@@ -969,12 +968,14 @@ fn meta_test_multiple_versions_strategy() {
 }
 
 /// Assert `xs` contains `elems`
+#[track_caller]
 pub fn assert_contains<A: PartialEq>(xs: &[A], elems: &[A]) {
     for elem in elems {
         assert!(xs.contains(elem));
     }
 }
 
+#[track_caller]
 pub fn assert_same<A: PartialEq>(a: &[A], b: &[A]) {
     assert_eq!(a.len(), b.len());
     assert_contains(b, a);

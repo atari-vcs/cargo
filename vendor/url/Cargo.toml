@@ -11,30 +11,22 @@
 # will likely look very different (and much more reasonable)
 
 [package]
+edition = "2018"
 name = "url"
-version = "2.1.1"
+version = "2.2.2"
 authors = ["The rust-url developers"]
+include = ["src/**/*", "LICENSE-*", "README.md", "tests/**"]
 description = "URL library for Rust, based on the WHATWG URL Standard"
 documentation = "https://docs.rs/url"
-readme = "README.md"
+readme = "../README.md"
 keywords = ["url", "parser"]
 categories = ["parser-implementations", "web-programming", "encoding"]
 license = "MIT/Apache-2.0"
 repository = "https://github.com/servo/rust-url"
 
-[lib]
-test = false
+[dependencies.form_urlencoded]
+version = "1.0.0"
 
-[[test]]
-name = "unit"
-
-[[test]]
-name = "data"
-harness = false
-
-[[bench]]
-name = "parse_url"
-harness = false
 [dependencies.idna]
 version = "0.2.0"
 
@@ -48,11 +40,6 @@ version = "2.1.0"
 version = "1.0"
 features = ["derive"]
 optional = true
-[dev-dependencies.bencher]
-version = "0.1"
-
-[dev-dependencies.rustc-test]
-version = "0.3"
 
 [dev-dependencies.serde_json]
 version = "1.0"

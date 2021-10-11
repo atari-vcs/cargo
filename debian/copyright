@@ -17,6 +17,7 @@ Files:
  azure-pipelines.yml
  ci/*
  publish.py
+ triagebot.toml
 Copyright: 2014 The Rust Project Developers
 License: MIT or Apache-2.0
 Comment: please do not add * to the above paragraph, so we can use lintian to
@@ -135,6 +136,11 @@ Files: vendor/anyhow/*
 Copyright: 2019-2020 David Tolnay <dtolnay@gmail.com>
 License: MIT OR Apache-2.0
 Comment: see https://github.com/dtolnay/anyhow
+
+Files: vendor/adler/*
+Copyright: 2020-2020 Jonas Schievink <jonasschievink@gmail.com>
+License: 0BSD OR MIT OR Apache-2.0
+Comment: see https://github.com/jonas-schievink/adler.git
 
 Files: vendor/adler32/*
 Copyright: 2015-2019 Remi Rampin <remirampin@gmail.com>
@@ -495,6 +501,11 @@ Copyright: 2016 Amanieu d'Antras <amanieu@gmail.com>
 License: MIT or Apache-2.0
 Comment: see https://github.com/Amanieu/thread_local-rs
 
+Files: vendor/tinyvec/*
+Copyright: 2020-2020 Lokathor <zefria@gmail.com>
+License: Zlib OR Apache-2.0 OR MIT
+Comment: see https://github.com/Lokathor/tinyvec
+
 Files: vendor/typenum/*
 Copyright: 2015-2018 Paho Lurie-Gregg <paho@paholg.com>
            2015-2018 Andre Bogus <bogusandre@gmail.com>
@@ -575,6 +586,18 @@ Files: debian/bootstrap.py
 Copyright: 2015 David Huseby
 License: BSD-2-clause
 Comment: See LICENSE at https://github.com/dhuseby/cargo-bootstrap/
+
+License: 0BSD
+ Permission to use, copy, modify, and/or distribute this software for
+ any purpose with or without fee is hereby granted.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
+ AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
+ OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 License: Apache-2.0
  On Debian systems, see /usr/share/common-licenses/Apache-2.0 for

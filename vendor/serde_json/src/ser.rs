@@ -8,6 +8,7 @@ use serde::ser::{self, Impossible, Serialize};
 use serde::serde_if_integer128;
 
 /// A structure for serializing Rust values into JSON.
+#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
 pub struct Serializer<W, F = CompactFormatter> {
     writer: W,
     formatter: F,
@@ -44,10 +45,7 @@ where
     /// specified.
     #[inline]
     pub fn with_formatter(writer: W, formatter: F) -> Self {
-        Serializer {
-            writer: writer,
-            formatter: formatter,
-        }
+        Serializer { writer, formatter }
     }
 
     /// Unwrap the `Writer` from the `Serializer`.
@@ -319,11 +317,11 @@ where
 
     #[inline]
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq> {
+        tri!(self
+            .formatter
+            .begin_array(&mut self.writer)
+            .map_err(Error::io));
         if len == Some(0) {
-            tri!(self
-                .formatter
-                .begin_array(&mut self.writer)
-                .map_err(Error::io));
             tri!(self
                 .formatter
                 .end_array(&mut self.writer)
@@ -333,10 +331,6 @@ where
                 state: State::Empty,
             })
         } else {
-            tri!(self
-                .formatter
-                .begin_array(&mut self.writer)
-                .map_err(Error::io));
             Ok(Compound::Map {
                 ser: self,
                 state: State::First,
@@ -388,11 +382,11 @@ where
 
     #[inline]
     fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap> {
+        tri!(self
+            .formatter
+            .begin_object(&mut self.writer)
+            .map_err(Error::io));
         if len == Some(0) {
-            tri!(self
-                .formatter
-                .begin_object(&mut self.writer)
-                .map_err(Error::io));
             tri!(self
                 .formatter
                 .end_object(&mut self.writer)
@@ -402,10 +396,6 @@ where
                 state: State::Empty,
             })
         } else {
-            tri!(self
-                .formatter
-                .begin_object(&mut self.writer)
-                .map_err(Error::io));
             Ok(Compound::Map {
                 ser: self,
                 state: State::First,
@@ -470,7 +460,7 @@ where
             F: Formatter,
         {
             fn write_str(&mut self, s: &str) -> fmt::Result {
-                assert!(self.error.is_none());
+                debug_assert!(self.error.is_none());
                 match format_escaped_str_contents(self.writer, self.formatter, s) {
                     Ok(()) => Ok(()),
                     Err(err) => {
@@ -492,7 +482,7 @@ where
                 error: None,
             };
             match write!(adapter, "{}", value) {
-                Ok(()) => assert!(adapter.error.is_none()),
+                Ok(()) => debug_assert!(adapter.error.is_none()),
                 Err(fmt::Error) => {
                     return Err(Error::io(adapter.error.expect("there should be an error")));
                 }
@@ -1950,7 +1940,7 @@ impl<'a> PrettyFormatter<'a> {
         PrettyFormatter {
             current_indent: 0,
             has_value: false,
-            indent: indent,
+            indent,
         }
     }
 }
@@ -2152,6 +2142,7 @@ static ESCAPE: [u8; 256] = [
 /// Serialization can fail if `T`'s implementation of `Serialize` decides to
 /// fail, or if `T` contains a map with non-string keys.
 #[inline]
+#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
 pub fn to_writer<W, T>(writer: W, value: &T) -> Result<()>
 where
     W: io::Write,
@@ -2170,6 +2161,7 @@ where
 /// Serialization can fail if `T`'s implementation of `Serialize` decides to
 /// fail, or if `T` contains a map with non-string keys.
 #[inline]
+#[cfg_attr(docsrs, doc(cfg(feature = "std")))]
 pub fn to_writer_pretty<W, T>(writer: W, value: &T) -> Result<()>
 where
     W: io::Write,

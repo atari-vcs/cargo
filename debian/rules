@@ -14,6 +14,11 @@ export CARGO_HOME = $(CURDIR)/debian/cargo_home
 export DEB_CARGO_CRATE=cargo_$(DEB_VERSION_UPSTREAM)
 export RUSTFLAGS += --remap-path-prefix=$(CURDIR)=/usr/src/cargo-$(DEB_VERSION_UPSTREAM)
 
+# https://github.com/rust-lang/rust/issues/52108
+ifneq (,$(filter $(DEB_HOST_ARCH), mips64el))
+  RUSTFLAGS += -Ctarget-feature=+xgot
+endif
+
 # don't shrink, this can take ages
 # see https://github.com/rust-lang/cargo/issues/6490 for details
 export PROPTEST_MAX_SHRINK_ITERS = 0
@@ -52,3 +57,4 @@ override_dh_auto_clean:
 override_dh_clean:
 	# Upstream contains a lot of these
 	dh_clean -XCargo.toml.orig
+	rm -f Cargo.lock

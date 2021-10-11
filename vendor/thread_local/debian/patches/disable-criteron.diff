@@ -1,0 +1,52 @@
+Index: thread-local/Cargo.toml
+===================================================================
+--- thread-local.orig/Cargo.toml
++++ thread-local/Cargo.toml
+@@ -22,13 +22,13 @@ keywords = ["thread_local", "concurrent"
+ license = "Apache-2.0/MIT"
+ repository = "https://github.com/Amanieu/thread_local-rs"
+ 
+-[[bench]]
+-name = "thread_local"
+-harness = false
+-required-features = ["criterion"]
+-[dependencies.criterion]
+-version = "0.3.3"
+-optional = true
++#[[bench]]
++#name = "thread_local"
++#harness = false
++#required-features = ["criterion"]
++#[dependencies.criterion]
++#version = "0.3.3"
++#optional = true
+ 
+ [dependencies.once_cell]
+ version = "1.5.2"
+Index: thread-local/benches/thread_local.rs
+===================================================================
+--- thread-local.orig/benches/thread_local.rs
++++ thread-local/benches/thread_local.rs
+@@ -1,12 +1,12 @@
+-extern crate criterion;
++//extern crate criterion;
+ extern crate thread_local;
+ 
+-use criterion::{black_box, BatchSize};
++//use criterion::{black_box, BatchSize};
+ 
+ use thread_local::ThreadLocal;
+ 
+ fn main() {
+-    let mut c = criterion::Criterion::default().configure_from_args();
++    /*let mut c = criterion::Criterion::default().configure_from_args();
+ 
+     c.bench_function("get", |b| {
+         let local = ThreadLocal::new();
+@@ -24,5 +24,5 @@ fn main() {
+             },
+             BatchSize::SmallInput,
+         )
+-    });
++    });*/
+ }

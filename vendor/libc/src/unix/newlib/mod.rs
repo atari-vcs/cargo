@@ -1,6 +1,5 @@
 pub type blkcnt_t = i32;
 pub type blksize_t = i32;
-pub type clock_t = i32;
 pub type clockid_t = ::c_ulong;
 pub type dev_t = u32;
 pub type fsblkcnt_t = u64;
@@ -25,14 +24,25 @@ pub type time_t = i32;
 pub type useconds_t = u32;
 
 s! {
+    // The order of the `ai_addr` field in this struct is crucial
+    // for converting between the Rust and C types.
     pub struct addrinfo {
         pub ai_flags: ::c_int,
         pub ai_family: ::c_int,
         pub ai_socktype: ::c_int,
         pub ai_protocol: ::c_int,
         pub ai_addrlen: socklen_t,
-        pub ai_canonname: *mut ::c_char,
+
+        #[cfg(target_os = "espidf")]
         pub ai_addr: *mut sockaddr,
+
+        pub ai_canonname: *mut ::c_char,
+
+        #[cfg(not(any(
+            target_os = "espidf",
+            all(libc_cfg_target_vendor, target_arch = "powerpc", target_vendor = "nintendo"))))]
+        pub ai_addr: *mut sockaddr,
+
         pub ai_next: *mut addrinfo,
     }
 
@@ -220,23 +230,37 @@ s! {
 // unverified constants
 align_const! {
     pub const PTHREAD_MUTEX_INITIALIZER: pthread_mutex_t = pthread_mutex_t {
-        size: [0; __SIZEOF_PTHREAD_MUTEX_T],
+        size: [__PTHREAD_INITIALIZER_BYTE; __SIZEOF_PTHREAD_MUTEX_T],
     };
     pub const PTHREAD_COND_INITIALIZER: pthread_cond_t = pthread_cond_t {
-        size: [0; __SIZEOF_PTHREAD_COND_T],
+        size: [__PTHREAD_INITIALIZER_BYTE; __SIZEOF_PTHREAD_COND_T],
     };
     pub const PTHREAD_RWLOCK_INITIALIZER: pthread_rwlock_t = pthread_rwlock_t {
-        size: [0; __SIZEOF_PTHREAD_RWLOCK_T],
+        size: [__PTHREAD_INITIALIZER_BYTE; __SIZEOF_PTHREAD_RWLOCK_T],
     };
 }
 pub const NCCS: usize = 32;
-pub const __SIZEOF_PTHREAD_ATTR_T: usize = 56;
-pub const __SIZEOF_PTHREAD_MUTEX_T: usize = 40;
-pub const __SIZEOF_PTHREAD_MUTEXATTR_T: usize = 4;
-pub const __SIZEOF_PTHREAD_COND_T: usize = 48;
-pub const __SIZEOF_PTHREAD_CONDATTR_T: usize = 4;
-pub const __SIZEOF_PTHREAD_RWLOCK_T: usize = 56;
-pub const __SIZEOF_PTHREAD_RWLOCKATTR_T: usize = 8;
+cfg_if! {
+    if #[cfg(target_os = "espidf")] {
+        const __PTHREAD_INITIALIZER_BYTE: u8 = 0xff;
+        pub const __SIZEOF_PTHREAD_ATTR_T: usize = 32;
+        pub const __SIZEOF_PTHREAD_MUTEX_T: usize = 4;
+        pub const __SIZEOF_PTHREAD_MUTEXATTR_T: usize = 12;
+        pub const __SIZEOF_PTHREAD_COND_T: usize = 4;
+        pub const __SIZEOF_PTHREAD_CONDATTR_T: usize = 8;
+        pub const __SIZEOF_PTHREAD_RWLOCK_T: usize = 4;
+        pub const __SIZEOF_PTHREAD_RWLOCKATTR_T: usize = 12;
+    } else {
+        const __PTHREAD_INITIALIZER_BYTE: u8 = 0;
+        pub const __SIZEOF_PTHREAD_ATTR_T: usize = 56;
+        pub const __SIZEOF_PTHREAD_MUTEX_T: usize = 40;
+        pub const __SIZEOF_PTHREAD_MUTEXATTR_T: usize = 4;
+        pub const __SIZEOF_PTHREAD_COND_T: usize = 48;
+        pub const __SIZEOF_PTHREAD_CONDATTR_T: usize = 4;
+        pub const __SIZEOF_PTHREAD_RWLOCK_T: usize = 56;
+        pub const __SIZEOF_PTHREAD_RWLOCKATTR_T: usize = 8;
+    }
+}
 pub const __SIZEOF_PTHREAD_BARRIER_T: usize = 32;
 pub const __SIZEOF_PTHREAD_BARRIERATTR_T: usize = 4;
 pub const __PTHREAD_MUTEX_HAVE_PREV: usize = 1;
@@ -364,11 +388,6 @@ pub const O_NONBLOCK: ::c_int = 16384;
 pub const O_ACCMODE: ::c_int = 3;
 pub const O_CLOEXEC: ::c_int = 0x80000;
 
-pub const POLLIN: ::c_short = 0x1;
-pub const POLLPRI: ::c_short = 0x2;
-pub const POLLERR: ::c_short = 0x8;
-pub const POLLNVAL: ::c_short = 0x20;
-
 pub const RTLD_LAZY: ::c_int = 0x1;
 
 pub const STDIN_FILENO: ::c_int = 0;
@@ -379,7 +398,6 @@ pub const SEEK_SET: ::c_int = 0;
 pub const SEEK_CUR: ::c_int = 1;
 pub const SEEK_END: ::c_int = 2;
 
-pub const FIONBIO: ::c_ulong = 1;
 pub const FIOCLEX: ::c_ulong = 0x20006601;
 pub const FIONCLEX: ::c_ulong = 0x20006602;
 
@@ -406,7 +424,6 @@ pub const S_IROTH: ::mode_t = 4;
 pub const S_IWOTH: ::mode_t = 2;
 pub const S_IXOTH: ::mode_t = 1;
 
-pub const SOL_SOCKET: ::c_int = 65535;
 pub const SOL_TCP: ::c_int = 6;
 
 pub const PF_UNSPEC: ::c_int = 0;
@@ -415,7 +432,6 @@ pub const PF_INET6: ::c_int = 23;
 
 pub const AF_UNSPEC: ::c_int = 0;
 pub const AF_INET: ::c_int = 2;
-pub const AF_INET6: ::c_int = 23;
 
 pub const CLOCK_REALTIME: ::clockid_t = 1;
 pub const CLOCK_MONOTONIC: ::clockid_t = 4;
@@ -423,14 +439,6 @@ pub const CLOCK_BOOTTIME: ::clockid_t = 4;
 
 pub const SOCK_STREAM: ::c_int = 1;
 pub const SOCK_DGRAM: ::c_int = 2;
-
-pub const MSG_OOB: ::c_int = 1;
-pub const MSG_PEEK: ::c_int = 2;
-pub const MSG_DONTWAIT: ::c_int = 4;
-pub const MSG_DONTROUTE: ::c_int = 0;
-pub const MSG_WAITALL: ::c_int = 0;
-pub const MSG_MORE: ::c_int = 0;
-pub const MSG_NOSIGNAL: ::c_int = 0;
 
 pub const SHUT_RD: ::c_int = 0;
 pub const SHUT_WR: ::c_int = 1;
@@ -547,6 +555,13 @@ pub const EAI_MEMORY: ::c_int = -304;
 pub const EAI_NONAME: ::c_int = -305;
 pub const EAI_SOCKTYPE: ::c_int = -307;
 
+pub const EXIT_SUCCESS: ::c_int = 0;
+pub const EXIT_FAILURE: ::c_int = 1;
+
+pub const PRIO_PROCESS: ::c_int = 0;
+pub const PRIO_PGRP: ::c_int = 1;
+pub const PRIO_USER: ::c_int = 2;
+
 f! {
     pub fn FD_CLR(fd: ::c_int, set: *mut fd_set) -> () {
         let bits = ::mem::size_of_val(&(*set).fds_bits[0]) * 8;
@@ -555,7 +570,7 @@ f! {
         return
     }
 
-    pub fn FD_ISSET(fd: ::c_int, set: *mut fd_set) -> bool {
+    pub fn FD_ISSET(fd: ::c_int, set: *const fd_set) -> bool {
         let bits = ::mem::size_of_val(&(*set).fds_bits[0]) * 8;
         let fd = fd as usize;
         return ((*set).fds_bits[fd / bits] & (1 << (fd % bits))) != 0
@@ -580,18 +595,10 @@ extern "C" {
     pub fn setrlimit(resource: ::c_int, rlim: *const ::rlimit) -> ::c_int;
 
     #[cfg_attr(target_os = "linux", link_name = "__xpg_strerror_r")]
-    pub fn strerror_r(
-        errnum: ::c_int,
-        buf: *mut c_char,
-        buflen: ::size_t,
-    ) -> ::c_int;
+    pub fn strerror_r(errnum: ::c_int, buf: *mut c_char, buflen: ::size_t) -> ::c_int;
 
     pub fn sem_destroy(sem: *mut sem_t) -> ::c_int;
-    pub fn sem_init(
-        sem: *mut sem_t,
-        pshared: ::c_int,
-        value: ::c_uint,
-    ) -> ::c_int;
+    pub fn sem_init(sem: *mut sem_t, pshared: ::c_int, value: ::c_uint) -> ::c_int;
 
     pub fn abs(i: ::c_int) -> ::c_int;
     pub fn atof(s: *const ::c_char) -> ::c_double;
@@ -599,22 +606,25 @@ extern "C" {
     pub fn rand() -> ::c_int;
     pub fn srand(seed: ::c_uint);
 
-    pub fn bind(fd: ::c_int, addr: *const sockaddr, len: socklen_t)
-        -> ::c_int;
-    pub fn clock_settime(
-        clock_id: ::clockid_t,
-        tp: *const ::timespec,
-    ) -> ::c_int;
-    pub fn clock_gettime(
-        clock_id: ::clockid_t,
-        tp: *mut ::timespec,
-    ) -> ::c_int;
-    pub fn clock_getres(
-        clock_id: ::clockid_t,
-        res: *mut ::timespec,
-    ) -> ::c_int;
+    #[cfg(not(all(
+        libc_cfg_target_vendor,
+        target_arch = "powerpc",
+        target_vendor = "nintendo"
+    )))]
+    #[cfg_attr(target_os = "espidf", link_name = "lwip_bind")]
+    pub fn bind(fd: ::c_int, addr: *const sockaddr, len: socklen_t) -> ::c_int;
+    pub fn clock_settime(clock_id: ::clockid_t, tp: *const ::timespec) -> ::c_int;
+    pub fn clock_gettime(clock_id: ::clockid_t, tp: *mut ::timespec) -> ::c_int;
+    pub fn clock_getres(clock_id: ::clockid_t, res: *mut ::timespec) -> ::c_int;
+    #[cfg_attr(target_os = "espidf", link_name = "lwip_close")]
     pub fn closesocket(sockfd: ::c_int) -> ::c_int;
     pub fn ioctl(fd: ::c_int, request: ::c_ulong, ...) -> ::c_int;
+    #[cfg(not(all(
+        libc_cfg_target_vendor,
+        target_arch = "powerpc",
+        target_vendor = "nintendo"
+    )))]
+    #[cfg_attr(target_os = "espidf", link_name = "lwip_recvfrom")]
     pub fn recvfrom(
         fd: ::c_int,
         buf: *mut ::c_void,
@@ -623,6 +633,11 @@ extern "C" {
         addr: *mut sockaddr,
         addr_len: *mut socklen_t,
     ) -> isize;
+    #[cfg(not(all(
+        libc_cfg_target_vendor,
+        target_arch = "powerpc",
+        target_vendor = "nintendo"
+    )))]
     pub fn getnameinfo(
         sa: *const sockaddr,
         salen: socklen_t,
@@ -656,11 +671,7 @@ extern "C" {
         buflen: ::size_t,
         result: *mut *mut ::group,
     ) -> ::c_int;
-    pub fn pthread_sigmask(
-        how: ::c_int,
-        set: *const sigset_t,
-        oldset: *mut sigset_t,
-    ) -> ::c_int;
+    pub fn pthread_sigmask(how: ::c_int, set: *const sigset_t, oldset: *mut sigset_t) -> ::c_int;
     pub fn sem_open(name: *const ::c_char, oflag: ::c_int, ...) -> *mut sem_t;
     pub fn getgrnam(name: *const ::c_char) -> *mut ::group;
     pub fn pthread_kill(thread: ::pthread_t, sig: ::c_int) -> ::c_int;
@@ -692,12 +703,18 @@ extern "C" {
 }
 
 cfg_if! {
-    if #[cfg(target_arch = "arm")] {
+    if #[cfg(target_os = "espidf")] {
+        mod espidf;
+        pub use self::espidf::*;
+    } else if #[cfg(target_arch = "arm")] {
         mod arm;
         pub use self::arm::*;
     } else if #[cfg(target_arch = "aarch64")] {
         mod aarch64;
         pub use self::aarch64::*;
+    } else if #[cfg(target_arch = "powerpc")] {
+        mod powerpc;
+        pub use self::powerpc::*;
     } else {
         // Only tested on ARM so far. Other platforms might have different
         // definitions for types and constants.

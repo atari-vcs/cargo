@@ -35,8 +35,7 @@ mod syn_parse {
 }
 
 #[cfg(not(syn_only))]
-mod libsyntax_parse {
-    extern crate rustc_ast;
+mod librustc_parse {
     extern crate rustc_data_structures;
     extern crate rustc_errors;
     extern crate rustc_parse;
@@ -59,7 +58,7 @@ mod libsyntax_parse {
             }
         }
 
-        rustc_ast::with_globals(Edition::Edition2018, || {
+        rustc_span::create_session_if_not_set_then(Edition::Edition2018, |_| {
             let cm = Lrc::new(SourceMap::new(FilePathMapping::empty()));
             let emitter = Box::new(SilentEmitter);
             let handler = Handler::with_emitter(false, None, emitter);
@@ -116,11 +115,11 @@ fn main() {
     repo::clone_rust();
 
     macro_rules! testcases {
-        ($($(#[$cfg:meta])* $name:path,)*) => {
+        ($($(#[$cfg:meta])* $name:ident,)*) => {
             vec![
                 $(
                     $(#[$cfg])*
-                    (stringify!($name), $name as fn(&str) -> Result<(), ()>),
+                    (stringify!($name), $name::bench as fn(&str) -> Result<(), ()>),
                 )*
             ]
         };
@@ -140,12 +139,12 @@ fn main() {
 
     for (name, f) in testcases!(
         #[cfg(not(syn_only))]
-        read_from_disk::bench,
+        read_from_disk,
         #[cfg(not(syn_only))]
-        tokenstream_parse::bench,
-        syn_parse::bench,
+        tokenstream_parse,
+        syn_parse,
         #[cfg(not(syn_only))]
-        libsyntax_parse::bench,
+        librustc_parse,
     ) {
         eprint!("{:20}", format!("{}:", name));
         let elapsed = exec(f);

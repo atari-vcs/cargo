@@ -1,5 +1,5 @@
 #!/bin/bash
-# To run this, you need to first install cargo-vendor.
+# To run this, you need to first install cargo-lock.
 #
 # TODO: this script has a known bug in: if the Debian patches being applied,
 # changes the set of dependencies, then "cargo vendor" is not re-run in order
@@ -11,7 +11,7 @@ set -e
 SCRIPTDIR="$(dirname "$(readlink -f "$0")")"
 
 not_needed() {
-	diff -ru Cargo.lock.orig Cargo.lock | grep '^-"checksum' | cut '-d ' -f2-3
+	diff -ur packages-before packages-after | grep "^-- " | cut -d' ' -f2-3
 }
 
 ghetto_parse_cargo() {
@@ -50,6 +50,7 @@ replace-with = "vendored-sources"
 directory = "$PWD/vendor"
 eof
 cargo update
+cargo lock list > packages-before
 cp Cargo.lock Cargo.lock.orig
 
 if [ -d debcargo-conf ]; then ( cd debcargo-conf && git pull );
@@ -105,6 +106,7 @@ done; $x ); do
 done
 find vendor/*/debian/patches -name '*~' -delete || true
 cargo update
+cargo lock list > packages-after
 pruned_paths | while read x; do echo >&2 "$0: removing, because debcargo-conf patches makes it obsolete: $x"; rm -rf "$x"; done
 
 # remove excluded files
@@ -120,7 +122,7 @@ for i in *; do (
 	if grep -q excludes ../../debcargo-conf/src/$debname/debian/debcargo.toml 2>/dev/null; then
 		sed -nre 's/.*excludes\s*=\s*(\[[^]]*\]).*/\1/p' \
 		  ../../debcargo-conf/src/$i/debian/debcargo.toml \
-		  | python -c "import ast, sys; x=ast.literal_eval(sys.stdin.read()); print('\n'.join((i[:-3] if i.endswith('/**') else i) for i in x));" \
+		  | python3 -c "import ast, sys; x=ast.literal_eval(sys.stdin.read()); print('\n'.join((i[:-3] if i.endswith('/**') else i) for i in x));" \
 		  | while read x; do echo >&2 "$0: removing, since it's excluded by debcargo-conf: vendor/$i/$x"; rm -rf $x; done
 	fi
 ); done; )
@@ -139,6 +141,7 @@ for i in *; do (
 	if [ -d debian/patches ]; then
 		rm -rf "../../debcargo-conf/src/$debname/debian/patches"
 		cp -a debian/patches "../../debcargo-conf/src/$debname/debian/"
+		rm -rf .pc
 	fi
 ); done; )
 ( cd debcargo-conf
@@ -152,7 +155,7 @@ fi
 )
 
 echo >&2 "$0: cleaning up..."
-rm -rf .cargo Cargo.lock debcargo-conf
+rm -rf .cargo Cargo.lock debcargo-conf packages-before packages-after
 
 echo >&2 "$0: restoring original Cargo.lock"
 mv Cargo.lock.orig Cargo.lock

@@ -1,17 +1,16 @@
-#![allow(unknown_lints)]
-#![allow(clippy::identity_op)] // used for vertical alignment
+#![allow(clippy::all)]
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::fs::File;
 use std::io::prelude::*;
-use std::io::Cursor;
+use std::io::{Cursor, SeekFrom};
 use std::time::Instant;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, format_err, Context, Result};
 use curl::easy::{Easy, List};
 use percent_encoding::{percent_encode, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
-use serde_json;
 use url::Url;
 
 pub struct Registry {
@@ -55,8 +54,9 @@ pub struct NewCrate {
     pub license_file: Option<String>,
     pub repository: Option<String>,
     pub badges: BTreeMap<String, BTreeMap<String, String>>,
-    #[serde(default)]
     pub links: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub v: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -123,11 +123,84 @@ struct Crates {
     crates: Vec<Crate>,
     meta: TotalCrates,
 }
-impl Registry {
-    pub fn new(host: String, token: Option<String>) -> Registry {
-        Registry::new_handle(host, token, Easy::new())
-    }
 
+#[derive(Debug)]
+pub enum ResponseError {
+    Curl(curl::Error),
+    Api {
+        code: u32,
+        errors: Vec<String>,
+    },
+    Code {
+        code: u32,
+        headers: Vec<String>,
+        body: String,
+    },
+    Other(anyhow::Error),
+}
+
+impl std::error::Error for ResponseError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ResponseError::Curl(..) => None,
+            ResponseError::Api { .. } => None,
+            ResponseError::Code { .. } => None,
+            ResponseError::Other(e) => Some(e.as_ref()),
+        }
+    }
+}
+
+impl fmt::Display for ResponseError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ResponseError::Curl(e) => write!(f, "{}", e),
+            ResponseError::Api { code, errors } => {
+                f.write_str("the remote server responded with an error")?;
+                if *code != 200 {
+                    write!(f, " (status {} {})", code, reason(*code))?;
+                };
+                write!(f, ": {}", errors.join(", "))
+            }
+            ResponseError::Code {
+                code,
+                headers,
+                body,
+            } => write!(
+                f,
+                "failed to get a 200 OK response, got {}\n\
+                 headers:\n\
+                 \t{}\n\
+                 body:\n\
+                 {}",
+                code,
+                headers.join("\n\t"),
+                body
+            ),
+            ResponseError::Other(..) => write!(f, "invalid response from server"),
+        }
+    }
+}
+
+impl From<curl::Error> for ResponseError {
+    fn from(error: curl::Error) -> Self {
+        ResponseError::Curl(error)
+    }
+}
+
+impl Registry {
+    /// Creates a new `Registry`.
+    ///
+    /// ## Example
+    ///
+    /// ```rust
+    /// use curl::easy::Easy;
+    /// use crates_io::Registry;
+    ///
+    /// let mut handle = Easy::new();
+    /// // If connecting to crates.io, a user-agent is required.
+    /// handle.useragent("my_crawler (example.com/info)");
+    /// let mut reg = Registry::new_handle(String::from("https://crates.io"), None, handle);
+    /// ```
     pub fn new_handle(host: String, token: Option<String>, handle: Easy) -> Registry {
         Registry {
             host,
@@ -141,9 +214,7 @@ impl Registry {
     }
 
     pub fn host_is_crates_io(&self) -> bool {
-        Url::parse(self.host())
-            .map(|u| u.host_str() == Some("crates.io"))
-            .unwrap_or(false)
+        is_url_crates_io(&self.host)
     }
 
     pub fn add_owners(&mut self, krate: &str, owners: &[&str]) -> Result<String> {
@@ -165,7 +236,7 @@ impl Registry {
         Ok(serde_json::from_str::<Users>(&body)?.users)
     }
 
-    pub fn publish(&mut self, krate: &NewCrate, tarball: &File) -> Result<Warnings> {
+    pub fn publish(&mut self, krate: &NewCrate, mut tarball: &File) -> Result<Warnings> {
         let json = serde_json::to_string(krate)?;
         // Prepare the body. The format of the upload request is:
         //
@@ -173,33 +244,26 @@ impl Registry {
         //      <json request> (metadata for the package)
         //      <le u32 of tarball>
         //      <source tarball>
-        let stat = tarball.metadata()?;
+
+        // NOTE: This can be replaced with `stream_len` if it is ever stabilized.
+        //
+        // This checks the length using seeking instead of metadata, because
+        // on some filesystems, getting the metadata will fail because
+        // the file was renamed in ops::package.
+        let tarball_len = tarball
+            .seek(SeekFrom::End(0))
+            .with_context(|| "failed to seek tarball")?;
+        tarball
+            .seek(SeekFrom::Start(0))
+            .with_context(|| "failed to seek tarball")?;
         let header = {
             let mut w = Vec::new();
-            w.extend(
-                [
-                    (json.len() >> 0) as u8,
-                    (json.len() >> 8) as u8,
-                    (json.len() >> 16) as u8,
-                    (json.len() >> 24) as u8,
-                ]
-                .iter()
-                .cloned(),
-            );
+            w.extend(&(json.len() as u32).to_le_bytes());
             w.extend(json.as_bytes().iter().cloned());
-            w.extend(
-                [
-                    (stat.len() >> 0) as u8,
-                    (stat.len() >> 8) as u8,
-                    (stat.len() >> 16) as u8,
-                    (stat.len() >> 24) as u8,
-                ]
-                .iter()
-                .cloned(),
-            );
+            w.extend(&(tarball_len as u32).to_le_bytes());
             w
         };
-        let size = stat.len() as usize + header.len();
+        let size = tarball_len as usize + header.len();
         let mut body = Cursor::new(header).chain(tarball);
 
         let url = format!("{}/api/v1/crates/new", self.host);
@@ -216,7 +280,25 @@ impl Registry {
         headers.append(&format!("Authorization: {}", token))?;
         self.handle.http_headers(headers)?;
 
-        let body = self.handle(&mut |buf| body.read(buf).unwrap_or(0))?;
+        let started = Instant::now();
+        let body = self
+            .handle(&mut |buf| body.read(buf).unwrap_or(0))
+            .map_err(|e| match e {
+                ResponseError::Code { code, .. }
+                    if code == 503
+                        && started.elapsed().as_secs() >= 29
+                        && self.host_is_crates_io() =>
+                {
+                    format_err!(
+                        "Request timed out after 30 seconds. If you're trying to \
+                         upload a crate it may be too large. If the crate is under \
+                         10MB in size, you can email help@crates.io for assistance.\n\
+                         Total size was {}.",
+                        tarball_len
+                    )
+                }
+                _ => e.into(),
+            })?;
 
         let response = if body.is_empty() {
             "{}".parse()?
@@ -310,15 +392,18 @@ impl Registry {
                 self.handle.upload(true)?;
                 self.handle.in_filesize(body.len() as u64)?;
                 self.handle(&mut |buf| body.read(buf).unwrap_or(0))
+                    .map_err(|e| e.into())
             }
-            None => self.handle(&mut |_| 0),
+            None => self.handle(&mut |_| 0).map_err(|e| e.into()),
         }
     }
 
-    fn handle(&mut self, read: &mut dyn FnMut(&mut [u8]) -> usize) -> Result<String> {
+    fn handle(
+        &mut self,
+        read: &mut dyn FnMut(&mut [u8]) -> usize,
+    ) -> std::result::Result<String, ResponseError> {
         let mut headers = Vec::new();
         let mut body = Vec::new();
-        let started;
         {
             let mut handle = self.handle.transfer();
             handle.read_function(|buf| Ok(read(buf)))?;
@@ -327,50 +412,36 @@ impl Registry {
                 Ok(data.len())
             })?;
             handle.header_function(|data| {
-                headers.push(String::from_utf8_lossy(data).into_owned());
+                // Headers contain trailing \r\n, trim them to make it easier
+                // to work with.
+                let s = String::from_utf8_lossy(data).trim().to_string();
+                headers.push(s);
                 true
             })?;
-            started = Instant::now();
             handle.perform()?;
         }
 
         let body = match String::from_utf8(body) {
             Ok(body) => body,
-            Err(..) => bail!("response body was not valid utf-8"),
+            Err(..) => {
+                return Err(ResponseError::Other(format_err!(
+                    "response body was not valid utf-8"
+                )))
+            }
         };
         let errors = serde_json::from_str::<ApiErrorList>(&body)
             .ok()
             .map(|s| s.errors.into_iter().map(|s| s.detail).collect::<Vec<_>>());
 
         match (self.handle.response_code()?, errors) {
-            (0, None) | (200, None) => {}
-            (503, None) if started.elapsed().as_secs() >= 29 && self.host_is_crates_io() => bail!(
-                "Request timed out after 30 seconds. If you're trying to \
-                 upload a crate it may be too large. If the crate is under \
-                 10MB in size, you can email help@crates.io for assistance."
-            ),
-            (code, Some(errors)) => {
-                let reason = reason(code);
-                bail!(
-                    "api errors (status {} {}): {}",
-                    code,
-                    reason,
-                    errors.join(", ")
-                )
-            }
-            (code, None) => bail!(
-                "failed to get a 200 OK response, got {}\n\
-                 headers:\n\
-                 \t{}\n\
-                 body:\n\
-                 {}",
+            (0, None) | (200, None) => Ok(body),
+            (code, Some(errors)) => Err(ResponseError::Api { code, errors }),
+            (code, None) => Err(ResponseError::Code {
                 code,
-                headers.join("\n\t"),
+                headers,
                 body,
-            ),
+            }),
         }
-
-        Ok(body)
     }
 }
 
@@ -421,4 +492,11 @@ fn reason(code: u32) -> &'static str {
         504 => "Gateway Timeout",
         _ => "<unknown>",
     }
+}
+
+/// Returns `true` if the host of the given URL is "crates.io".
+pub fn is_url_crates_io(url: &str) -> bool {
+    Url::parse(url)
+        .map(|u| u.host_str() == Some("crates.io"))
+        .unwrap_or(false)
 }

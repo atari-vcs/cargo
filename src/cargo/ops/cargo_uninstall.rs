@@ -1,14 +1,14 @@
-use anyhow::bail;
-use std::collections::BTreeSet;
-use std::env;
-
 use crate::core::PackageId;
 use crate::core::{PackageIdSpec, SourceId};
 use crate::ops::common_for_install_and_uninstall::*;
+use crate::sources::PathSource;
 use crate::util::errors::CargoResult;
-use crate::util::paths;
 use crate::util::Config;
 use crate::util::Filesystem;
+use anyhow::bail;
+use cargo_util::paths;
+use std::collections::BTreeSet;
+use std::env;
 
 pub fn uninstall(
     root: Option<&str>,
@@ -35,7 +35,7 @@ pub fn uninstall(
             match uninstall_one(&root, spec, bins, config) {
                 Ok(()) => succeeded.push(spec),
                 Err(e) => {
-                    crate::handle_error(&e, &mut config.shell());
+                    crate::display_error(&e, &mut config.shell());
                     failed.push(spec)
                 }
             }
@@ -84,10 +84,13 @@ pub fn uninstall_one(
 fn uninstall_cwd(root: &Filesystem, bins: &[String], config: &Config) -> CargoResult<()> {
     let tracker = InstallTracker::load(config, root)?;
     let source_id = SourceId::for_path(config.cwd())?;
-    let src = path_source(source_id, config)?;
-    let pkg = select_pkg(src, None, None, config, true, &mut |path| {
-        path.read_packages()
-    })?;
+    let mut src = path_source(source_id, config)?;
+    let pkg = select_pkg(
+        &mut src,
+        None,
+        |path: &mut PathSource<'_>| path.read_packages(),
+        config,
+    )?;
     let pkgid = pkg.package_id();
     uninstall_pkgid(root, tracker, pkgid, bins, config)
 }

@@ -1,33 +1,26 @@
 use std::collections::{BTreeSet, HashMap};
-use std::fmt::Display;
 use std::fs::{self, File};
 use std::io::prelude::*;
 use std::io::SeekFrom;
-use std::path::{self, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::SystemTime;
-
-use flate2::read::GzDecoder;
-use flate2::write::GzEncoder;
-use flate2::{Compression, GzBuilder};
-use log::debug;
-use serde_json::{self, json};
-use tar::{Archive, Builder, EntryType, Header};
-use termcolor::Color;
 
 use crate::core::compiler::{BuildConfig, CompileMode, DefaultExecutor, Executor};
-use crate::core::resolver::ResolveOpts;
-use crate::core::Feature;
-use crate::core::{
-    Package, PackageId, PackageIdSpec, PackageSet, Resolve, Source, SourceId, Verbosity, Workspace,
-};
-use crate::ops;
+use crate::core::resolver::CliFeatures;
+use crate::core::{Feature, Shell, Verbosity, Workspace};
+use crate::core::{Package, PackageId, PackageSet, Resolve, Source, SourceId};
 use crate::sources::PathSource;
-use crate::util::errors::{CargoResult, CargoResultExt};
-use crate::util::paths;
+use crate::util::errors::CargoResult;
 use crate::util::toml::TomlManifest;
-use crate::util::{self, internal, Config, FileLock};
+use crate::util::{self, restricted_names, Config, FileLock};
+use crate::{drop_println, ops};
+use anyhow::Context as _;
+use cargo_util::paths;
+use flate2::read::GzDecoder;
+use flate2::{Compression, GzBuilder};
+use log::debug;
+use tar::{Archive, Builder, EntryType, Header, HeaderMode};
 
 pub struct PackageOpts<'cfg> {
     pub config: &'cfg Config,
@@ -36,13 +29,37 @@ pub struct PackageOpts<'cfg> {
     pub allow_dirty: bool,
     pub verify: bool,
     pub jobs: Option<u32>,
-    pub target: Option<String>,
-    pub features: Vec<String>,
-    pub all_features: bool,
-    pub no_default_features: bool,
+    pub targets: Vec<String>,
+    pub cli_features: CliFeatures,
 }
 
-static VCS_INFO_FILE: &str = ".cargo_vcs_info.json";
+const VCS_INFO_FILE: &str = ".cargo_vcs_info.json";
+
+struct ArchiveFile {
+    /// The relative path in the archive (not including the top-level package
+    /// name directory).
+    rel_path: PathBuf,
+    /// String variant of `rel_path`, for convenience.
+    rel_str: String,
+    /// The contents to add to the archive.
+    contents: FileContents,
+}
+
+enum FileContents {
+    /// Absolute path to the file on disk to add to the archive.
+    OnDisk(PathBuf),
+    /// Generates a file.
+    Generated(GeneratedFile),
+}
+
+enum GeneratedFile {
+    /// Generates `Cargo.toml` by rewriting the original.
+    Manifest,
+    /// Generates `Cargo.lock` in some cases (like if there is a binary).
+    Lockfile,
+    /// Adds a `.cargo-vcs_info.json` file if in a (clean) git repo.
+    VcsInfo(String),
+}
 
 pub fn package(ws: &Workspace<'_>, opts: &PackageOpts<'_>) -> CargoResult<Option<FileLock>> {
     if ws.root().join("Cargo.lock").exists() {
@@ -61,50 +78,36 @@ pub fn package(ws: &Workspace<'_>, opts: &PackageOpts<'_>) -> CargoResult<Option
         check_metadata(pkg, config)?;
     }
 
-    verify_dependencies(pkg)?;
-
     if !pkg.manifest().exclude().is_empty() && !pkg.manifest().include().is_empty() {
         config.shell().warn(
             "both package.include and package.exclude are specified; \
              the exclude list will be ignored",
         )?;
     }
-    // `list_files` outputs warnings as a side effect, so only do it once.
     let src_files = src.list_files(pkg)?;
 
-    // Make sure a VCS info file is not included in source, regardless of if
-    // we produced the file above, and in particular if we did not.
-    check_vcs_file_collision(pkg, &src_files)?;
-
     // Check (git) repository state, getting the current commit hash if not
-    // dirty. This will `bail!` if dirty, unless allow_dirty. Produce json
-    // info for any sha1 (HEAD revision) returned.
+    // dirty.
     let vcs_info = if !opts.allow_dirty {
-        check_repo_state(pkg, &src_files, config, opts.allow_dirty)?
-            .map(|h| json!({"git":{"sha1": h}}))
+        // This will error if a dirty repo is found.
+        check_repo_state(pkg, &src_files, config)?
+            .map(|h| format!("{{\n  \"git\": {{\n    \"sha1\": \"{}\"\n  }}\n}}\n", h))
     } else {
         None
     };
 
+    let ar_files = build_ar_list(ws, pkg, src_files, vcs_info)?;
+
     if opts.list {
-        let root = pkg.root();
-        let mut list: Vec<_> = src
-            .list_files(pkg)?
-            .iter()
-            .map(|file| file.strip_prefix(root).unwrap().to_path_buf())
-            .collect();
-        if pkg.include_lockfile() && !list.contains(&PathBuf::from("Cargo.lock")) {
-            // A generated Cargo.lock will be included.
-            list.push("Cargo.lock".into());
-        }
-        if vcs_info.is_some() {
-            list.push(Path::new(VCS_INFO_FILE).to_path_buf());
-        }
-        list.sort_unstable();
-        for file in list.iter() {
-            println!("{}", file.display());
+        for ar_file in ar_files {
+            drop_println!(config, "{}", ar_file.rel_str);
         }
         return Ok(None);
+    }
+
+    // Check that the package dependencies are safe to deploy.
+    for dep in pkg.dependencies() {
+        super::check_dep_has_version(dep, false)?;
     }
 
     let filename = format!("{}-{}.crate", pkg.name(), pkg.version());
@@ -122,20 +125,143 @@ pub fn package(ws: &Workspace<'_>, opts: &PackageOpts<'_>) -> CargoResult<Option
         .shell()
         .status("Packaging", pkg.package_id().to_string())?;
     dst.file().set_len(0)?;
-    tar(ws, &src_files, vcs_info.as_ref(), dst.file(), &filename)
-        .chain_err(|| anyhow::format_err!("failed to prepare local package for uploading"))?;
+    tar(ws, ar_files, dst.file(), &filename)
+        .with_context(|| "failed to prepare local package for uploading")?;
     if opts.verify {
         dst.seek(SeekFrom::Start(0))?;
-        run_verify(ws, &dst, opts).chain_err(|| "failed to verify package tarball")?
+        run_verify(ws, &dst, opts).with_context(|| "failed to verify package tarball")?
     }
     dst.seek(SeekFrom::Start(0))?;
     {
         let src_path = dst.path();
         let dst_path = dst.parent().join(&filename);
         fs::rename(&src_path, &dst_path)
-            .chain_err(|| "failed to move temporary tarball into final location")?;
+            .with_context(|| "failed to move temporary tarball into final location")?;
     }
     Ok(Some(dst))
+}
+
+/// Builds list of files to archive.
+fn build_ar_list(
+    ws: &Workspace<'_>,
+    pkg: &Package,
+    src_files: Vec<PathBuf>,
+    vcs_info: Option<String>,
+) -> CargoResult<Vec<ArchiveFile>> {
+    let mut result = Vec::new();
+    let root = pkg.root();
+    for src_file in src_files {
+        let rel_path = src_file.strip_prefix(&root)?.to_path_buf();
+        check_filename(&rel_path, &mut ws.config().shell())?;
+        let rel_str = rel_path
+            .to_str()
+            .ok_or_else(|| {
+                anyhow::format_err!("non-utf8 path in source directory: {}", rel_path.display())
+            })?
+            .to_string();
+        match rel_str.as_ref() {
+            "Cargo.toml" => {
+                result.push(ArchiveFile {
+                    rel_path: PathBuf::from("Cargo.toml.orig"),
+                    rel_str: "Cargo.toml.orig".to_string(),
+                    contents: FileContents::OnDisk(src_file),
+                });
+                result.push(ArchiveFile {
+                    rel_path,
+                    rel_str,
+                    contents: FileContents::Generated(GeneratedFile::Manifest),
+                });
+            }
+            "Cargo.lock" => continue,
+            VCS_INFO_FILE => anyhow::bail!(
+                "invalid inclusion of reserved file name \
+                     {} in package source",
+                VCS_INFO_FILE
+            ),
+            _ => {
+                result.push(ArchiveFile {
+                    rel_path,
+                    rel_str,
+                    contents: FileContents::OnDisk(src_file),
+                });
+            }
+        }
+    }
+    if pkg.include_lockfile() {
+        result.push(ArchiveFile {
+            rel_path: PathBuf::from("Cargo.lock"),
+            rel_str: "Cargo.lock".to_string(),
+            contents: FileContents::Generated(GeneratedFile::Lockfile),
+        });
+    }
+    if let Some(vcs_info) = vcs_info {
+        result.push(ArchiveFile {
+            rel_path: PathBuf::from(VCS_INFO_FILE),
+            rel_str: VCS_INFO_FILE.to_string(),
+            contents: FileContents::Generated(GeneratedFile::VcsInfo(vcs_info)),
+        });
+    }
+    if let Some(license_file) = &pkg.manifest().metadata().license_file {
+        let license_path = Path::new(license_file);
+        let abs_license_path = paths::normalize_path(&pkg.root().join(license_path));
+        if abs_license_path.exists() {
+            match abs_license_path.strip_prefix(&pkg.root()) {
+                Ok(rel_license_path) => {
+                    if !result.iter().any(|ar| ar.rel_path == rel_license_path) {
+                        result.push(ArchiveFile {
+                            rel_path: rel_license_path.to_path_buf(),
+                            rel_str: rel_license_path
+                                .to_str()
+                                .expect("everything was utf8")
+                                .to_string(),
+                            contents: FileContents::OnDisk(abs_license_path),
+                        });
+                    }
+                }
+                Err(_) => {
+                    // The license exists somewhere outside of the package.
+                    let license_name = license_path.file_name().unwrap();
+                    if result
+                        .iter()
+                        .any(|ar| ar.rel_path.file_name().unwrap() == license_name)
+                    {
+                        ws.config().shell().warn(&format!(
+                            "license-file `{}` appears to be a path outside of the package, \
+                            but there is already a file named `{}` in the root of the package. \
+                            The archived crate will contain the copy in the root of the package. \
+                            Update the license-file to point to the path relative \
+                            to the root of the package to remove this warning.",
+                            license_file,
+                            license_name.to_str().unwrap()
+                        ))?;
+                    } else {
+                        result.push(ArchiveFile {
+                            rel_path: PathBuf::from(license_name),
+                            rel_str: license_name.to_str().unwrap().to_string(),
+                            contents: FileContents::OnDisk(abs_license_path),
+                        });
+                    }
+                }
+            }
+        } else {
+            let rel_msg = if license_path.is_absolute() {
+                "".to_string()
+            } else {
+                format!(" (relative to `{}`)", pkg.root().display())
+            };
+            ws.config().shell().warn(&format!(
+                "license-file `{}` does not appear to exist{}.\n\
+                Please update the license-file setting in the manifest at `{}`\n\
+                This may become a hard error in the future.",
+                license_path.display(),
+                rel_msg,
+                pkg.manifest_path().display()
+            ))?;
+        }
+    }
+    result.sort_unstable_by(|a, b| a.rel_path.cmp(&b.rel_path));
+
+    Ok(result)
 }
 
 /// Construct `Cargo.lock` for the package to be published.
@@ -145,7 +271,12 @@ fn build_lock(ws: &Workspace<'_>) -> CargoResult<String> {
 
     // Convert Package -> TomlManifest -> Manifest -> Package
     let orig_pkg = ws.current()?;
-    let toml_manifest = Rc::new(orig_pkg.manifest().original().prepare_for_publish(config)?);
+    let toml_manifest = Rc::new(
+        orig_pkg
+            .manifest()
+            .original()
+            .prepare_for_publish(ws, orig_pkg.root())?,
+    );
     let package_root = orig_pkg.root();
     let source_id = orig_pkg.package_id().source_id();
     let (manifest, _nested_paths) =
@@ -153,21 +284,15 @@ fn build_lock(ws: &Workspace<'_>) -> CargoResult<String> {
     let new_pkg = Package::new(manifest, orig_pkg.manifest_path());
 
     // Regenerate Cargo.lock using the old one as a guide.
-    let specs = vec![PackageIdSpec::from_package_id(new_pkg.package_id())];
     let tmp_ws = Workspace::ephemeral(new_pkg, ws.config(), None, true)?;
-    let new_resolve = ops::resolve_ws_with_opts(&tmp_ws, ResolveOpts::everything(), &specs)?;
+    let (pkg_set, mut new_resolve) = ops::resolve_ws(&tmp_ws)?;
 
     if let Some(orig_resolve) = orig_resolve {
-        compare_resolve(
-            config,
-            tmp_ws.current()?,
-            &orig_resolve,
-            &new_resolve.targeted_resolve,
-        )?;
+        compare_resolve(config, tmp_ws.current()?, &orig_resolve, &new_resolve)?;
     }
-    check_yanked(config, &new_resolve.pkg_set, &new_resolve.targeted_resolve)?;
+    check_yanked(config, &pkg_set, &new_resolve)?;
 
-    ops::resolve_to_string(&tmp_ws, &new_resolve.targeted_resolve)
+    ops::resolve_to_string(&tmp_ws, &mut new_resolve)
 }
 
 // Checks that the package has some piece of metadata that a human can
@@ -207,33 +332,18 @@ fn check_metadata(pkg: &Package, config: &Config) -> CargoResult<()> {
             things = things
         ))?
     }
+
     Ok(())
 }
 
-// Checks that the package dependencies are safe to deploy.
-fn verify_dependencies(pkg: &Package) -> CargoResult<()> {
-    for dep in pkg.dependencies() {
-        if dep.source_id().is_path() && !dep.specified_req() && dep.is_transitive() {
-            anyhow::bail!(
-                "all path dependencies must have a version specified \
-                 when packaging.\ndependency `{}` does not specify \
-                 a version.",
-                dep.name_in_toml()
-            )
-        }
-    }
-    Ok(())
-}
-
-// Checks if the package source is in a *git* DVCS repository. If *git*, and
-// the source is *dirty* (e.g., has uncommitted changes) and not `allow_dirty`
-// then `bail!` with an informative message. Otherwise return the sha1 hash of
-// the current *HEAD* commit, or `None` if *dirty*.
+/// Checks if the package source is in a *git* DVCS repository. If *git*, and
+/// the source is *dirty* (e.g., has uncommitted changes) then `bail!` with an
+/// informative message. Otherwise return the sha1 hash of the current *HEAD*
+/// commit, or `None` if no repo is found.
 fn check_repo_state(
     p: &Package,
     src_files: &[PathBuf],
     config: &Config,
-    allow_dirty: bool,
 ) -> CargoResult<Option<String>> {
     if let Ok(repo) = git2::Repository::discover(p.root()) {
         if let Some(workdir) = repo.workdir() {
@@ -246,7 +356,7 @@ fn check_repo_state(
                         "found (git) Cargo.toml at {:?} in workdir {:?}",
                         path, workdir
                     );
-                    return git(p, src_files, &repo, allow_dirty);
+                    return git(p, src_files, &repo);
                 }
             }
             config.shell().verbose(|shell| {
@@ -271,227 +381,157 @@ fn check_repo_state(
         p: &Package,
         src_files: &[PathBuf],
         repo: &git2::Repository,
-        allow_dirty: bool,
     ) -> CargoResult<Option<String>> {
-        let workdir = repo.workdir().unwrap();
+        // This is a collection of any dirty or untracked files. This covers:
+        // - new/modified/deleted/renamed/type change (index or worktree)
+        // - untracked files (which are "new" worktree files)
+        // - ignored (in case the user has an `include` directive that
+        //   conflicts with .gitignore).
+        let mut dirty_files = Vec::new();
+        collect_statuses(repo, &mut dirty_files)?;
+        // Include each submodule so that the error message can provide
+        // specifically *which* files in a submodule are modified.
+        status_submodules(repo, &mut dirty_files)?;
 
-        let mut sub_repos = Vec::new();
-        open_submodules(repo, &mut sub_repos)?;
-        // Sort so that longest paths are first, to check nested submodules first.
-        sub_repos.sort_unstable_by(|a, b| b.0.as_os_str().len().cmp(&a.0.as_os_str().len()));
-        let submodule_dirty = |path: &Path| -> bool {
-            sub_repos
-                .iter()
-                .filter(|(sub_path, _sub_repo)| path.starts_with(sub_path))
-                .any(|(sub_path, sub_repo)| {
-                    let relative = path.strip_prefix(sub_path).unwrap();
-                    sub_repo
-                        .status_file(relative)
-                        .map(|status| status != git2::Status::CURRENT)
-                        .unwrap_or(false)
-                })
-        };
-
-        let dirty = src_files
+        // Find the intersection of dirty in git, and the src_files that would
+        // be packaged. This is a lazy n^2 check, but seems fine with
+        // thousands of files.
+        let dirty_src_files: Vec<String> = src_files
             .iter()
-            .filter(|file| {
-                let relative = file.strip_prefix(workdir).unwrap();
-                if let Ok(status) = repo.status_file(relative) {
-                    if status == git2::Status::CURRENT {
-                        false
-                    } else if relative.file_name().and_then(|s| s.to_str()).unwrap_or("")
-                        == "Cargo.lock"
-                    {
-                        // It is OK to include this file even if it is ignored.
-                        status != git2::Status::IGNORED
-                    } else {
-                        true
-                    }
-                } else {
-                    submodule_dirty(file)
-                }
-            })
+            .filter(|src_file| dirty_files.iter().any(|path| src_file.starts_with(path)))
             .map(|path| {
                 path.strip_prefix(p.root())
                     .unwrap_or(path)
                     .display()
                     .to_string()
             })
-            .collect::<Vec<_>>();
-        if dirty.is_empty() {
+            .collect();
+        if dirty_src_files.is_empty() {
             let rev_obj = repo.revparse_single("HEAD")?;
             Ok(Some(rev_obj.id().to_string()))
         } else {
-            if !allow_dirty {
-                anyhow::bail!(
-                    "{} files in the working directory contain changes that were \
-                     not yet committed into git:\n\n{}\n\n\
-                     to proceed despite this and include the uncommitted changes, pass the `--allow-dirty` flag",
-                    dirty.len(),
-                    dirty.join("\n")
-                )
-            }
-            Ok(None)
+            anyhow::bail!(
+                "{} files in the working directory contain changes that were \
+                 not yet committed into git:\n\n{}\n\n\
+                 to proceed despite this and include the uncommitted changes, pass the `--allow-dirty` flag",
+                dirty_src_files.len(),
+                dirty_src_files.join("\n")
+            )
         }
     }
 
-    /// Helper to recursively open all submodules.
-    fn open_submodules(
+    // Helper to collect dirty statuses for a single repo.
+    fn collect_statuses(
         repo: &git2::Repository,
-        sub_repos: &mut Vec<(PathBuf, git2::Repository)>,
+        dirty_files: &mut Vec<PathBuf>,
+    ) -> CargoResult<()> {
+        let mut status_opts = git2::StatusOptions::new();
+        // Exclude submodules, as they are being handled manually by recursing
+        // into each one so that details about specific files can be
+        // retrieved.
+        status_opts
+            .exclude_submodules(true)
+            .include_ignored(true)
+            .include_untracked(true);
+        let repo_statuses = repo.statuses(Some(&mut status_opts)).with_context(|| {
+            format!(
+                "failed to retrieve git status from repo {}",
+                repo.path().display()
+            )
+        })?;
+        let workdir = repo.workdir().unwrap();
+        let this_dirty = repo_statuses.iter().filter_map(|entry| {
+            let path = entry.path().expect("valid utf-8 path");
+            if path.ends_with("Cargo.lock") && entry.status() == git2::Status::IGNORED {
+                // It is OK to include Cargo.lock even if it is ignored.
+                return None;
+            }
+            // Use an absolute path, so that comparing paths is easier
+            // (particularly with submodules).
+            Some(workdir.join(path))
+        });
+        dirty_files.extend(this_dirty);
+        Ok(())
+    }
+
+    // Helper to collect dirty statuses while recursing into submodules.
+    fn status_submodules(
+        repo: &git2::Repository,
+        dirty_files: &mut Vec<PathBuf>,
     ) -> CargoResult<()> {
         for submodule in repo.submodules()? {
             // Ignore submodules that don't open, they are probably not initialized.
             // If its files are required, then the verification step should fail.
             if let Ok(sub_repo) = submodule.open() {
-                open_submodules(&sub_repo, sub_repos)?;
-                sub_repos.push((sub_repo.workdir().unwrap().to_owned(), sub_repo));
+                status_submodules(&sub_repo, dirty_files)?;
+                collect_statuses(&sub_repo, dirty_files)?;
             }
         }
         Ok(())
     }
 }
 
-// Checks for and `bail!` if a source file matches `ROOT/VCS_INFO_FILE`, since
-// this is now a Cargo reserved file name, and we don't want to allow forgery.
-fn check_vcs_file_collision(pkg: &Package, src_files: &[PathBuf]) -> CargoResult<()> {
-    let root = pkg.root();
-    let vcs_info_path = Path::new(VCS_INFO_FILE);
-    let collision = src_files
-        .iter()
-        .find(|&p| p.strip_prefix(root).unwrap() == vcs_info_path);
-    if collision.is_some() {
-        anyhow::bail!(
-            "Invalid inclusion of reserved file name \
-             {} in package source",
-            VCS_INFO_FILE
-        );
-    }
-    Ok(())
-}
-
 fn tar(
     ws: &Workspace<'_>,
-    src_files: &[PathBuf],
-    vcs_info: Option<&serde_json::Value>,
+    ar_files: Vec<ArchiveFile>,
     dst: &File,
     filename: &str,
 ) -> CargoResult<()> {
     // Prepare the encoder and its header.
     let filename = Path::new(filename);
     let encoder = GzBuilder::new()
-        .filename(util::path2bytes(filename)?)
+        .filename(paths::path2bytes(filename)?)
         .write(dst, Compression::best());
 
     // Put all package files into a compressed archive.
     let mut ar = Builder::new(encoder);
     let pkg = ws.current()?;
     let config = ws.config();
-    let root = pkg.root();
 
-    for src_file in src_files {
-        let relative = src_file.strip_prefix(root)?;
-        check_filename(relative)?;
-        let relative_str = relative.to_str().ok_or_else(|| {
-            anyhow::format_err!("non-utf8 path in source directory: {}", relative.display())
-        })?;
-        if relative_str == "Cargo.lock" {
-            // This is added manually below.
-            continue;
+    let base_name = format!("{}-{}", pkg.name(), pkg.version());
+    let base_path = Path::new(&base_name);
+    for ar_file in ar_files {
+        let ArchiveFile {
+            rel_path,
+            rel_str,
+            contents,
+        } = ar_file;
+        let ar_path = base_path.join(&rel_path);
+        config
+            .shell()
+            .verbose(|shell| shell.status("Archiving", &rel_str))?;
+        let mut header = Header::new_gnu();
+        match contents {
+            FileContents::OnDisk(disk_path) => {
+                let mut file = File::open(&disk_path).with_context(|| {
+                    format!("failed to open for archiving: `{}`", disk_path.display())
+                })?;
+                let metadata = file.metadata().with_context(|| {
+                    format!("could not learn metadata for: `{}`", disk_path.display())
+                })?;
+                header.set_metadata_in_mode(&metadata, HeaderMode::Deterministic);
+                header.set_cksum();
+                ar.append_data(&mut header, &ar_path, &mut file)
+                    .with_context(|| {
+                        format!("could not archive source file `{}`", disk_path.display())
+                    })?;
+            }
+            FileContents::Generated(generated_kind) => {
+                let contents = match generated_kind {
+                    GeneratedFile::Manifest => pkg.to_registry_toml(ws)?,
+                    GeneratedFile::Lockfile => build_lock(ws)?,
+                    GeneratedFile::VcsInfo(s) => s,
+                };
+                header.set_entry_type(EntryType::file());
+                header.set_mode(0o644);
+                header.set_size(contents.len() as u64);
+                // use something nonzero to avoid rust-lang/cargo#9512
+                header.set_mtime(1);
+                header.set_cksum();
+                ar.append_data(&mut header, &ar_path, contents.as_bytes())
+                    .with_context(|| format!("could not archive source file `{}`", rel_str))?;
+            }
         }
-        config
-            .shell()
-            .verbose(|shell| shell.status("Archiving", &relative_str))?;
-        let path = format!(
-            "{}-{}{}{}",
-            pkg.name(),
-            pkg.version(),
-            path::MAIN_SEPARATOR,
-            relative_str
-        );
-
-        // The `tar::Builder` type by default will build GNU archives, but
-        // unfortunately we force it here to use UStar archives instead. The
-        // UStar format has more limitations on the length of path name that it
-        // can encode, so it's not quite as nice to use.
-        //
-        // Older cargos, however, had a bug where GNU archives were interpreted
-        // as UStar archives. This bug means that if we publish a GNU archive
-        // which has fully filled out metadata it'll be corrupt when unpacked by
-        // older cargos.
-        //
-        // Hopefully in the future after enough cargos have been running around
-        // with the bugfixed tar-rs library we'll be able to switch this over to
-        // GNU archives, but for now we'll just say that you can't encode paths
-        // in archives that are *too* long.
-        //
-        // For an instance of this in the wild, use the tar-rs 0.3.3 library to
-        // unpack the selectors 0.4.0 crate on crates.io. Either that or take a
-        // look at rust-lang/cargo#2326.
-        let mut header = Header::new_ustar();
-        header
-            .set_path(&path)
-            .chain_err(|| format!("failed to add to archive: `{}`", relative_str))?;
-        let mut file = File::open(src_file)
-            .chain_err(|| format!("failed to open for archiving: `{}`", src_file.display()))?;
-        let metadata = file
-            .metadata()
-            .chain_err(|| format!("could not learn metadata for: `{}`", relative_str))?;
-        header.set_metadata(&metadata);
-
-        if relative_str == "Cargo.toml" {
-            let orig = Path::new(&path).with_file_name("Cargo.toml.orig");
-            header.set_path(&orig)?;
-            header.set_cksum();
-            ar.append(&header, &mut file).chain_err(|| {
-                internal(format!("could not archive source file `{}`", relative_str))
-            })?;
-
-            let toml = pkg.to_registry_toml(ws.config())?;
-            add_generated_file(&mut ar, &path, &toml, relative_str)?;
-        } else {
-            header.set_cksum();
-            ar.append(&header, &mut file).chain_err(|| {
-                internal(format!("could not archive source file `{}`", relative_str))
-            })?;
-        }
-    }
-
-    if let Some(json) = vcs_info {
-        let filename: PathBuf = Path::new(VCS_INFO_FILE).into();
-        debug_assert!(check_filename(&filename).is_ok());
-        let fnd = filename.display();
-        config
-            .shell()
-            .verbose(|shell| shell.status("Archiving", &fnd))?;
-        let path = format!(
-            "{}-{}{}{}",
-            pkg.name(),
-            pkg.version(),
-            path::MAIN_SEPARATOR,
-            fnd
-        );
-        let mut header = Header::new_ustar();
-        header
-            .set_path(&path)
-            .chain_err(|| format!("failed to add to archive: `{}`", fnd))?;
-        let json = format!("{}\n", serde_json::to_string_pretty(json)?);
-        add_generated_file(&mut ar, &path, &json, fnd)?;
-    }
-
-    if pkg.include_lockfile() {
-        let new_lock = build_lock(ws)?;
-
-        config
-            .shell()
-            .verbose(|shell| shell.status("Archiving", "Cargo.lock"))?;
-        let path = format!(
-            "{}-{}{}Cargo.lock",
-            pkg.name(),
-            pkg.version(),
-            path::MAIN_SEPARATOR
-        );
-        add_generated_file(&mut ar, &path, &new_lock, "Cargo.lock")?;
     }
 
     let encoder = ar.into_inner()?;
@@ -581,7 +621,7 @@ fn compare_resolve(
             "package `{}` added to the packaged Cargo.lock file{}",
             pkg_id, extra
         );
-        config.shell().status_with_color("Note", msg, Color::Cyan)?;
+        config.shell().note(msg)?;
     }
     Ok(())
 }
@@ -636,7 +676,7 @@ fn run_verify(ws: &Workspace<'_>, tar: &FileLock, opts: &PackageOpts<'_>) -> Car
 
     let rustc_args = if pkg
         .manifest()
-        .features()
+        .unstable_features()
         .require(Feature::public_dependency())
         .is_ok()
     {
@@ -651,11 +691,8 @@ fn run_verify(ws: &Workspace<'_>, tar: &FileLock, opts: &PackageOpts<'_>) -> Car
     ops::compile_with_exec(
         &ws,
         &ops::CompileOptions {
-            config,
-            build_config: BuildConfig::new(config, opts.jobs, &opts.target, CompileMode::Build)?,
-            features: opts.features.clone(),
-            no_default_features: opts.no_default_features,
-            all_features: opts.all_features,
+            build_config: BuildConfig::new(config, opts.jobs, &opts.targets, CompileMode::Build)?,
+            cli_features: opts.cli_features.clone(),
             spec: ops::Packages::Packages(Vec::new()),
             filter: ops::CompileFilter::Default {
                 required_features_filterable: true,
@@ -664,7 +701,7 @@ fn run_verify(ws: &Workspace<'_>, tar: &FileLock, opts: &PackageOpts<'_>) -> Car
             target_rustc_args: rustc_args,
             local_rustdoc_args: None,
             rustdoc_document_private_items: false,
-            export_dir: None,
+            honor_rust_version: true,
         },
         &exec,
     )?;
@@ -693,8 +730,8 @@ fn hash_all(path: &Path) -> CargoResult<HashMap<PathBuf, u64>> {
             let entry = entry?;
             let file_type = entry.file_type();
             if file_type.is_file() {
-                let contents = fs::read(entry.path())?;
-                let hash = util::hex::hash_u64(&contents);
+                let file = File::open(entry.path())?;
+                let hash = util::hex::hash_u64_file(&file)?;
                 result.insert(entry.path().to_path_buf(), hash);
             } else if file_type.is_symlink() {
                 let hash = util::hex::hash_u64(&fs::read_link(entry.path())?);
@@ -706,7 +743,7 @@ fn hash_all(path: &Path) -> CargoResult<HashMap<PathBuf, u64>> {
         }
         Ok(result)
     }
-    let result = wrap(path).chain_err(|| format!("failed to verify output at {:?}", path))?;
+    let result = wrap(path).with_context(|| format!("failed to verify output at {:?}", path))?;
     Ok(result)
 }
 
@@ -751,7 +788,7 @@ fn report_hash_difference(orig: &HashMap<PathBuf, u64>, after: &HashMap<PathBuf,
 //
 // To help out in situations like this, issue about weird filenames when
 // packaging as a "heads up" that something may not work on other platforms.
-fn check_filename(file: &Path) -> CargoResult<()> {
+fn check_filename(file: &Path, shell: &mut Shell) -> CargoResult<()> {
     let name = match file.file_name() {
         Some(name) => name,
         None => return Ok(()),
@@ -772,28 +809,12 @@ fn check_filename(file: &Path) -> CargoResult<()> {
             file.display()
         )
     }
-    Ok(())
-}
-
-fn add_generated_file<D: Display>(
-    ar: &mut Builder<GzEncoder<&File>>,
-    path: &str,
-    data: &str,
-    display: D,
-) -> CargoResult<()> {
-    let mut header = Header::new_ustar();
-    header.set_path(path)?;
-    header.set_entry_type(EntryType::file());
-    header.set_mode(0o644);
-    header.set_mtime(
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs(),
-    );
-    header.set_size(data.len() as u64);
-    header.set_cksum();
-    ar.append(&header, data.as_bytes())
-        .chain_err(|| internal(format!("could not archive source file `{}`", display)))?;
+    if restricted_names::is_windows_reserved_path(file) {
+        shell.warn(format!(
+            "file {} is a reserved Windows filename, \
+                it will not work on Windows platforms",
+            file.display()
+        ))?;
+    }
     Ok(())
 }

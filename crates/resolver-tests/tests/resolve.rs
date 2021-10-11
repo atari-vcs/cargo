@@ -1,6 +1,7 @@
 use cargo::core::dependency::DepKind;
-use cargo::core::{enable_nightly_features, Dependency};
-use cargo::util::{is_ci, Config};
+use cargo::core::Dependency;
+use cargo::util::Config;
+use cargo_util::is_ci;
 
 use resolver_tests::{
     assert_contains, assert_same, dep, dep_kind, dep_loc, dep_req, dep_req_kind, loc_names, names,
@@ -25,7 +26,7 @@ proptest! {
                 0
             } else {
                 // but that local builds will give a small clear test case.
-                std::u32::MAX
+                u32::MAX
             },
         result_cache: prop::test_runner::basic_result_cache,
         .. ProptestConfig::default()
@@ -55,13 +56,12 @@ proptest! {
     fn prop_minimum_version_errors_the_same(
             PrettyPrintRegistry(input) in registry_strategy(50, 20, 60)
     ) {
-        enable_nightly_features();
-
         let mut config = Config::default().unwrap();
+        config.nightly_features_allowed = true;
         config
             .configure(
                 1,
-                None,
+                false,
                 None,
                 false,
                 false,
@@ -87,7 +87,7 @@ proptest! {
             let mres = resolve_with_config(
                 vec![dep_req(&this.name(), &format!("={}", this.version()))],
                 &reg,
-                Some(&config),
+                &config,
             );
 
             prop_assert_eq!(
@@ -228,6 +228,7 @@ proptest! {
 }
 
 #[test]
+#[should_panic(expected = "pub dep")] // The error handling is not yet implemented.
 fn pub_fail() {
     let input = vec![
         pkg!(("a", "0.0.4")),
@@ -552,11 +553,6 @@ fn test_resolving_maximum_version_with_transitive_deps() {
 
 #[test]
 fn test_resolving_minimum_version_with_transitive_deps() {
-    enable_nightly_features(); // -Z minimal-versions
-                               // When the minimal-versions config option is specified then the lowest
-                               // possible version of a package should be selected. "util 1.0.0" can't be
-                               // selected because of the requirements of "bar", so the minimum version
-                               // must be 1.1.1.
     let reg = registry(vec![
         pkg!(("util", "1.2.2")),
         pkg!(("util", "1.0.0")),
@@ -566,10 +562,16 @@ fn test_resolving_minimum_version_with_transitive_deps() {
     ]);
 
     let mut config = Config::default().unwrap();
+    // -Z minimal-versions
+    // When the minimal-versions config option is specified then the lowest
+    // possible version of a package should be selected. "util 1.0.0" can't be
+    // selected because of the requirements of "bar", so the minimum version
+    // must be 1.1.1.
+    config.nightly_features_allowed = true;
     config
         .configure(
             1,
-            None,
+            false,
             None,
             false,
             false,
@@ -583,7 +585,7 @@ fn test_resolving_minimum_version_with_transitive_deps() {
     let res = resolve_with_config(
         vec![dep_req("foo", "1.0.0"), dep_req("bar", "1.0.0")],
         &reg,
-        Some(&config),
+        &config,
     )
     .unwrap();
 
@@ -1456,6 +1458,31 @@ fn conflict_store_more_then_one_match() {
     ];
     let reg = registry(input);
     let _ = resolve_and_validated(vec![dep("nA")], &reg, None);
+}
+
+#[test]
+fn bad_lockfile_from_8249() {
+    let input = vec![
+        pkg!(("a-sys", "0.2.0")),
+        pkg!(("a-sys", "0.1.0")),
+        pkg!(("b", "0.1.0") => [
+            dep_req("a-sys", "0.1"), // should be optional: true, but not deeded for now
+        ]),
+        pkg!(("c", "1.0.0") => [
+            dep_req("b", "=0.1.0"),
+        ]),
+        pkg!("foo" => [
+            dep_req("a-sys", "=0.2.0"),
+            {
+                let mut b = dep_req("b", "=0.1.0");
+                b.set_features(vec!["a-sys"]);
+                b
+            },
+            dep_req("c", "=1.0.0"),
+        ]),
+    ];
+    let reg = registry(input);
+    let _ = resolve_and_validated(vec![dep("foo")], &reg, None);
 }
 
 #[test]

@@ -1,11 +1,10 @@
-use ffi;
 use libc::c_int;
 use std::ptr;
 
-use cvt;
-use error::ErrorStack;
-use hash::MessageDigest;
-use symm::Cipher;
+use crate::cvt;
+use crate::error::ErrorStack;
+use crate::hash::MessageDigest;
+use crate::symm::Cipher;
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub struct KeyIvPair {
@@ -23,6 +22,7 @@ pub struct KeyIvPair {
 ///
 /// New applications should not use this and instead use
 /// `pbkdf2_hmac` or another more modern key derivation algorithm.
+#[allow(clippy::useless_conversion)]
 pub fn bytes_to_key(
     cipher: Cipher,
     digest: MessageDigest,
@@ -75,7 +75,7 @@ pub fn bytes_to_key(
             iv_ptr,
         ))?;
 
-        Ok(KeyIvPair { key: key, iv: iv })
+        Ok(KeyIvPair { key, iv })
     }
 }
 
@@ -140,8 +140,8 @@ pub fn scrypt(
 
 #[cfg(test)]
 mod tests {
-    use hash::MessageDigest;
-    use symm::Cipher;
+    use crate::hash::MessageDigest;
+    use crate::symm::Cipher;
 
     // Test vectors from
     // https://git.lysator.liu.se/nettle/nettle/blob/nettle_3.1.1_release_20150424/testsuite/pbkdf2-test.c
@@ -280,8 +280,6 @@ mod tests {
     #[test]
     #[cfg(any(ossl110))]
     fn scrypt() {
-        use hex;
-
         let pass = "pleaseletmein";
         let salt = "SodiumChloride";
         let expected =

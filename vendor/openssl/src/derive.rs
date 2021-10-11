@@ -1,12 +1,11 @@
 //! Shared secret derivation.
-use ffi;
 use foreign_types::ForeignTypeRef;
 use std::marker::PhantomData;
 use std::ptr;
 
-use error::ErrorStack;
-use pkey::{HasPrivate, HasPublic, PKeyRef};
-use {cvt, cvt_p};
+use crate::error::ErrorStack;
+use crate::pkey::{HasPrivate, HasPublic, PKeyRef};
+use crate::{cvt, cvt_p};
 
 /// A type used to derive a shared secret between two keys.
 pub struct Deriver<'a>(*mut ffi::EVP_PKEY_CTX, PhantomData<&'a ()>);
@@ -14,6 +13,7 @@ pub struct Deriver<'a>(*mut ffi::EVP_PKEY_CTX, PhantomData<&'a ()>);
 unsafe impl<'a> Sync for Deriver<'a> {}
 unsafe impl<'a> Send for Deriver<'a> {}
 
+#[allow(clippy::len_without_is_empty)]
 impl<'a> Deriver<'a> {
     /// Creates a new `Deriver` using the provided private key.
     ///
@@ -92,13 +92,21 @@ impl<'a> Deriver<'a> {
     }
 }
 
+impl<'a> Drop for Deriver<'a> {
+    fn drop(&mut self) {
+        unsafe {
+            ffi::EVP_PKEY_CTX_free(self.0);
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
 
-    use ec::{EcGroup, EcKey};
-    use nid::Nid;
-    use pkey::PKey;
+    use crate::ec::{EcGroup, EcKey};
+    use crate::nid::Nid;
+    use crate::pkey::PKey;
 
     #[test]
     fn derive_without_peer() {

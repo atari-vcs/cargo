@@ -1,0 +1,10 @@
+--- src/lib.rs
++++ src/lib.rs
+@@ -1,5 +1,5 @@
+-#![feature(llvm_asm)]
+-#![feature(const_fn)]
++#![cfg_attr(nightly, feature(llvm_asm))]
++#![cfg_attr(nightly, feature(const_fn))]
+ #![cfg_attr(not(test), no_std)]
+ 
+ #[cfg(test)]

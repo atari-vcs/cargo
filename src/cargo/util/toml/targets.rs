@@ -15,11 +15,15 @@ use std::fs::{self, DirEntry};
 use std::path::{Path, PathBuf};
 
 use super::{
-    LibKind, PathValue, StringOrBool, StringOrVec, TomlBenchTarget, TomlBinTarget,
-    TomlExampleTarget, TomlLibTarget, TomlManifest, TomlTarget, TomlTestTarget,
+    PathValue, StringOrBool, StringOrVec, TomlBenchTarget, TomlBinTarget, TomlExampleTarget,
+    TomlLibTarget, TomlManifest, TomlTarget, TomlTestTarget,
 };
-use crate::core::{compiler, Edition, Feature, Features, Target};
-use crate::util::errors::{CargoResult, CargoResultExt};
+use crate::core::compiler::CrateType;
+use crate::core::{Edition, Feature, Features, Target};
+use crate::util::errors::CargoResult;
+use crate::util::restricted_names;
+
+use anyhow::Context as _;
 
 pub fn targets(
     features: &Features,
@@ -171,7 +175,7 @@ fn clean_lib(
         None => return Ok(None),
     };
 
-    validate_has_name(lib, "library", "lib")?;
+    validate_target_name(lib, "library", "lib", warnings)?;
 
     let path = match (lib.path.as_ref(), inferred) {
         (Some(path), _) => package_root.join(&path.0),
@@ -221,15 +225,15 @@ fn clean_lib(
             if kinds.len() > 1 {
                 anyhow::bail!("cannot mix `proc-macro` crate type with others");
             }
-            vec![LibKind::ProcMacro]
+            vec![CrateType::ProcMacro]
         }
         (_, Some(true), Some(true)) => {
             anyhow::bail!("`lib.plugin` and `lib.proc-macro` cannot both be `true`")
         }
         (Some(kinds), _, _) => kinds.iter().map(|s| s.into()).collect(),
-        (None, Some(true), _) => vec![LibKind::Dylib],
-        (None, _, Some(true)) => vec![LibKind::ProcMacro],
-        (None, _, _) => vec![LibKind::Lib],
+        (None, Some(true), _) => vec![CrateType::Dylib],
+        (None, _, Some(true)) => vec![CrateType::ProcMacro],
+        (None, _, _) => vec![CrateType::Lib],
     };
 
     let mut target = Target::lib_target(&lib.name(), crate_types, path, edition);
@@ -263,7 +267,7 @@ fn clean_bins(
     );
 
     for bin in &bins {
-        validate_has_name(bin, "binary", "bin")?;
+        validate_target_name(bin, "binary", "bin", warnings)?;
 
         let name = bin.name();
 
@@ -286,8 +290,12 @@ fn clean_bins(
             ));
         }
 
-        if compiler::is_bad_artifact_name(&name) {
-            anyhow::bail!("the binary target name `{}` is forbidden", name)
+        if restricted_names::is_conflicting_artifact_name(&name) {
+            anyhow::bail!(
+                "the binary target name `{}` is forbidden, \
+                 it conflicts with with cargo's build directory names",
+                name
+            )
         }
     }
 
@@ -528,7 +536,7 @@ fn clean_targets_with_legacy_path(
     );
 
     for target in &toml_targets {
-        validate_has_name(target, target_kind_human, target_kind)?;
+        validate_target_name(target, target_kind_human, target_kind, warnings)?;
     }
 
     validate_unique_names(&toml_targets, target_kind)?;
@@ -556,7 +564,7 @@ fn clean_targets_with_legacy_path(
 
 fn inferred_lib(package_root: &Path) -> Option<PathBuf> {
     let lib = package_root.join("src").join("lib.rs");
-    if fs::metadata(&lib).is_ok() {
+    if lib.exists() {
         Some(lib)
     } else {
         None
@@ -719,15 +727,23 @@ fn inferred_to_toml_targets(inferred: &[(String, PathBuf)]) -> Vec<TomlTarget> {
         .collect()
 }
 
-fn validate_has_name(
+fn validate_target_name(
     target: &TomlTarget,
     target_kind_human: &str,
     target_kind: &str,
+    warnings: &mut Vec<String>,
 ) -> CargoResult<()> {
     match target.name {
         Some(ref name) => {
             if name.trim().is_empty() {
                 anyhow::bail!("{} target names cannot be empty", target_kind_human)
+            }
+            if cfg!(windows) && restricted_names::is_windows_reserved(name) {
+                warnings.push(format!(
+                    "{} target `{}` is a reserved Windows filename, \
+                        this target will not work on Windows platforms",
+                    target_kind_human, name
+                ));
             }
         }
         None => anyhow::bail!(
@@ -764,7 +780,7 @@ fn configure(features: &Features, toml: &TomlTarget, target: &mut Target) -> Car
         .set_doctest(toml.doctest.unwrap_or_else(|| t2.doctested()))
         .set_benched(toml.bench.unwrap_or_else(|| t2.benched()))
         .set_harness(toml.harness.unwrap_or_else(|| t2.harness()))
-        .set_proc_macro(toml.proc_macro.unwrap_or_else(|| t2.proc_macro()))
+        .set_proc_macro(toml.proc_macro().unwrap_or_else(|| t2.proc_macro()))
         .set_for_host(match (toml.plugin, toml.proc_macro()) {
             (None, None) => t2.for_host(),
             (Some(true), _) | (_, Some(true)) => true,
@@ -773,11 +789,11 @@ fn configure(features: &Features, toml: &TomlTarget, target: &mut Target) -> Car
     if let Some(edition) = toml.edition.clone() {
         features
             .require(Feature::edition())
-            .chain_err(|| "editions are unstable")?;
+            .with_context(|| "editions are unstable")?;
         target.set_edition(
             edition
                 .parse()
-                .chain_err(|| "failed to parse the `edition` key")?,
+                .with_context(|| "failed to parse the `edition` key")?,
         );
     }
     Ok(())

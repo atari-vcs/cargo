@@ -11,7 +11,7 @@ support publishing new crates directly from Cargo.
 ### Using an Alternate Registry
 
 To use a registry other than [crates.io], the name and index URL of the
-registry must be added to a [`.cargo/config` file][config]. The `registries`
+registry must be added to a [`.cargo/config.toml` file][config]. The `registries`
 table has a key for each registry, for example:
 
 ```toml
@@ -38,7 +38,7 @@ As with most config values, the index may be specified with an environment
 variable instead of a config file. For example, setting the following
 environment variable will accomplish the same thing as defining a config file:
 
-```
+```ignore
 CARGO_REGISTRIES_MY_REGISTRY_INDEX=https://my-intranet:8080/git/index
 ```
 
@@ -63,7 +63,7 @@ registry to use. For example, to publish the package in the current directory:
 2. `cargo publish --registry=my-registry`
 
 Instead of always passing the `--registry` command-line option, the default
-registry may be set in [`.cargo/config`][config] with the `registry.default`
+registry may be set in [`.cargo/config.toml`][config] with the `registry.default`
 key.
 
 Setting the `package.publish` key in the `Cargo.toml` manifest restricts which
@@ -81,7 +81,7 @@ The `publish` value may also be `false` to restrict all publishing, which is
 the same as an empty list.
 
 The authentication information saved by [`cargo login`] is stored in the
-`credentials` file in the Cargo home directory (default `$HOME/.cargo`). It
+`credentials.toml` file in the Cargo home directory (default `$HOME/.cargo`). It
 has a separate table for each registry, for example:
 
 ```toml
@@ -127,9 +127,17 @@ looks like:
 
 The keys are:
 - `dl`: This is the URL for downloading crates listed in the index. The value
-  may have the markers `{crate}` and `{version}` which are replaced with the
-  name and version of the crate to download. If the markers are not present,
-  then the value `/{crate}/{version}/download` is appended to the end.
+  may have the following markers which will be replaced with their
+  corresponding value:
+
+  - `{crate}`: The name of crate.
+  - `{version}`: The crate version.
+  - `{prefix}`: A directory prefix computed from the crate name. For example,
+    a crate named `cargo` has a prefix of `ca/rg`. See below for details.
+  - `{lowerprefix}`: Lowercase variant of `{prefix}`.
+
+  If none of the markers are present, then the value
+  `/{crate}/{version}/download` is appended to the end.
 - `api`: This is the base URL for the web API. This key is optional, but if it
   is not specified, commands such as [`cargo publish`] will not work. The web
   API is described below.
@@ -158,6 +166,21 @@ directories:
 > Note: Although the index filenames are in lowercase, the fields that contain
 > package names in `Cargo.toml` and the index JSON data are case-sensitive and
 > may contain upper and lower case characters.
+
+The directory name above is calculated based on the package name converted to
+lowercase; it is represented by the marker `{lowerprefix}`.  When the original
+package name is used without case conversion, the resulting directory name is
+represented by the marker `{prefix}`.  For example, the package `MyCrate` would
+have a `{prefix}` of `My/Cr` and a `{lowerprefix}` of `my/cr`.  In general,
+using `{prefix}` is recommended over `{lowerprefix}`, but there are pros and
+cons to each choice.  Using `{prefix}` on case-insensitive filesystems results
+in (harmless-but-inelegant) directory aliasing.  For example, `crate` and
+`CrateTwo` have `{prefix}` values of `cr/at` and `Cr/at`; these are distinct on
+Unix machines but alias to the same directory on Windows.  Using directories
+with normalized case avoids aliasing, but on case-sensitive filesystems it's
+harder to support older versions of Cargo that lack `{prefix}`/`{lowerprefix}`.
+For example, nginx rewrite rules can easily construct `{prefix}` but can't
+perform case-conversion to construct `{lowerprefix}`.
 
 Registries should consider enforcing limitations on package names added to
 their index. Cargo itself allows names with any [alphanumeric], `-`, or `_`
@@ -362,7 +385,7 @@ considered as an exhaustive list of restrictions [crates.io] imposes.
         "extras": ["rand/simd_support"]
     },
     // List of strings of the authors.
-    // May be empty. crates.io requires at least one entry.
+    // May be empty.
     "authors": ["Alice <a@example.com>"],
     // Description field from the manifest.
     // May be null. crates.io requires at least some content.
@@ -403,7 +426,7 @@ considered as an exhaustive list of restrictions [crates.io] imposes.
     },
     // The `links` string value from the package's manifest, or null if not
     // specified. This field is optional and defaults to null.
-    "links": null,
+    "links": null
 }
 ```
 

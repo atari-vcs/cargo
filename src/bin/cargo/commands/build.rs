@@ -39,19 +39,12 @@ pub fn cli() -> App {
             .value_name("PATH"),
         )
         .arg_manifest_path()
+        .arg_ignore_rust_version()
         .arg_message_format()
         .arg_build_plan()
-        .after_help(
-            "\
-All packages in the workspace are built if the `--workspace` flag is supplied. The
-`--workspace` flag is automatically assumed for a virtual manifest.
-Note that `--exclude` has to be specified in conjunction with the `--workspace` flag.
-
-Compilation can be configured via the use of profiles which are configured in
-the manifest. The default profile for this command is `dev`, but passing
-the --release flag will use the `release` profile instead.
-",
-        )
+        .arg_unit_graph()
+        .arg_future_incompat_report()
+        .after_help("Run `cargo help build` for more detailed information.\n")
 }
 
 pub fn exec(config: &mut Config, args: &ArgMatches<'_>) -> CliResult {
@@ -60,11 +53,16 @@ pub fn exec(config: &mut Config, args: &ArgMatches<'_>) -> CliResult {
         config,
         CompileMode::Build,
         Some(&ws),
-        ProfileChecking::Checked,
+        ProfileChecking::Custom,
     )?;
 
-    compile_opts.export_dir = args.value_of_path("out-dir", config);
-    if compile_opts.export_dir.is_some() {
+    if let Some(out_dir) = args.value_of_path("out-dir", config) {
+        compile_opts.build_config.export_dir = Some(out_dir);
+    } else if let Some(out_dir) = config.build_config()?.out_dir.as_ref() {
+        let out_dir = out_dir.resolve_path(config);
+        compile_opts.build_config.export_dir = Some(out_dir);
+    }
+    if compile_opts.build_config.export_dir.is_some() {
         config
             .cli_unstable()
             .fail_if_stable_opt("--out-dir", 6790)?;

@@ -1,0 +1,29 @@
+Author: Henry-Nicolas Tourneur <debian@nilux.be>
+Forwarded: not-needed
+Description: The below patch removes the test feature and its dev-dep. 
+ That feature depends on syn-test-suite which is also a dev-dep. 
+ Having a crate being both a dev-dep and a normal dep causes debcargo crashes.
+ This patch works around this crash by disabling that test feature.
+ Therefore, syn-test-suite is only a dev-dep and no longer both a normal dep
+ and a test dep.
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -70,9 +70,6 @@ version = "1.0"
+ [dev-dependencies.reqwest]
+ version = "0.11"
+ 
+-[dev-dependencies.syn-test-suite]
+-version = "0"
+-
+ [dev-dependencies.tar]
+ version = "0.4.16"
+ 
+@@ -92,6 +89,5 @@ full = []
+ parsing = []
+ printing = ["quote"]
+ proc-macro = ["proc-macro2/proc-macro", "quote/proc-macro"]
+-test = ["syn-test-suite/all-features"]
+ visit = []
+ visit-mut = []

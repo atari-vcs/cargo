@@ -34,22 +34,17 @@ impl Map<String, Value> {
         }
     }
 
-    #[cfg(not(feature = "preserve_order"))]
-    /// Makes a new empty Map with the given initial capacity.
-    #[inline]
-    pub fn with_capacity(capacity: usize) -> Self {
-        // does not support with_capacity
-        let _ = capacity;
-        Map {
-            map: BTreeMap::new(),
-        }
-    }
-
-    #[cfg(feature = "preserve_order")]
     /// Makes a new empty Map with the given initial capacity.
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
         Map {
+            #[cfg(not(feature = "preserve_order"))]
+            map: {
+                // does not support with_capacity
+                let _ = capacity;
+                BTreeMap::new()
+            },
+            #[cfg(feature = "preserve_order")]
             map: IndexMap::with_capacity(capacity),
         }
     }
@@ -57,7 +52,7 @@ impl Map<String, Value> {
     /// Clears the map, removing all values.
     #[inline]
     pub fn clear(&mut self) {
-        self.map.clear()
+        self.map.clear();
     }
 
     /// Returns a reference to the value corresponding to the key.
@@ -127,11 +122,59 @@ impl Map<String, Value> {
         return self.map.remove(key);
     }
 
+    /// Removes a key from the map, returning the stored key and value if the
+    /// key was previously in the map.
+    ///
+    /// The key may be any borrowed form of the map's key type, but the ordering
+    /// on the borrowed form *must* match the ordering on the key type.
+    pub fn remove_entry<Q>(&mut self, key: &Q) -> Option<(String, Value)>
+    where
+        String: Borrow<Q>,
+        Q: ?Sized + Ord + Eq + Hash,
+    {
+        #[cfg(any(feature = "preserve_order", not(no_btreemap_remove_entry)))]
+        return self.map.remove_entry(key);
+        #[cfg(all(
+            not(feature = "preserve_order"),
+            no_btreemap_remove_entry,
+            not(no_btreemap_get_key_value),
+        ))]
+        {
+            let (key, _value) = self.map.get_key_value(key)?;
+            let key = key.clone();
+            let value = self.map.remove::<String>(&key)?;
+            Some((key, value))
+        }
+        #[cfg(all(
+            not(feature = "preserve_order"),
+            no_btreemap_remove_entry,
+            no_btreemap_get_key_value,
+        ))]
+        {
+            struct Key<'a, Q: ?Sized>(&'a Q);
+
+            impl<'a, Q: ?Sized> RangeBounds<Q> for Key<'a, Q> {
+                fn start_bound(&self) -> Bound<&Q> {
+                    Bound::Included(self.0)
+                }
+                fn end_bound(&self) -> Bound<&Q> {
+                    Bound::Included(self.0)
+                }
+            }
+
+            let mut range = self.map.range(Key(key));
+            let (key, _value) = range.next()?;
+            let key = key.clone();
+            let value = self.map.remove::<String>(&key)?;
+            Some((key, value))
+        }
+    }
+
     /// Moves all elements from other into Self, leaving other empty.
     #[inline]
     pub fn append(&mut self, other: &mut Self) {
         #[cfg(feature = "preserve_order")]
-        for (k, v) in std::mem::replace(&mut other.map, MapImpl::default()).into_iter() {
+        for (k, v) in mem::replace(&mut other.map, MapImpl::default()) {
             self.map.insert(k, v);
         }
         #[cfg(not(feature = "preserve_order"))]
@@ -150,8 +193,8 @@ impl Map<String, Value> {
         use indexmap::map::Entry as EntryImpl;
 
         match self.map.entry(key.into()) {
-            EntryImpl::Vacant(vacant) => Entry::Vacant(VacantEntry { vacant: vacant }),
-            EntryImpl::Occupied(occupied) => Entry::Occupied(OccupiedEntry { occupied: occupied }),
+            EntryImpl::Vacant(vacant) => Entry::Vacant(VacantEntry { vacant }),
+            EntryImpl::Occupied(occupied) => Entry::Occupied(OccupiedEntry { occupied }),
         }
     }
 
@@ -208,6 +251,7 @@ impl Map<String, Value> {
     }
 }
 
+#[allow(clippy::derivable_impls)] // clippy bug: https://github.com/rust-lang/rust-clippy/issues/7655
 impl Default for Map<String, Value> {
     #[inline]
     fn default() -> Self {
@@ -497,6 +541,40 @@ impl<'a> Entry<'a> {
         match self {
             Entry::Vacant(entry) => entry.insert(default()),
             Entry::Occupied(entry) => entry.into_mut(),
+        }
+    }
+
+    /// Provides in-place mutable access to an occupied entry before any
+    /// potential inserts into the map.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use serde_json::json;
+    /// #
+    /// let mut map = serde_json::Map::new();
+    /// map.entry("serde")
+    ///     .and_modify(|e| *e = json!("rust"))
+    ///     .or_insert(json!("cpp"));
+    ///
+    /// assert_eq!(map["serde"], "cpp");
+    ///
+    /// map.entry("serde")
+    ///     .and_modify(|e| *e = json!("rust"))
+    ///     .or_insert(json!("cpp"));
+    ///
+    /// assert_eq!(map["serde"], "rust");
+    /// ```
+    pub fn and_modify<F>(self, f: F) -> Self
+    where
+        F: FnOnce(&mut Value),
+    {
+        match self {
+            Entry::Occupied(mut entry) => {
+                f(entry.get_mut());
+                Entry::Occupied(entry)
+            }
+            Entry::Vacant(entry) => Entry::Vacant(entry),
         }
     }
 }

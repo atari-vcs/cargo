@@ -8,8 +8,13 @@ use std::str;
 use crate::object::CastOrPanic;
 use crate::util::{c_cmp_to_ordering, Binding};
 use crate::{
-    raw, Blob, Commit, Error, Object, ObjectType, Oid, ReferenceType, Repository, Tag, Tree,
+    raw, Blob, Commit, Error, Object, ObjectType, Oid, ReferenceFormat, ReferenceType, Repository,
+    Tag, Tree,
 };
+
+// Not in the public header files (yet?), but a hard limit used by libgit2
+// internally
+const GIT_REFNAME_MAX: usize = 1024;
 
 struct Refdb<'repo>(&'repo Repository);
 
@@ -34,10 +39,118 @@ pub struct ReferenceNames<'repo, 'references> {
 
 impl<'repo> Reference<'repo> {
     /// Ensure the reference name is well-formed.
+    ///
+    /// Validation is performed as if [`ReferenceFormat::ALLOW_ONELEVEL`]
+    /// was given to [`Reference::normalize_name`]. No normalization is
+    /// performed, however.
+    ///
+    /// ```rust
+    /// use git2::Reference;
+    ///
+    /// assert!(Reference::is_valid_name("HEAD"));
+    /// assert!(Reference::is_valid_name("refs/heads/main"));
+    ///
+    /// // But:
+    /// assert!(!Reference::is_valid_name("main"));
+    /// assert!(!Reference::is_valid_name("refs/heads/*"));
+    /// assert!(!Reference::is_valid_name("foo//bar"));
+    /// ```
+    ///
+    /// [`ReferenceFormat::ALLOW_ONELEVEL`]:
+    ///     struct.ReferenceFormat#associatedconstant.ALLOW_ONELEVEL
+    /// [`Reference::normalize_name`]: struct.Reference#method.normalize_name
     pub fn is_valid_name(refname: &str) -> bool {
         crate::init();
         let refname = CString::new(refname).unwrap();
         unsafe { raw::git_reference_is_valid_name(refname.as_ptr()) == 1 }
+    }
+
+    /// Normalize reference name and check validity.
+    ///
+    /// This will normalize the reference name by collapsing runs of adjacent
+    /// slashes between name components into a single slash. It also validates
+    /// the name according to the following rules:
+    ///
+    /// 1. If [`ReferenceFormat::ALLOW_ONELEVEL`] is given, the name may
+    ///    contain only capital letters and underscores, and must begin and end
+    ///    with a letter. (e.g. "HEAD", "ORIG_HEAD").
+    /// 2. The flag [`ReferenceFormat::REFSPEC_SHORTHAND`] has an effect
+    ///    only when combined with [`ReferenceFormat::ALLOW_ONELEVEL`]. If
+    ///    it is given, "shorthand" branch names (i.e. those not prefixed by
+    ///    `refs/`, but consisting of a single word without `/` separators)
+    ///    become valid. For example, "main" would be accepted.
+    /// 3. If [`ReferenceFormat::REFSPEC_PATTERN`] is given, the name may
+    ///    contain a single `*` in place of a full pathname component (e.g.
+    ///    `foo/*/bar`, `foo/bar*`).
+    /// 4. Names prefixed with "refs/" can be almost anything. You must avoid
+    ///    the characters '~', '^', ':', '\\', '?', '[', and '*', and the
+    ///    sequences ".." and "@{" which have special meaning to revparse.
+    ///
+    /// If the reference passes validation, it is returned in normalized form,
+    /// otherwise an [`Error`] with [`ErrorCode::InvalidSpec`] is returned.
+    ///
+    /// ```rust
+    /// use git2::{Reference, ReferenceFormat};
+    ///
+    /// assert_eq!(
+    ///     Reference::normalize_name(
+    ///         "foo//bar",
+    ///         ReferenceFormat::NORMAL
+    ///     )
+    ///     .unwrap(),
+    ///     "foo/bar".to_owned()
+    /// );
+    ///
+    /// assert_eq!(
+    ///     Reference::normalize_name(
+    ///         "HEAD",
+    ///         ReferenceFormat::ALLOW_ONELEVEL
+    ///     )
+    ///     .unwrap(),
+    ///     "HEAD".to_owned()
+    /// );
+    ///
+    /// assert_eq!(
+    ///     Reference::normalize_name(
+    ///         "refs/heads/*",
+    ///         ReferenceFormat::REFSPEC_PATTERN
+    ///     )
+    ///     .unwrap(),
+    ///     "refs/heads/*".to_owned()
+    /// );
+    ///
+    /// assert_eq!(
+    ///     Reference::normalize_name(
+    ///         "main",
+    ///         ReferenceFormat::ALLOW_ONELEVEL | ReferenceFormat::REFSPEC_SHORTHAND
+    ///     )
+    ///     .unwrap(),
+    ///     "main".to_owned()
+    /// );
+    /// ```
+    ///
+    /// [`ReferenceFormat::ALLOW_ONELEVEL`]:
+    ///     struct.ReferenceFormat#associatedconstant.ALLOW_ONELEVEL
+    /// [`ReferenceFormat::REFSPEC_SHORTHAND`]:
+    ///     struct.ReferenceFormat#associatedconstant.REFSPEC_SHORTHAND
+    /// [`ReferenceFormat::REFSPEC_PATTERN`]:
+    ///     struct.ReferenceFormat#associatedconstant.REFSPEC_PATTERN
+    /// [`Error`]: struct.Error
+    /// [`ErrorCode::InvalidSpec`]: enum.ErrorCode#variant.InvalidSpec
+    pub fn normalize_name(refname: &str, flags: ReferenceFormat) -> Result<String, Error> {
+        crate::init();
+        let mut dst = [0u8; GIT_REFNAME_MAX];
+        let refname = CString::new(refname)?;
+        unsafe {
+            try_call!(raw::git_reference_normalize_name(
+                dst.as_mut_ptr() as *mut libc::c_char,
+                dst.len() as libc::size_t,
+                refname,
+                flags.bits()
+            ));
+            let s = &dst[..dst.iter().position(|&a| a == 0).unwrap()];
+            Ok(str::from_utf8(s).unwrap().to_owned())
+        }
     }
 
     /// Get access to the underlying raw pointer.
@@ -369,18 +482,18 @@ mod tests {
         assert_eq!(head.kind().unwrap(), ReferenceType::Direct);
 
         assert!(head == repo.head().unwrap());
-        assert_eq!(head.name(), Some("refs/heads/master"));
+        assert_eq!(head.name(), Some("refs/heads/main"));
 
-        assert!(head == repo.find_reference("refs/heads/master").unwrap());
+        assert!(head == repo.find_reference("refs/heads/main").unwrap());
         assert_eq!(
-            repo.refname_to_id("refs/heads/master").unwrap(),
+            repo.refname_to_id("refs/heads/main").unwrap(),
             head.target().unwrap()
         );
 
         assert!(head.symbolic_target().is_none());
         assert!(head.target_peel().is_none());
 
-        assert_eq!(head.shorthand(), Some("master"));
+        assert_eq!(head.shorthand(), Some("main"));
         assert!(head.resolve().unwrap() == head);
 
         let mut tag1 = repo
@@ -396,7 +509,7 @@ mod tests {
         tag1.delete().unwrap();
 
         let mut sym1 = repo
-            .reference_symbolic("refs/tags/tag1", "refs/heads/master", false, "test")
+            .reference_symbolic("refs/tags/tag1", "refs/heads/main", false, "test")
             .unwrap();
         assert_eq!(sym1.kind().unwrap(), ReferenceType::Symbolic);
         sym1.delete().unwrap();
@@ -406,7 +519,7 @@ mod tests {
             assert!(repo.references().unwrap().next().unwrap().unwrap() == head);
             let mut names = repo.references().unwrap();
             let mut names = names.names();
-            assert_eq!(names.next().unwrap().unwrap(), "refs/heads/master");
+            assert_eq!(names.next().unwrap().unwrap(), "refs/heads/main");
             assert!(names.next().is_none());
             assert!(repo.references_glob("foo").unwrap().count() == 0);
             assert!(repo.references_glob("refs/heads/*").unwrap().count() == 1);

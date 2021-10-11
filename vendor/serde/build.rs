@@ -53,30 +53,41 @@ fn main() {
     // 128-bit integers stabilized in Rust 1.26:
     // https://blog.rust-lang.org/2018/05/10/Rust-1.26.html
     //
-    // Disabled on Emscripten targets as Emscripten doesn't
-    // currently support integers larger than 64 bits.
-    if minor >= 26 && !emscripten {
+    // Disabled on Emscripten targets before Rust 1.40 since
+    // Emscripten did not support 128-bit integers until Rust 1.40
+    // (https://github.com/rust-lang/rust/pull/65251)
+    if minor >= 26 && (!emscripten || minor >= 40) {
         println!("cargo:rustc-cfg=integer128");
     }
 
     // Inclusive ranges methods stabilized in Rust 1.27:
     // https://github.com/rust-lang/rust/pull/50758
+    // Also Iterator::try_for_each:
+    // https://blog.rust-lang.org/2018/06/21/Rust-1.27.html#library-stabilizations
     if minor >= 27 {
         println!("cargo:rustc-cfg=range_inclusive");
+        println!("cargo:rustc-cfg=iterator_try_fold");
     }
 
     // Non-zero integers stabilized in Rust 1.28:
-    // https://github.com/rust-lang/rust/pull/50808
+    // https://blog.rust-lang.org/2018/08/02/Rust-1.28.html#library-stabilizations
     if minor >= 28 {
         println!("cargo:rustc-cfg=num_nonzero");
     }
 
-    // TryFrom, Atomic types, and non-zero signed integers stabilized in Rust 1.34:
+    // Current minimum supported version of serde_derive crate is Rust 1.31.
+    if minor >= 31 {
+        println!("cargo:rustc-cfg=serde_derive");
+    }
+
+    // TryFrom, Atomic types, non-zero signed integers, and SystemTime::checked_add
+    // stabilized in Rust 1.34:
     // https://blog.rust-lang.org/2019/04/11/Rust-1.34.0.html#tryfrom-and-tryinto
     // https://blog.rust-lang.org/2019/04/11/Rust-1.34.0.html#library-stabilizations
     if minor >= 34 {
         println!("cargo:rustc-cfg=core_try_from");
         println!("cargo:rustc-cfg=num_nonzero_signed");
+        println!("cargo:rustc-cfg=systemtime_checked_add");
 
         // Whitelist of archs that support std::sync::atomic module. Ideally we
         // would use #[cfg(target_has_atomic = "...")] but it is not stable yet.

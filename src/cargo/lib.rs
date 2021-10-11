@@ -1,44 +1,21 @@
-#![cfg_attr(test, deny(warnings))]
-// While we're getting used to 2018:
+// For various reasons, some idioms are still allow'ed, but we would like to
+// test and enforce them.
 #![warn(rust_2018_idioms)]
-// Clippy isn't enforced by CI (@alexcrichton isn't a fan).
-#![allow(clippy::blacklisted_name)] // frequently used in tests
-#![allow(clippy::cognitive_complexity)] // large project
-#![allow(clippy::derive_hash_xor_eq)] // there's an intentional incoherence
-#![allow(clippy::explicit_into_iter_loop)] // explicit loops are clearer
-#![allow(clippy::explicit_iter_loop)] // explicit loops are clearer
-#![allow(clippy::identity_op)] // used for vertical alignment
-#![allow(clippy::implicit_hasher)] // large project
-#![allow(clippy::large_enum_variant)] // large project
-#![allow(clippy::new_without_default)] // explicit is maybe clearer
-#![allow(clippy::redundant_closure)] // closures can be less verbose
-#![allow(clippy::redundant_closure_call)] // closures over try catch blocks
-#![allow(clippy::too_many_arguments)] // large project
-#![allow(clippy::type_complexity)] // there's an exceptionally complex type
-#![allow(clippy::wrong_self_convention)] // perhaps `Rc` should be special-cased in Clippy?
-#![allow(clippy::write_with_newline)] // too pedantic
-#![allow(clippy::inefficient_to_string)] // this causes suggestions that result in `(*s).to_string()`
+#![cfg_attr(test, deny(warnings))]
+// Due to some of the default clippy lints being somewhat subjective and not
+// necessarily an improvement, we prefer to not use them at this time.
+#![allow(clippy::all)]
 #![warn(clippy::needless_borrow)]
 #![warn(clippy::redundant_clone)]
-// Unit is now interned, and would probably be better as pass-by-copy, but
-// doing so causes a lot of & and * shenanigans that makes the code arguably
-// less clear and harder to read.
-#![allow(clippy::trivially_copy_pass_by_ref)]
-// exhaustively destructuring ensures future fields are handled
-#![allow(clippy::unneeded_field_pattern)]
-// false positives in target-specific code, for details see
-// https://github.com/rust-lang/cargo/pull/7251#pullrequestreview-274914270
-#![allow(clippy::identity_conversion)]
 
 use crate::core::shell::Verbosity::Verbose;
 use crate::core::Shell;
 use anyhow::Error;
 use log::debug;
-use serde::ser;
 use std::fmt;
 
-pub use crate::util::errors::Internal;
-pub use crate::util::{CargoResult, CliError, CliResult, Config};
+pub use crate::util::errors::{InternalError, VerboseError};
+pub use crate::util::{indented_lines, CargoResult, CliError, CliResult, Config};
 
 pub const CARGO_ENV: &str = "CARGO";
 
@@ -75,7 +52,7 @@ pub struct VersionInfo {
 
 impl fmt::Display for VersionInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "cargo {}.{}.{}", self.major, self.minor, self.patch)?;
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)?;
         if let Some(channel) = self.cfg_info.as_ref().map(|ci| &ci.release_channel) {
             if channel != "stable" {
                 write!(f, "-{}", channel)?;
@@ -93,11 +70,6 @@ impl fmt::Display for VersionInfo {
     }
 }
 
-pub fn print_json<T: ser::Serialize>(obj: &T) {
-    let encoded = serde_json::to_string(&obj).unwrap();
-    println!("{}", encoded);
-}
-
 pub fn exit_with_error(err: CliError, shell: &mut Shell) -> ! {
     debug!("exit_with_error; err={:?}", err);
     if let Some(ref err) = err.error {
@@ -106,64 +78,70 @@ pub fn exit_with_error(err: CliError, shell: &mut Shell) -> ! {
         }
     }
 
-    let CliError {
-        error,
-        exit_code,
-        unknown,
-    } = err;
-    // `exit_code` of 0 means non-fatal error (e.g., docopt version info).
-    let fatal = exit_code != 0;
-
-    let hide = unknown && shell.verbosity() != Verbose;
-
+    let CliError { error, exit_code } = err;
     if let Some(error) = error {
-        if hide {
-            drop(shell.error("An unknown error occurred"))
-        } else if fatal {
-            drop(shell.error(&error))
-        } else {
-            println!("{}", error);
-        }
-
-        if !handle_cause(&error, shell) || hide {
-            drop(writeln!(
-                shell.err(),
-                "\nTo learn more, run the command again \
-                 with --verbose."
-            ));
-        }
+        display_error(&error, shell);
     }
 
     std::process::exit(exit_code)
 }
 
-pub fn handle_error(err: &Error, shell: &mut Shell) {
-    debug!("handle_error; err={:?}", err);
-
-    let _ignored_result = shell.error(err);
-    handle_cause(err, shell);
+/// Displays an error, and all its causes, to stderr.
+pub fn display_error(err: &Error, shell: &mut Shell) {
+    debug!("display_error; err={:?}", err);
+    _display_error(err, shell, true);
+    if err
+        .chain()
+        .any(|e| e.downcast_ref::<InternalError>().is_some())
+    {
+        drop(shell.note("this is an unexpected cargo internal error"));
+        drop(
+            shell.note(
+                "we would appreciate a bug report: https://github.com/rust-lang/cargo/issues/",
+            ),
+        );
+        drop(shell.note(format!("cargo {}", version())));
+        // Once backtraces are stabilized, this should print out a backtrace
+        // if it is available.
+    }
 }
 
-fn handle_cause(cargo_err: &Error, shell: &mut Shell) -> bool {
-    fn print(error: &str, shell: &mut Shell) {
-        drop(writeln!(shell.err(), "\nCaused by:"));
-        drop(writeln!(shell.err(), "  {}", error));
+/// Displays a warning, with an error object providing detailed information
+/// and context.
+pub fn display_warning_with_error(warning: &str, err: &Error, shell: &mut Shell) {
+    drop(shell.warn(warning));
+    drop(writeln!(shell.err()));
+    _display_error(err, shell, false);
+}
+
+fn _display_error(err: &Error, shell: &mut Shell, as_err: bool) -> bool {
+    let verbosity = shell.verbosity();
+    let is_verbose = |e: &(dyn std::error::Error + 'static)| -> bool {
+        verbosity != Verbose && e.downcast_ref::<VerboseError>().is_some()
+    };
+    // Generally the top error shouldn't be verbose, but check it anyways.
+    if is_verbose(err.as_ref()) {
+        return true;
     }
-
-    let verbose = shell.verbosity();
-
-    // The first error has already been printed to the shell.
-    for err in cargo_err.chain().skip(1) {
+    if as_err {
+        drop(shell.error(&err));
+    } else {
+        drop(writeln!(shell.err(), "{}", err));
+    }
+    for cause in err.chain().skip(1) {
         // If we're not in verbose mode then print remaining errors until one
-        // marked as `Internal` appears.
-        if verbose != Verbose && err.downcast_ref::<Internal>().is_some() {
-            return false;
+        // marked as `VerboseError` appears.
+        if is_verbose(cause) {
+            return true;
         }
-
-        print(&err.to_string(), shell);
+        drop(writeln!(shell.err(), "\nCaused by:"));
+        drop(write!(
+            shell.err(),
+            "{}",
+            indented_lines(&cause.to_string())
+        ));
     }
-
-    true
+    false
 }
 
 pub fn version() -> VersionInfo {

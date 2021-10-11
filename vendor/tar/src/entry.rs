@@ -40,11 +40,12 @@ pub struct EntryFields<'a> {
     pub unpack_xattrs: bool,
     pub preserve_permissions: bool,
     pub preserve_mtime: bool,
+    pub overwrite: bool,
 }
 
 pub enum EntryIo<'a> {
     Pad(io::Take<io::Repeat>),
-    Data(io::Take<&'a ArchiveInner<Read + 'a>>),
+    Data(io::Take<&'a ArchiveInner<dyn Read + 'a>>),
 }
 
 /// When unpacking items the unpacked thing is returned to allow custom
@@ -62,7 +63,7 @@ pub enum Unpacked {
 impl<'a, R: Read> Entry<'a, R> {
     /// Returns the path name for this entry.
     ///
-    /// This method may fail if the pathname is not valid unicode and this is
+    /// This method may fail if the pathname is not valid Unicode and this is
     /// called on a Windows platform.
     ///
     /// Note that this function will convert any `\` characters to directory
@@ -88,7 +89,7 @@ impl<'a, R: Read> Entry<'a, R> {
 
     /// Returns the link name for this entry, if any is found.
     ///
-    /// This method may fail if the pathname is not valid unicode and this is
+    /// This method may fail if the pathname is not valid Unicode and this is
     /// called on a Windows platform. `Ok(None)` being returned, however,
     /// indicates that the link name was not present.
     ///
@@ -136,9 +137,17 @@ impl<'a, R: Read> Entry<'a, R> {
 
     /// Returns access to the header of this entry in the archive.
     ///
-    /// This provides access to the the metadata for this entry in the archive.
+    /// This provides access to the metadata for this entry in the archive.
     pub fn header(&self) -> &Header {
         &self.fields.header
+    }
+
+    /// Returns access to the size of this entry in the archive.
+    ///
+    /// In the event the size is stored in a pax extension, that size value
+    /// will be referenced. Otherwise, the entry size will be stored in the header.
+    pub fn size(&self) -> u64 {
+        self.fields.size
     }
 
     /// Returns the starting position, in bytes, of the header of this entry in
@@ -325,7 +334,18 @@ impl<'a> EntryFields<'a> {
                     Some(Cow::Borrowed(bytes))
                 }
             }
-            None => self.header.link_name_bytes(),
+            None => {
+                if let Some(ref pax) = self.pax_extensions {
+                    let pax = pax_extensions(pax)
+                        .filter_map(|f| f.ok())
+                        .find(|f| f.key_bytes() == b"linkpath")
+                        .map(|f| f.value_bytes());
+                    if let Some(field) = pax {
+                        return Some(Cow::Borrowed(field));
+                    }
+                }
+                self.header.link_name_bytes()
+            }
         }
     }
 
@@ -393,11 +413,8 @@ impl<'a> EntryFields<'a> {
             None => return Ok(false),
         };
 
-        if parent.symlink_metadata().is_err() {
-            fs::create_dir_all(&parent).map_err(|e| {
-                TarError::new(&format!("failed to create `{}`", parent.display()), e)
-            })?;
-        }
+        self.ensure_dir_created(&dst, parent)
+            .map_err(|e| TarError::new(&format!("failed to create `{}`", parent.display()), e))?;
 
         let canon_target = self.validate_inside_dst(&dst, parent)?;
 
@@ -484,17 +501,26 @@ impl<'a> EntryFields<'a> {
                     )
                 })?;
             } else {
-                symlink(&src, dst).map_err(|err| {
-                    Error::new(
-                        err.kind(),
-                        format!(
-                            "{} when symlinking {} to {}",
-                            err,
-                            src.display(),
-                            dst.display()
-                        ),
-                    )
-                })?;
+                symlink(&src, dst)
+                    .or_else(|err_io| {
+                        if err_io.kind() == io::ErrorKind::AlreadyExists && self.overwrite {
+                            // remove dest and try once more
+                            std::fs::remove_file(dst).and_then(|()| symlink(&src, dst))
+                        } else {
+                            Err(err_io)
+                        }
+                    })
+                    .map_err(|err| {
+                        Error::new(
+                            err.kind(),
+                            format!(
+                                "{} when symlinking {} to {}",
+                                err,
+                                src.display(),
+                                dst.display()
+                            ),
+                        )
+                    })?;
             };
             return Ok(Unpacked::__Nonexhaustive);
 
@@ -509,7 +535,7 @@ impl<'a> EntryFields<'a> {
                 ::std::os::windows::fs::symlink_file(src, dst)
             }
 
-            #[cfg(any(unix, target_os = "redox"))]
+            #[cfg(unix)]
             fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
                 ::std::os::unix::fs::symlink(src, dst)
             }
@@ -545,17 +571,19 @@ impl<'a> EntryFields<'a> {
         // is attackable; if an existing file is found unlink it.
         fn open(dst: &Path) -> io::Result<std::fs::File> {
             OpenOptions::new().write(true).create_new(true).open(dst)
-        };
+        }
         let mut f = (|| -> io::Result<std::fs::File> {
             let mut f = open(dst).or_else(|err| {
                 if err.kind() != ErrorKind::AlreadyExists {
                     Err(err)
-                } else {
+                } else if self.overwrite {
                     match fs::remove_file(dst) {
                         Ok(()) => open(dst),
                         Err(ref e) if e.kind() == io::ErrorKind::NotFound => open(dst),
                         Err(e) => Err(e),
                     }
+                } else {
+                    Err(err)
                 }
             })?;
             for io in self.data.drain(..) {
@@ -590,6 +618,13 @@ impl<'a> EntryFields<'a> {
 
         if self.preserve_mtime {
             if let Ok(mtime) = self.header.mtime() {
+                // For some more information on this see the comments in
+                // `Header::fill_platform_from`, but the general idea is that
+                // we're trying to avoid 0-mtime files coming out of archives
+                // since some tools don't ingest them well. Perhaps one day
+                // when Cargo stops working with 0-mtime archives we can remove
+                // this.
+                let mtime = if mtime == 0 { 1 } else { mtime };
                 let mtime = FileTime::from_unix_time(mtime as i64, 0);
                 filetime::set_file_handle_times(&f, Some(mtime), Some(mtime)).map_err(|e| {
                     TarError::new(&format!("failed to set mtime for `{}`", dst.display()), e)
@@ -623,7 +658,7 @@ impl<'a> EntryFields<'a> {
             })
         }
 
-        #[cfg(any(unix, target_os = "redox"))]
+        #[cfg(unix)]
         fn _set_perms(
             dst: &Path,
             f: Option<&mut std::fs::File>,
@@ -717,15 +752,30 @@ impl<'a> EntryFields<'a> {
         }
         // Windows does not completely support posix xattrs
         // https://en.wikipedia.org/wiki/Extended_file_attributes#Windows_NT
-        #[cfg(any(
-            windows,
-            target_os = "redox",
-            not(feature = "xattr"),
-            target_arch = "wasm32"
-        ))]
+        #[cfg(any(windows, not(feature = "xattr"), target_arch = "wasm32"))]
         fn set_xattrs(_: &mut EntryFields, _: &Path) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    fn ensure_dir_created(&self, dst: &Path, dir: &Path) -> io::Result<()> {
+        let mut ancestor = dir;
+        let mut dirs_to_create = Vec::new();
+        while ancestor.symlink_metadata().is_err() {
+            dirs_to_create.push(ancestor);
+            if let Some(parent) = ancestor.parent() {
+                ancestor = parent;
+            } else {
+                break;
+            }
+        }
+        for ancestor in dirs_to_create.into_iter().rev() {
+            if let Some(parent) = ancestor.parent() {
+                self.validate_inside_dst(dst, parent)?;
+            }
+            fs::create_dir_all(ancestor)?;
+        }
+        Ok(())
     }
 
     fn validate_inside_dst(&self, dst: &Path, file_dst: &Path) -> io::Result<PathBuf> {

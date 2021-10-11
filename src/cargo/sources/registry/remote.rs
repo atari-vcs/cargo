@@ -1,25 +1,35 @@
-use crate::core::{InternedString, PackageId, SourceId};
+use crate::core::{GitReference, PackageId, SourceId};
 use crate::sources::git;
 use crate::sources::registry::MaybeLock;
-use crate::sources::registry::{RegistryConfig, RegistryData, CRATE_TEMPLATE, VERSION_TEMPLATE};
-use crate::util::errors::{CargoResult, CargoResultExt};
-use crate::util::paths;
-use crate::util::{Config, Filesystem, Sha256};
+use crate::sources::registry::{
+    RegistryConfig, RegistryData, CRATE_TEMPLATE, LOWER_PREFIX_TEMPLATE, PREFIX_TEMPLATE,
+    VERSION_TEMPLATE,
+};
+use crate::util::errors::CargoResult;
+use crate::util::interning::InternedString;
+use crate::util::{Config, Filesystem};
+use anyhow::Context as _;
+use cargo_util::{paths, registry::make_dep_path, Sha256};
 use lazycell::LazyCell;
 use log::{debug, trace};
 use std::cell::{Cell, Ref, RefCell};
 use std::fmt::Write as FmtWrite;
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::prelude::*;
 use std::io::SeekFrom;
 use std::mem;
 use std::path::Path;
 use std::str;
 
+/// A remote registry is a registry that lives at a remote URL (such as
+/// crates.io). The git index is cloned locally, and `.crate` files are
+/// downloaded as needed and cached locally.
 pub struct RemoteRegistry<'cfg> {
     index_path: Filesystem,
+    /// Path to the cache of `.crate` files (`$CARGO_HOME/registry/path/$REG-HASH`).
     cache_path: Filesystem,
     source_id: SourceId,
+    index_git_ref: GitReference,
     config: &'cfg Config,
     tree: RefCell<Option<git2::Tree<'static>>>,
     repo: LazyCell<git2::Repository>,
@@ -34,6 +44,8 @@ impl<'cfg> RemoteRegistry<'cfg> {
             cache_path: config.registry_cache_path().join(name),
             source_id,
             config,
+            // TODO: we should probably make this configurable
+            index_git_ref: GitReference::DefaultBranch,
             tree: RefCell::new(None),
             repo: LazyCell::new(),
             head: Cell::new(None),
@@ -77,7 +89,7 @@ impl<'cfg> RemoteRegistry<'cfg> {
                     let mut opts = git2::RepositoryInitOptions::new();
                     opts.external_template(false);
                     Ok(git2::Repository::init_opts(&path, &opts)
-                        .chain_err(|| "failed to initialize index git repository")?)
+                        .with_context(|| "failed to initialize index git repository")?)
                 }
             }
         })
@@ -85,7 +97,8 @@ impl<'cfg> RemoteRegistry<'cfg> {
 
     fn head(&self) -> CargoResult<git2::Oid> {
         if self.head.get().is_none() {
-            let oid = self.repo()?.refname_to_id("refs/remotes/origin/master")?;
+            let repo = self.repo()?;
+            let oid = self.index_git_ref.resolve(repo)?;
             self.head.set(Some(oid));
         }
         Ok(self.head.get().unwrap())
@@ -215,17 +228,17 @@ impl<'cfg> RegistryData for RemoteRegistry<'cfg> {
             .shell()
             .status("Updating", self.source_id.display_index())?;
 
-        // git fetch origin master
+        // Fetch the latest version of our `index_git_ref` into the index
+        // checkout.
         let url = self.source_id.url();
-        let refspec = "refs/heads/master:refs/remotes/origin/master";
         let repo = self.repo.borrow_mut().unwrap();
-        git::fetch(repo, url.as_str(), refspec, self.config)
-            .chain_err(|| format!("failed to fetch `{}`", url))?;
+        git::fetch(repo, url.as_str(), &self.index_git_ref, self.config)
+            .with_context(|| format!("failed to fetch `{}`", url))?;
         self.config.updated_sources().insert(self.source_id);
 
         // Create a dummy file to record the mtime for when we updated the
         // index.
-        File::create(&path.join(LAST_UPDATED_FILE))?;
+        paths::create(&path.join(LAST_UPDATED_FILE))?;
 
         Ok(())
     }
@@ -250,12 +263,19 @@ impl<'cfg> RegistryData for RemoteRegistry<'cfg> {
 
         let config = self.config()?.unwrap();
         let mut url = config.dl;
-        if !url.contains(CRATE_TEMPLATE) && !url.contains(VERSION_TEMPLATE) {
+        if !url.contains(CRATE_TEMPLATE)
+            && !url.contains(VERSION_TEMPLATE)
+            && !url.contains(PREFIX_TEMPLATE)
+            && !url.contains(LOWER_PREFIX_TEMPLATE)
+        {
             write!(url, "/{}/{}/download", CRATE_TEMPLATE, VERSION_TEMPLATE).unwrap();
         }
+        let prefix = make_dep_path(&*pkg.name(), true);
         let url = url
             .replace(CRATE_TEMPLATE, &*pkg.name())
-            .replace(VERSION_TEMPLATE, &pkg.version().to_string());
+            .replace(VERSION_TEMPLATE, &pkg.version().to_string())
+            .replace(PREFIX_TEMPLATE, &prefix)
+            .replace(LOWER_PREFIX_TEMPLATE, &prefix.to_lowercase());
 
         Ok(MaybeLock::Download {
             url,
@@ -283,7 +303,8 @@ impl<'cfg> RegistryData for RemoteRegistry<'cfg> {
             .create(true)
             .read(true)
             .write(true)
-            .open(&path)?;
+            .open(&path)
+            .with_context(|| format!("failed to open `{}`", path.display()))?;
         let meta = dst.metadata()?;
         if meta.len() > 0 {
             return Ok(dst);
@@ -300,10 +321,8 @@ impl<'cfg> RegistryData for RemoteRegistry<'cfg> {
 
         let path = self.cache_path.join(path);
         let path = self.config.assert_package_cache_locked(&path);
-        if let Ok(dst) = File::open(path) {
-            if let Ok(meta) = dst.metadata() {
-                return meta.len() > 0;
-            }
+        if let Ok(meta) = fs::metadata(path) {
+            return meta.len() > 0;
         }
         false
     }

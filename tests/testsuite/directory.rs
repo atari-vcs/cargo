@@ -1,8 +1,7 @@
 //! Tests for directory sources.
 
 use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::prelude::*;
+use std::fs;
 use std::str;
 
 use serde::Serialize;
@@ -16,8 +15,9 @@ use cargo_test_support::{basic_manifest, project, t, ProjectBuilder};
 fn setup() {
     let root = paths::root();
     t!(fs::create_dir(&root.join(".cargo")));
-    t!(t!(File::create(root.join(".cargo/config"))).write_all(
-        br#"
+    t!(fs::write(
+        root.join(".cargo/config"),
+        r#"
             [source.crates-io]
             replace-with = 'my-awesome-local-registry'
 
@@ -88,14 +88,14 @@ fn simple() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            bar = "0.1.0"
-        "#,
+                [dependencies]
+                bar = "0.1.0"
+            "#,
         )
         .file(
             "src/lib.rs",
@@ -126,14 +126,14 @@ fn simple_install() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            foo = "0.0.1"
-        "#,
+                [dependencies]
+                foo = "0.0.1"
+            "#,
         )
         .file(
             "src/main.rs",
@@ -168,15 +168,15 @@ fn simple_install_fail() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            foo = "0.1.0"
-            baz = "9.8.7"
-        "#,
+                [dependencies]
+                foo = "0.1.0"
+                baz = "9.8.7"
+            "#,
         )
         .file(
             "src/main.rs",
@@ -191,10 +191,11 @@ fn simple_install_fail() {
 error: failed to compile `bar v0.1.0`, intermediate artifacts can be found at `[..]`
 
 Caused by:
-  no matching package named `baz` found
-location searched: registry `https://github.com/rust-lang/crates.io-index`
-perhaps you meant: bar or foo
-required by package `bar v0.1.0`
+  no matching package found
+  searched package name: `baz`
+  perhaps you meant:      bar or foo
+  location searched: registry `crates-io`
+  required by package `bar v0.1.0`
 ",
         )
         .run();
@@ -212,18 +213,18 @@ fn install_without_feature_dep() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            foo = "0.0.1"
-            baz = { version = "9.8.7", optional = true }
+                [dependencies]
+                foo = "0.0.1"
+                baz = { version = "9.8.7", optional = true }
 
-            [features]
-            wantbaz = ["baz"]
-        "#,
+                [features]
+                wantbaz = ["baz"]
+            "#,
         )
         .file(
             "src/main.rs",
@@ -256,14 +257,14 @@ fn not_there() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            bar = "0.1.0"
-        "#,
+                [dependencies]
+                bar = "0.1.0"
+            "#,
         )
         .file(
             "src/lib.rs",
@@ -303,14 +304,14 @@ fn multiple() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            bar = "0.1.0"
-        "#,
+                [dependencies]
+                bar = "0.1.0"
+            "#,
         )
         .file(
             "src/lib.rs",
@@ -335,14 +336,14 @@ fn crates_io_then_directory() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            bar = "0.1.0"
-        "#,
+                [dependencies]
+                bar = "0.1.0"
+            "#,
         )
         .file(
             "src/lib.rs",
@@ -392,14 +393,14 @@ fn crates_io_then_bad_checksum() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            bar = "0.1.0"
-        "#,
+                [dependencies]
+                bar = "0.1.0"
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -442,21 +443,23 @@ fn bad_file_checksum() {
         .file("src/lib.rs", "")
         .build();
 
-    let mut f = t!(File::create(paths::root().join("index/bar/src/lib.rs")));
-    t!(f.write_all(b"fn bar() -> u32 { 0 }"));
+    t!(fs::write(
+        paths::root().join("index/bar/src/lib.rs"),
+        "fn bar() -> u32 { 0 }"
+    ));
 
     let p = project()
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            bar = "0.1.0"
-        "#,
+                [dependencies]
+                bar = "0.1.0"
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -470,7 +473,7 @@ expected: [..]
 actual:   [..]
 
 directory sources are not intended to be edited, if modifications are \
-required then it is recommended that [replace] is used with a forked copy of \
+required then it is recommended that `[patch]` is used with a forked copy of \
 the source
 ",
         )
@@ -494,14 +497,14 @@ fn only_dot_files_ok() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            bar = "0.1.0"
-        "#,
+                [dependencies]
+                bar = "0.1.0"
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -527,14 +530,14 @@ fn random_files_ok() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            bar = "0.1.0"
-        "#,
+                [dependencies]
+                bar = "0.1.0"
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -560,14 +563,14 @@ fn git_lock_file_doesnt_change() {
             "Cargo.toml",
             &format!(
                 r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                    [package]
+                    name = "foo"
+                    version = "0.0.1"
+                    authors = []
 
-            [dependencies]
-            git = {{ git = '{0}' }}
-        "#,
+                    [dependencies]
+                    git = {{ git = '{0}' }}
+                "#,
                 git.url()
             ),
         )
@@ -576,24 +579,23 @@ fn git_lock_file_doesnt_change() {
 
     p.cargo("build").run();
 
-    let mut lock1 = String::new();
-    t!(t!(File::open(p.root().join("Cargo.lock"))).read_to_string(&mut lock1));
+    let lock1 = p.read_lockfile();
 
     let root = paths::root();
     t!(fs::create_dir(&root.join(".cargo")));
-    t!(t!(File::create(root.join(".cargo/config"))).write_all(
+    t!(fs::write(
+        root.join(".cargo/config"),
         format!(
             r#"
-        [source.my-git-repo]
-        git = '{}'
-        replace-with = 'my-awesome-local-registry'
+                [source.my-git-repo]
+                git = '{}'
+                replace-with = 'my-awesome-local-registry'
 
-        [source.my-awesome-local-registry]
-        directory = 'index'
-    "#,
+                [source.my-awesome-local-registry]
+                directory = 'index'
+            "#,
             git.url()
         )
-        .as_bytes()
     ));
 
     p.cargo("build")
@@ -606,8 +608,7 @@ fn git_lock_file_doesnt_change() {
         )
         .run();
 
-    let mut lock2 = String::new();
-    t!(t!(File::open(p.root().join("Cargo.lock"))).read_to_string(&mut lock2));
+    let lock2 = p.read_lockfile();
     assert_eq!(lock1, lock2, "lock files changed");
 }
 
@@ -623,47 +624,50 @@ fn git_override_requires_lockfile() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            git = { git = 'https://example.com/' }
-        "#,
+                [dependencies]
+                git = { git = 'https://example.com/' }
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
 
     let root = paths::root();
     t!(fs::create_dir(&root.join(".cargo")));
-    t!(t!(File::create(root.join(".cargo/config"))).write_all(
-        br#"
-        [source.my-git-repo]
-        git = 'https://example.com/'
-        replace-with = 'my-awesome-local-registry'
+    t!(fs::write(
+        root.join(".cargo/config"),
+        r#"
+            [source.my-git-repo]
+            git = 'https://example.com/'
+            replace-with = 'my-awesome-local-registry'
 
-        [source.my-awesome-local-registry]
-        directory = 'index'
-    "#
+            [source.my-awesome-local-registry]
+            directory = 'index'
+        "#
     ));
 
     p.cargo("build")
         .with_status(101)
         .with_stderr(
             "\
-error: failed to load source for a dependency on `git`
+[ERROR] failed to get `git` as a dependency of package `foo v0.0.1 ([..])`
+
+Caused by:
+  failed to load source for dependency `git`
 
 Caused by:
   Unable to update [..]
 
 Caused by:
   the source my-git-repo requires a lock file to be present first before it can be
-used against vendored source code
+  used against vendored source code
 
-remove the source replacement configuration, generate a lock file, and then
-restore the source replacement configuration to continue the build
-
+  remove the source replacement configuration, generate a lock file, and then
+  restore the source replacement configuration to continue the build
 ",
         )
         .run();
@@ -761,8 +765,8 @@ Caused by:
   failed to select a version for the requirement `foo = \"^2\"`
   candidate versions found which didn't match: 0.0.1
   location searched: directory source `[..] (which is replacing registry `[..]`)
-required by package `bar v0.1.0`
-perhaps a crate was updated and forgotten to be re-vendored?
+  required by package `bar v0.1.0`
+  perhaps a crate was updated and forgotten to be re-vendored?
 ",
         )
         .with_status(101)

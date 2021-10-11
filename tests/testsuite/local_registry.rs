@@ -1,24 +1,23 @@
 //! Tests for local-registry sources.
 
-use std::fs::{self, File};
-use std::io::prelude::*;
-
 use cargo_test_support::paths::{self, CargoPathExt};
 use cargo_test_support::registry::{registry_path, Package};
 use cargo_test_support::{basic_manifest, project, t};
+use std::fs;
 
 fn setup() {
     let root = paths::root();
     t!(fs::create_dir(&root.join(".cargo")));
-    t!(t!(File::create(root.join(".cargo/config"))).write_all(
-        br#"
-        [source.crates-io]
-        registry = 'https://wut'
-        replace-with = 'my-awesome-local-registry'
+    t!(fs::write(
+        root.join(".cargo/config"),
+        r#"
+            [source.crates-io]
+            registry = 'https://wut'
+            replace-with = 'my-awesome-local-registry'
 
-        [source.my-awesome-local-registry]
-        local-registry = 'registry'
-    "#
+            [source.my-awesome-local-registry]
+            local-registry = 'registry'
+        "#
     ));
 }
 
@@ -34,14 +33,14 @@ fn simple() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            bar = "0.0.1"
-        "#,
+                [dependencies]
+                bar = "0.0.1"
+            "#,
         )
         .file(
             "src/lib.rs",
@@ -72,14 +71,14 @@ fn depend_on_yanked() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            bar = "0.0.1"
-        "#,
+                [dependencies]
+                bar = "0.0.1"
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -115,14 +114,14 @@ fn multiple_versions() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            bar = "*"
-        "#,
+                [dependencies]
+                bar = "*"
+            "#,
         )
         .file(
             "src/lib.rs",
@@ -167,26 +166,26 @@ fn multiple_names() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            bar = "*"
-            baz = "*"
-        "#,
+                [dependencies]
+                bar = "*"
+                baz = "*"
+            "#,
         )
         .file(
             "src/lib.rs",
             r#"
-            extern crate bar;
-            extern crate baz;
-            pub fn foo() {
-                bar::bar();
-                baz::baz();
-            }
-        "#,
+                extern crate bar;
+                extern crate baz;
+                pub fn foo() {
+                    bar::bar();
+                    baz::baz();
+                }
+            "#,
         )
         .build();
 
@@ -221,26 +220,26 @@ fn interdependent() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            bar = "*"
-            baz = "*"
-        "#,
+                [dependencies]
+                bar = "*"
+                baz = "*"
+            "#,
         )
         .file(
             "src/lib.rs",
             r#"
-            extern crate bar;
-            extern crate baz;
-            pub fn foo() {
-                bar::bar();
-                baz::baz();
-            }
-        "#,
+                extern crate bar;
+                extern crate baz;
+                pub fn foo() {
+                    bar::bar();
+                    baz::baz();
+                }
+            "#,
         )
         .build();
 
@@ -289,26 +288,26 @@ fn path_dep_rewritten() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            bar = "*"
-            baz = "*"
-        "#,
+                [dependencies]
+                bar = "*"
+                baz = "*"
+            "#,
         )
         .file(
             "src/lib.rs",
             r#"
-            extern crate bar;
-            extern crate baz;
-            pub fn foo() {
-                bar::bar();
-                baz::baz();
-            }
-        "#,
+                extern crate bar;
+                extern crate baz;
+                pub fn foo() {
+                    bar::bar();
+                    baz::baz();
+                }
+            "#,
         )
         .build();
 
@@ -333,26 +332,26 @@ fn invalid_dir_bad() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            bar = "*"
-        "#,
+                [dependencies]
+                bar = "*"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             ".cargo/config",
             r#"
-            [source.crates-io]
-            registry = 'https://wut'
-            replace-with = 'my-awesome-local-directory'
+                [source.crates-io]
+                registry = 'https://wut'
+                replace-with = 'my-awesome-local-directory'
 
-            [source.my-awesome-local-directory]
-            local-registry = '/path/to/nowhere'
-        "#,
+                [source.my-awesome-local-directory]
+                local-registry = '/path/to/nowhere'
+            "#,
         )
         .build();
 
@@ -360,13 +359,16 @@ fn invalid_dir_bad() {
         .with_status(101)
         .with_stderr(
             "\
-[ERROR] failed to load source for a dependency on `bar`
+[ERROR] failed to get `bar` as a dependency of package `foo v0.0.1 [..]`
 
 Caused by:
-  Unable to update registry `https://[..]`
+  failed to load source for dependency `bar`
 
 Caused by:
-  failed to update replaced source registry `https://[..]`
+  Unable to update registry `crates-io`
+
+Caused by:
+  failed to update replaced source registry `crates-io`
 
 Caused by:
   local registry path is not a directory: [..]path[..]to[..]nowhere
@@ -389,14 +391,14 @@ fn different_directory_replacing_the_registry_is_bad() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            bar = "*"
-        "#,
+                [dependencies]
+                bar = "*"
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -438,14 +440,15 @@ unable to verify that `bar v0.0.1` is the same as when the lockfile was generate
 fn crates_io_registry_url_is_optional() {
     let root = paths::root();
     t!(fs::create_dir(&root.join(".cargo")));
-    t!(t!(File::create(root.join(".cargo/config"))).write_all(
-        br#"
-        [source.crates-io]
-        replace-with = 'my-awesome-local-registry'
+    t!(fs::write(
+        root.join(".cargo/config"),
+        r#"
+            [source.crates-io]
+            replace-with = 'my-awesome-local-registry'
 
-        [source.my-awesome-local-registry]
-        local-registry = 'registry'
-    "#
+            [source.my-awesome-local-registry]
+            local-registry = 'registry'
+        "#
     ));
 
     Package::new("bar", "0.0.1")
@@ -457,14 +460,14 @@ fn crates_io_registry_url_is_optional() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            bar = "0.0.1"
-        "#,
+                [dependencies]
+                bar = "0.0.1"
+            "#,
         )
         .file(
             "src/lib.rs",

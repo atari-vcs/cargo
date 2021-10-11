@@ -4,6 +4,7 @@ use crate::util::config::value;
 use crate::util::config::{Config, ConfigError, ConfigKey};
 use crate::util::config::{ConfigValue as CV, Definition, Value};
 use serde::{de, de::IntoDeserializer};
+use std::collections::HashSet;
 use std::vec;
 
 /// Serde deserializer used to convert config values to a target type using
@@ -28,13 +29,15 @@ macro_rules! deserialize_method {
         where
             V: de::Visitor<'de>,
         {
-            let v = self.config.$getter(&self.key)?.ok_or_else(||
-                ConfigError::missing(&self.key))?;
-            let Value{val, definition} = v;
+            let v = self
+                .config
+                .$getter(&self.key)?
+                .ok_or_else(|| ConfigError::missing(&self.key))?;
+            let Value { val, definition } = v;
             let res: Result<V::Value, ConfigError> = visitor.$visit(val);
             res.map_err(|e| e.with_key_context(&self.key, definition))
         }
-    }
+    };
 }
 
 impl<'de, 'config> de::Deserializer<'de> for Deserializer<'config> {
@@ -44,46 +47,7 @@ impl<'de, 'config> de::Deserializer<'de> for Deserializer<'config> {
     where
         V: de::Visitor<'de>,
     {
-        // Determine if value comes from env, cli, or file, and merge env if
-        // possible.
-        let cv = self.config.get_cv(&self.key)?;
-        let env = self.config.env.get(self.key.as_env_key());
-        let env_def = Definition::Environment(self.key.as_env_key().to_string());
-        let use_env = match (&cv, env) {
-            (Some(cv), Some(_)) => env_def.is_higher_priority(cv.definition()),
-            (None, Some(_)) => true,
-            _ => false,
-        };
-        if use_env {
-            // Future note: If you ever need to deserialize a non-self describing
-            // map type, this should implement a starts_with check (similar to how
-            // ConfigMapAccess does).
-            let env = env.unwrap();
-            let res: Result<V::Value, ConfigError> = if env == "true" || env == "false" {
-                visitor.visit_bool(env.parse().unwrap())
-            } else if let Ok(env) = env.parse::<i64>() {
-                visitor.visit_i64(env)
-            } else if self.config.cli_unstable().advanced_env
-                && env.starts_with('[')
-                && env.ends_with(']')
-            {
-                visitor.visit_seq(ConfigSeqAccess::new(self.clone())?)
-            } else {
-                // Try to merge if possible.
-                match cv {
-                    Some(CV::List(_cv_list, _cv_def)) => {
-                        visitor.visit_seq(ConfigSeqAccess::new(self.clone())?)
-                    }
-                    _ => {
-                        // Note: CV::Table merging is not implemented, as env
-                        // vars do not support table values.
-                        visitor.visit_str(env)
-                    }
-                }
-            };
-            return res.map_err(|e| e.with_key_context(&self.key, env_def));
-        }
-
+        let cv = self.config.get_cv_with_env(&self.key)?;
         if let Some(cv) = cv {
             let res: (Result<V::Value, ConfigError>, Definition) = match cv {
                 CV::Integer(i, def) => (visitor.visit_i64(i), def),
@@ -176,11 +140,52 @@ impl<'de, 'config> de::Deserializer<'de> for Deserializer<'config> {
         visitor.visit_seq(ConfigSeqAccess::new(self)?)
     }
 
+    fn deserialize_newtype_struct<V>(
+        self,
+        name: &'static str,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de>,
+    {
+        let merge = if name == "StringList" {
+            true
+        } else if name == "UnmergedStringList" {
+            false
+        } else {
+            return visitor.visit_newtype_struct(self);
+        };
+
+        let vals = self.config.get_list_or_string(&self.key, merge)?;
+        let vals: Vec<String> = vals.into_iter().map(|vd| vd.0).collect();
+        visitor.visit_newtype_struct(vals.into_deserializer())
+    }
+
+    fn deserialize_enum<V>(
+        self,
+        _name: &'static str,
+        _variants: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de>,
+    {
+        let value = self
+            .config
+            .get_string_priv(&self.key)?
+            .ok_or_else(|| ConfigError::missing(&self.key))?;
+
+        let Value { val, definition } = value;
+        visitor
+            .visit_enum(val.into_deserializer())
+            .map_err(|e: ConfigError| e.with_key_context(&self.key, definition))
+    }
+
     // These aren't really supported, yet.
     serde::forward_to_deserialize_any! {
         f32 f64 char str bytes
         byte_buf unit unit_struct
-        enum identifier ignored_any newtype_struct
+        identifier ignored_any
     }
 }
 
@@ -230,37 +235,54 @@ impl<'config> ConfigMapAccess<'config> {
 
     fn new_struct(
         de: Deserializer<'config>,
-        fields: &'static [&'static str],
+        given_fields: &'static [&'static str],
     ) -> Result<ConfigMapAccess<'config>, ConfigError> {
-        let fields: Vec<KeyKind> = fields
-            .iter()
-            .map(|field| KeyKind::Normal(field.to_string()))
-            .collect();
+        let table = de.config.get_table(&de.key)?;
 
         // Assume that if we're deserializing a struct it exhaustively lists all
         // possible fields on this key that we're *supposed* to use, so take
         // this opportunity to warn about any keys that aren't recognized as
         // fields and warn about them.
-        if let Some(mut v) = de.config.get_table(&de.key)? {
-            for (t_key, value) in v.val.drain() {
-                if fields.iter().any(|k| match k {
-                    KeyKind::Normal(s) => s == &t_key,
-                    KeyKind::CaseSensitive(s) => s == &t_key,
-                }) {
-                    continue;
-                }
+        if let Some(v) = table.as_ref() {
+            let unused_keys = v
+                .val
+                .iter()
+                .filter(|(k, _v)| !given_fields.iter().any(|gk| gk == k));
+            for (unused_key, unused_value) in unused_keys {
                 de.config.shell().warn(format!(
                     "unused config key `{}.{}` in `{}`",
                     de.key,
-                    t_key,
-                    value.definition()
+                    unused_key,
+                    unused_value.definition()
                 ))?;
+            }
+        }
+
+        let mut fields = HashSet::new();
+
+        // If the caller is interested in a field which we can provide from
+        // the environment, get it from there.
+        for field in given_fields {
+            let mut field_key = de.key.clone();
+            field_key.push(field);
+            for env_key in de.config.env.keys() {
+                if env_key.starts_with(field_key.as_env_key()) {
+                    fields.insert(KeyKind::Normal(field.to_string()));
+                }
+            }
+        }
+
+        // Add everything from the config table we're interested in that we
+        // haven't already provided via an environment variable
+        if let Some(v) = table {
+            for key in v.val.keys() {
+                fields.insert(KeyKind::Normal(key.clone()));
             }
         }
 
         Ok(ConfigMapAccess {
             de,
-            fields,
+            fields: fields.into_iter().collect(),
             field_index: 0,
         })
     }
@@ -345,36 +367,7 @@ impl ConfigSeqAccess {
             res.extend(v.val);
         }
 
-        // Check environment.
-        if let Some(v) = de.config.env.get(de.key.as_env_key()) {
-            let def = Definition::Environment(de.key.as_env_key().to_string());
-            if de.config.cli_unstable().advanced_env && v.starts_with('[') && v.ends_with(']') {
-                // Parse an environment string as a TOML array.
-                let toml_s = format!("value={}", v);
-                let toml_v: toml::Value = toml::de::from_str(&toml_s).map_err(|e| {
-                    ConfigError::new(format!("could not parse TOML list: {}", e), def.clone())
-                })?;
-                let values = toml_v
-                    .as_table()
-                    .unwrap()
-                    .get("value")
-                    .unwrap()
-                    .as_array()
-                    .expect("env var was not array");
-                for value in values {
-                    // TODO: support other types.
-                    let s = value.as_str().ok_or_else(|| {
-                        ConfigError::new(
-                            format!("expected string, found {}", value.type_str()),
-                            def.clone(),
-                        )
-                    })?;
-                    res.push((s.to_string(), def.clone()));
-                }
-            } else {
-                res.extend(v.split_whitespace().map(|s| (s.to_string(), def.clone())));
-            }
-        }
+        de.config.get_env_list(&de.key, &mut res)?;
 
         Ok(ConfigSeqAccess {
             list_iter: res.into_iter(),
@@ -478,7 +471,7 @@ impl<'de, 'config> de::MapAccess<'de> for ValueDeserializer<'config> {
                 seed.deserialize(Tuple2Deserializer(0i32, path.to_string_lossy()))
             }
             Definition::Environment(env) => {
-                seed.deserialize(Tuple2Deserializer(1i32, env.as_ref()))
+                seed.deserialize(Tuple2Deserializer(1i32, env.as_str()))
             }
             Definition::Cli => seed.deserialize(Tuple2Deserializer(2i32, "")),
         }

@@ -1,11 +1,11 @@
 use super::{Config, ConfigKey, ConfigRelativePath, OptValue, PathAndArgs, StringList, CV};
-use crate::core::compiler::BuildOutput;
+use crate::core::compiler::{BuildOutput, LinkType};
 use crate::util::CargoResult;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
-/// Config definition of a [target.'cfg(…)'] table.
+/// Config definition of a `[target.'cfg(…)']` table.
 ///
 /// This is a subset of `TargetConfig`.
 #[derive(Debug, Deserialize)]
@@ -19,8 +19,8 @@ pub struct TargetCfgConfig {
     pub other: BTreeMap<String, toml::Value>,
 }
 
-/// Config definition of a [target] table.
-#[derive(Debug)]
+/// Config definition of a `[target]` table or `[host]`.
+#[derive(Debug, Clone)]
 pub struct TargetConfig {
     /// Process to run as a wrapper for `cargo run`, `test`, and `bench` commands.
     pub runner: OptValue<PathAndArgs>,
@@ -64,20 +64,64 @@ pub(super) fn load_target_cfgs(config: &Config) -> CargoResult<Vec<(String, Targ
     Ok(result)
 }
 
+/// Returns true if the `[target]` table should be applied to host targets.
+pub(super) fn get_target_applies_to_host(config: &Config) -> CargoResult<bool> {
+    if config.cli_unstable().target_applies_to_host {
+        if let Ok(target_applies_to_host) = config.get::<bool>("target-applies-to-host") {
+            Ok(target_applies_to_host)
+        } else {
+            Ok(!config.cli_unstable().host_config)
+        }
+    } else {
+        if config.cli_unstable().host_config {
+            anyhow::bail!(
+                "the -Zhost-config flag requires the -Ztarget-applies-to-host flag to be set"
+            );
+        } else {
+            Ok(true)
+        }
+    }
+}
+
+/// Loads a single `[host]` table for the given triple.
+pub(super) fn load_host_triple(config: &Config, triple: &str) -> CargoResult<TargetConfig> {
+    if config.cli_unstable().host_config {
+        let host_triple_prefix = format!("host.{}", triple);
+        let host_triple_key = ConfigKey::from_str(&host_triple_prefix);
+        let host_prefix = match config.get_cv(&host_triple_key)? {
+            Some(_) => host_triple_prefix,
+            None => "host".to_string(),
+        };
+        load_config_table(config, &host_prefix)
+    } else {
+        Ok(TargetConfig {
+            runner: None,
+            rustflags: None,
+            linker: None,
+            links_overrides: BTreeMap::new(),
+        })
+    }
+}
+
 /// Loads a single `[target]` table for the given triple.
 pub(super) fn load_target_triple(config: &Config, triple: &str) -> CargoResult<TargetConfig> {
+    load_config_table(config, &format!("target.{}", triple))
+}
+
+/// Loads a single table for the given prefix.
+fn load_config_table(config: &Config, prefix: &str) -> CargoResult<TargetConfig> {
     // This needs to get each field individually because it cannot fetch the
     // struct all at once due to `links_overrides`. Can't use `serde(flatten)`
     // because it causes serde to use `deserialize_map` which means the config
     // deserializer does not know which keys to deserialize, which means
     // environment variables would not work.
-    let runner: OptValue<PathAndArgs> = config.get(&format!("target.{}.runner", triple))?;
-    let rustflags: OptValue<StringList> = config.get(&format!("target.{}.rustflags", triple))?;
-    let linker: OptValue<ConfigRelativePath> = config.get(&format!("target.{}.linker", triple))?;
+    let runner: OptValue<PathAndArgs> = config.get(&format!("{}.runner", prefix))?;
+    let rustflags: OptValue<StringList> = config.get(&format!("{}.rustflags", prefix))?;
+    let linker: OptValue<ConfigRelativePath> = config.get(&format!("{}.linker", prefix))?;
     // Links do not support environment variables.
-    let target_key = ConfigKey::from_str(&format!("target.{}", triple));
+    let target_key = ConfigKey::from_str(prefix);
     let links_overrides = match config.get_table(&target_key)? {
-        Some(links) => parse_links_overrides(&target_key, links.val)?,
+        Some(links) => parse_links_overrides(&target_key, links.val, config)?,
         None => BTreeMap::new(),
     };
     Ok(TargetConfig {
@@ -91,7 +135,10 @@ pub(super) fn load_target_triple(config: &Config, triple: &str) -> CargoResult<T
 fn parse_links_overrides(
     target_key: &ConfigKey,
     links: HashMap<String, CV>,
+    config: &Config,
 ) -> CargoResult<BTreeMap<String, BuildOutput>> {
+    let extra_link_arg = config.cli_unstable().extra_link_arg;
+
     let mut links_overrides = BTreeMap::new();
     for (lib_name, value) in links {
         // Skip these keys, it shares the namespace with `TargetConfig`.
@@ -129,9 +176,34 @@ fn parse_links_overrides(
                         .library_paths
                         .extend(list.iter().map(|v| PathBuf::from(&v.0)));
                 }
-                "rustc-cdylib-link-arg" => {
+                "rustc-link-arg-cdylib" | "rustc-cdylib-link-arg" => {
                     let args = value.list(key)?;
-                    output.linker_args.extend(args.iter().map(|v| v.0.clone()));
+                    let args = args.iter().map(|v| (LinkType::Cdylib, v.0.clone()));
+                    output.linker_args.extend(args);
+                }
+                "rustc-link-arg-bins" => {
+                    if extra_link_arg {
+                        let args = value.list(key)?;
+                        let args = args.iter().map(|v| (LinkType::Bin, v.0.clone()));
+                        output.linker_args.extend(args);
+                    } else {
+                        config.shell().warn(format!(
+                            "target config `{}.{}` requires -Zextra-link-arg flag",
+                            target_key, key
+                        ))?;
+                    }
+                }
+                "rustc-link-arg" => {
+                    if extra_link_arg {
+                        let args = value.list(key)?;
+                        let args = args.iter().map(|v| (LinkType::All, v.0.clone()));
+                        output.linker_args.extend(args);
+                    } else {
+                        config.shell().warn(format!(
+                            "target config `{}.{}` requires -Zextra-link-arg flag",
+                            target_key, key
+                        ))?;
+                    }
                 }
                 "rustc-cfg" => {
                     let list = value.list(key)?;

@@ -13,7 +13,7 @@
 [package]
 edition = "2018"
 name = "im-rc"
-version = "14.3.0"
+version = "15.0.0"
 authors = ["Bodil Stokke <bodil@bodil.org>"]
 build = "./build.rs"
 description = "Immutable collection datatypes (the fast but not thread safe version)"
@@ -34,7 +34,7 @@ version = "0.4"
 optional = true
 
 [dependencies.bitmaps]
-version = "2.0.0"
+version = "2"
 
 [dependencies.proptest]
 version = "0.9"
@@ -48,27 +48,27 @@ optional = true
 version = "0.5.1"
 
 [dependencies.rand_xoshiro]
-version = "0.4.0"
+version = "0.4"
 
 [dependencies.rayon]
-version = "1.0"
+version = "1"
 optional = true
 
 [dependencies.refpool]
-version = "0.2.2"
+version = "0.4"
 optional = true
 
 [dependencies.serde]
-version = "1.0"
+version = "1"
 optional = true
 
 [dependencies.sized-chunks]
-version = ">= 0.5.1, < 0.7"
+version = "0.6"
 
 [dependencies.typenum]
-version = "1.10"
+version = "1.12"
 [dev-dependencies.metrohash]
-version = "1.0.6"
+version = "1"
 
 [dev-dependencies.pretty_assertions]
 version = "0.6"
@@ -77,21 +77,25 @@ version = "0.6"
 version = "0.9"
 
 [dev-dependencies.proptest-derive]
-version = "0.1.0"
+version = "0.1"
 
 [dev-dependencies.rand]
 version = "0.7"
 features = ["small_rng"]
 
 [dev-dependencies.rayon]
-version = "1.0"
+version = "1"
 
 [dev-dependencies.serde]
-version = "1.0"
+version = "1"
 
 [dev-dependencies.serde_json]
-version = "1.0"
+version = "1"
 [build-dependencies.version_check]
 version = "0.9"
+
+[features]
+debug = []
+pool = ["refpool", "sized-chunks/refpool"]
 [badges.travis-ci]
 repository = "bodil/im-rs"

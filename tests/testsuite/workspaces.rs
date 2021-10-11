@@ -1,12 +1,9 @@
 //! Tests for workspaces.
 
-use std::env;
-use std::fs::{self, File};
-use std::io::{Read, Write};
-
 use cargo_test_support::registry::Package;
-use cargo_test_support::{basic_lib_manifest, basic_manifest, git, project};
-use cargo_test_support::{sleep_ms, t};
+use cargo_test_support::{basic_lib_manifest, basic_manifest, git, project, sleep_ms};
+use std::env;
+use std::fs;
 
 #[cargo_test]
 fn simple_explicit() {
@@ -14,25 +11,25 @@ fn simple_explicit() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [workspace]
-            members = ["bar"]
-        "#,
+                [workspace]
+                members = ["bar"]
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
-            workspace = ".."
-        "#,
+                [project]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
+                workspace = ".."
+            "#,
         )
         .file("bar/src/main.rs", "fn main() {}");
     let p = p.build();
@@ -55,26 +52,26 @@ fn simple_explicit_default_members() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [workspace]
-            members = ["bar"]
-            default-members = ["bar"]
-        "#,
+                [workspace]
+                members = ["bar"]
+                default-members = ["bar"]
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
-            workspace = ".."
-        "#,
+                [project]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
+                workspace = ".."
+            "#,
         )
         .file("bar/src/main.rs", "fn main() {}");
     let p = p.build();
@@ -90,15 +87,15 @@ fn non_virtual_default_members_build_other_member() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [workspace]
-            members = [".", "bar", "baz"]
-            default-members = ["baz"]
-        "#,
+                [workspace]
+                members = [".", "bar", "baz"]
+                default-members = ["baz"]
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file("bar/Cargo.toml", &basic_manifest("bar", "0.1.0"))
@@ -128,14 +125,14 @@ fn inferred_root() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [workspace]
-            members = ["bar"]
-        "#,
+                [workspace]
+                members = ["bar"]
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file("bar/Cargo.toml", &basic_manifest("bar", "0.1.0"))
@@ -160,16 +157,16 @@ fn inferred_path_dep() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            bar = { path = "bar" }
+                [dependencies]
+                bar = { path = "bar" }
 
-            [workspace]
-        "#,
+                [workspace]
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file("bar/Cargo.toml", &basic_manifest("bar", "0.1.0"))
@@ -195,29 +192,29 @@ fn transitive_path_dep() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            bar = { path = "bar" }
+                [dependencies]
+                bar = { path = "bar" }
 
-            [workspace]
-        "#,
+                [workspace]
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            baz = { path = "../baz" }
-        "#,
+                [dependencies]
+                baz = { path = "../baz" }
+            "#,
         )
         .file("bar/src/main.rs", "fn main() {}")
         .file("bar/src/lib.rs", "")
@@ -252,27 +249,27 @@ fn parent_pointer_works() {
         .file(
             "foo/Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            bar = { path = "../bar" }
+                [dependencies]
+                bar = { path = "../bar" }
 
-            [workspace]
-        "#,
+                [workspace]
+            "#,
         )
         .file("foo/src/main.rs", "fn main() {}")
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
-            workspace = "../foo"
-        "#,
+                [project]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
+                workspace = "../foo"
+            "#,
         )
         .file("bar/src/main.rs", "fn main() {}")
         .file("bar/src/lib.rs", "");
@@ -290,25 +287,25 @@ fn same_names_in_workspace() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [workspace]
-            members = ["bar"]
-        "#,
+                [workspace]
+                members = ["bar"]
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
-            workspace = ".."
-        "#,
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
+                workspace = ".."
+            "#,
         )
         .file("bar/src/main.rs", "fn main() {}");
     let p = p.build();
@@ -331,13 +328,13 @@ fn parent_doesnt_point_to_child() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [workspace]
-        "#,
+                [workspace]
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file("bar/Cargo.toml", &basic_manifest("bar", "0.1.0"))
@@ -366,12 +363,12 @@ fn invalid_parent_pointer() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
-            workspace = "foo"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
+                workspace = "foo"
+            "#,
         )
         .file("src/main.rs", "fn main() {}");
     let p = p.build();
@@ -395,14 +392,14 @@ fn invalid_members() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [workspace]
-            members = ["foo"]
-        "#,
+                [workspace]
+                members = ["foo"]
+            "#,
         )
         .file("src/main.rs", "fn main() {}");
     let p = p.build();
@@ -411,7 +408,10 @@ fn invalid_members() {
         .with_status(101)
         .with_stderr(
             "\
-error: failed to read `[..]Cargo.toml`
+[ERROR] failed to load manifest for workspace member `[..]/foo`
+
+Caused by:
+  failed to read `[..]foo/foo/Cargo.toml`
 
 Caused by:
   [..]
@@ -426,13 +426,13 @@ fn bare_workspace_ok() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [workspace]
-        "#,
+                [workspace]
+            "#,
         )
         .file("src/main.rs", "fn main() {}");
     let p = p.build();
@@ -446,27 +446,27 @@ fn two_roots() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [workspace]
-            members = ["bar"]
-        "#,
+                [workspace]
+                members = ["bar"]
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
 
-            [workspace]
-            members = [".."]
-        "#,
+                [workspace]
+                members = [".."]
+            "#,
         )
         .file("bar/src/main.rs", "fn main() {}");
     let p = p.build();
@@ -489,12 +489,12 @@ fn workspace_isnt_root() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
-            workspace = "bar"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
+                workspace = "bar"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file("bar/Cargo.toml", &basic_manifest("bar", "0.1.0"))
@@ -513,36 +513,36 @@ fn dangling_member() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [workspace]
-            members = ["bar"]
-        "#,
+                [workspace]
+                members = ["bar"]
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
-            workspace = "../baz"
-        "#,
+                [project]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
+                workspace = "../baz"
+            "#,
         )
         .file("bar/src/main.rs", "fn main() {}")
         .file(
             "baz/Cargo.toml",
             r#"
-            [project]
-            name = "baz"
-            version = "0.1.0"
-            authors = []
-            workspace = "../baz"
-        "#,
+                [project]
+                name = "baz"
+                version = "0.1.0"
+                authors = []
+                workspace = "../baz"
+            "#,
         )
         .file("baz/src/main.rs", "fn main() {}");
     let p = p.build();
@@ -565,23 +565,23 @@ fn cycle() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
-            workspace = "bar"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
+                workspace = "bar"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
-            workspace = ".."
-        "#,
+                [project]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
+                workspace = ".."
+            "#,
         )
         .file("bar/src/main.rs", "fn main() {}");
     let p = p.build();
@@ -600,30 +600,30 @@ fn share_dependencies() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            dep1 = "0.1"
+                [dependencies]
+                dep1 = "0.1"
 
-            [workspace]
-            members = ["bar"]
-        "#,
+                [workspace]
+                members = ["bar"]
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            dep1 = "< 0.1.5"
-        "#,
+                [dependencies]
+                dep1 = "< 0.1.5"
+            "#,
         )
         .file("bar/src/main.rs", "fn main() {}");
     let p = p.build();
@@ -651,27 +651,27 @@ fn fetch_fetches_all() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [workspace]
-            members = ["bar"]
-        "#,
+                [workspace]
+                members = ["bar"]
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            dep1 = "*"
-        "#,
+                [dependencies]
+                dep1 = "*"
+            "#,
         )
         .file("bar/src/main.rs", "fn main() {}");
     let p = p.build();
@@ -695,30 +695,30 @@ fn lock_works_for_everyone() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            dep2 = "0.1"
+                [dependencies]
+                dep2 = "0.1"
 
-            [workspace]
-            members = ["bar"]
-        "#,
+                [workspace]
+                members = ["bar"]
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            dep1 = "0.1"
-        "#,
+                [dependencies]
+                dep1 = "0.1"
+            "#,
         )
         .file("bar/src/main.rs", "fn main() {}");
     let p = p.build();
@@ -765,9 +765,9 @@ fn virtual_works() {
         .file(
             "Cargo.toml",
             r#"
-            [workspace]
-            members = ["bar"]
-        "#,
+                [workspace]
+                members = ["bar"]
+            "#,
         )
         .file("bar/Cargo.toml", &basic_manifest("bar", "0.1.0"))
         .file("bar/src/main.rs", "fn main() {}");
@@ -784,9 +784,9 @@ fn explicit_package_argument_works_with_virtual_manifest() {
         .file(
             "Cargo.toml",
             r#"
-            [workspace]
-            members = ["bar"]
-        "#,
+                [workspace]
+                members = ["bar"]
+            "#,
         )
         .file("bar/Cargo.toml", &basic_manifest("bar", "0.1.0"))
         .file("bar/src/main.rs", "fn main() {}");
@@ -803,8 +803,8 @@ fn virtual_misconfigure() {
         .file(
             "Cargo.toml",
             r#"
-            [workspace]
-        "#,
+                [workspace]
+            "#,
         )
         .file("bar/Cargo.toml", &basic_manifest("bar", "0.1.0"))
         .file("bar/src/main.rs", "fn main() {}");
@@ -832,9 +832,9 @@ fn virtual_build_all_implied() {
         .file(
             "Cargo.toml",
             r#"
-            [workspace]
-            members = ["bar"]
-        "#,
+                [workspace]
+                members = ["bar"]
+            "#,
         )
         .file("bar/Cargo.toml", &basic_manifest("bar", "0.1.0"))
         .file("bar/src/main.rs", "fn main() {}");
@@ -848,10 +848,10 @@ fn virtual_default_members() {
         .file(
             "Cargo.toml",
             r#"
-            [workspace]
-            members = ["bar", "baz"]
-            default-members = ["bar"]
-        "#,
+                [workspace]
+                members = ["bar", "baz"]
+                default-members = ["bar"]
+            "#,
         )
         .file("bar/Cargo.toml", &basic_manifest("bar", "0.1.0"))
         .file("baz/Cargo.toml", &basic_manifest("baz", "0.1.0"))
@@ -869,10 +869,10 @@ fn virtual_default_member_is_not_a_member() {
         .file(
             "Cargo.toml",
             r#"
-            [workspace]
-            members = ["bar"]
-            default-members = ["something-else"]
-        "#,
+                [workspace]
+                members = ["bar"]
+                default-members = ["something-else"]
+            "#,
         )
         .file("bar/Cargo.toml", &basic_manifest("bar", "0.1.0"))
         .file("bar/src/main.rs", "fn main() {}");
@@ -894,10 +894,10 @@ fn virtual_default_members_build_other_member() {
         .file(
             "Cargo.toml",
             r#"
-            [workspace]
-            members = ["bar", "baz"]
-            default-members = ["baz"]
-        "#,
+                [workspace]
+                members = ["bar", "baz"]
+                default-members = ["baz"]
+            "#,
         )
         .file("bar/Cargo.toml", &basic_manifest("bar", "0.1.0"))
         .file("bar/src/lib.rs", "pub fn bar() {}")
@@ -939,20 +939,20 @@ fn include_virtual() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
-            [workspace]
-            members = ["bar"]
-        "#,
+                [project]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
+                [workspace]
+                members = ["bar"]
+            "#,
         )
         .file("src/main.rs", "")
         .file(
             "bar/Cargo.toml",
             r#"
-            [workspace]
-        "#,
+                [workspace]
+            "#,
         );
     let p = p.build();
     p.cargo("build")
@@ -973,30 +973,30 @@ fn members_include_path_deps() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [workspace]
-            members = ["p1"]
+                [workspace]
+                members = ["p1"]
 
-            [dependencies]
-            p3 = { path = "p3" }
-        "#,
+                [dependencies]
+                p3 = { path = "p3" }
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "p1/Cargo.toml",
             r#"
-            [project]
-            name = "p1"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "p1"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            p2 = { path = "../p2" }
-        "#,
+                [dependencies]
+                p2 = { path = "../p2" }
+            "#,
         )
         .file("p1/src/lib.rs", "")
         .file("p2/Cargo.toml", &basic_manifest("p2", "0.1.0"))
@@ -1022,23 +1022,21 @@ fn new_warns_you_this_will_not_work() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [workspace]
-        "#,
+                [workspace]
+            "#,
         )
         .file("src/lib.rs", "");
     let p = p.build();
 
     p.cargo("new --lib bar")
-        .env("USER", "foo")
         .with_stderr(
             "\
-warning: compiling this new crate may not work due to invalid workspace \
-configuration
+warning: compiling this new package may not work due to invalid workspace configuration
 
 current package believes it's in a workspace when it's not:
 current: [..]
@@ -1057,16 +1055,17 @@ root: [..]
 fn new_warning_with_corrupt_ws() {
     let p = project().file("Cargo.toml", "asdf").build();
     p.cargo("new bar")
-        .env("USER", "foo")
         .with_stderr(
             "\
-[WARNING] compiling this new crate may not work due to invalid workspace configuration
+[WARNING] compiling this new package may not work due to invalid workspace configuration
 
 failed to parse manifest at `[..]foo/Cargo.toml`
 
 Caused by:
-    0: could not parse input as TOML
-    1: expected an equals, found eof at line 1 column 5
+  could not parse input as TOML
+
+Caused by:
+  expected an equals, found eof at line 1 column 5
      Created binary (application) `bar` package
 ",
         )
@@ -1079,30 +1078,30 @@ fn lock_doesnt_change_depending_on_crate() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [workspace]
-            members = ['baz']
+                [workspace]
+                members = ['baz']
 
-            [dependencies]
-            foo = "*"
-        "#,
+                [dependencies]
+                foo = "*"
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "baz/Cargo.toml",
             r#"
-            [project]
-            name = "baz"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "baz"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            bar = "*"
-        "#,
+                [dependencies]
+                bar = "*"
+            "#,
         )
         .file("baz/src/lib.rs", "");
     let p = p.build();
@@ -1112,13 +1111,11 @@ fn lock_doesnt_change_depending_on_crate() {
 
     p.cargo("build").run();
 
-    let mut lockfile = String::new();
-    t!(t!(File::open(p.root().join("Cargo.lock"))).read_to_string(&mut lockfile));
+    let lockfile = p.read_lockfile();
 
     p.cargo("build").cwd("baz").run();
 
-    let mut lockfile2 = String::new();
-    t!(t!(File::open(p.root().join("Cargo.lock"))).read_to_string(&mut lockfile2));
+    let lockfile2 = p.read_lockfile();
 
     assert_eq!(lockfile, lockfile2);
 }
@@ -1129,37 +1126,37 @@ fn rebuild_please() {
         .file(
             "Cargo.toml",
             r#"
-            [workspace]
-            members = ['lib', 'bin']
-        "#,
+                [workspace]
+                members = ['lib', 'bin']
+            "#,
         )
         .file("lib/Cargo.toml", &basic_manifest("lib", "0.1.0"))
         .file(
             "lib/src/lib.rs",
             r#"
-            pub fn foo() -> u32 { 0 }
-        "#,
+                pub fn foo() -> u32 { 0 }
+            "#,
         )
         .file(
             "bin/Cargo.toml",
             r#"
-            [package]
-            name = "bin"
-            version = "0.1.0"
+                [package]
+                name = "bin"
+                version = "0.1.0"
 
-            [dependencies]
-            lib = { path = "../lib" }
-        "#,
+                [dependencies]
+                lib = { path = "../lib" }
+            "#,
         )
         .file(
             "bin/src/main.rs",
             r#"
-            extern crate lib;
+                extern crate lib;
 
-            fn main() {
-                assert_eq!(lib::foo(), 0);
-            }
-        "#,
+                fn main() {
+                    assert_eq!(lib::foo(), 0);
+                }
+            "#,
         );
     let p = p.build();
 
@@ -1167,8 +1164,7 @@ fn rebuild_please() {
 
     sleep_ms(1000);
 
-    t!(t!(File::create(p.root().join("lib/src/lib.rs")))
-        .write_all(br#"pub fn foo() -> u32 { 1 }"#));
+    p.change_file("lib/src/lib.rs", "pub fn foo() -> u32 { 1 }");
 
     p.cargo("build").cwd("lib").run();
 
@@ -1186,9 +1182,9 @@ fn workspace_in_git() {
             .file(
                 "Cargo.toml",
                 r#"
-                [workspace]
-                members = ["foo"]
-            "#,
+                    [workspace]
+                    members = ["foo"]
+                "#,
             )
             .file("foo/Cargo.toml", &basic_manifest("foo", "0.1.0"))
             .file("foo/src/lib.rs", "")
@@ -1198,21 +1194,21 @@ fn workspace_in_git() {
             "Cargo.toml",
             &format!(
                 r#"
-            [package]
-            name = "lib"
-            version = "0.1.0"
+                    [package]
+                    name = "lib"
+                    version = "0.1.0"
 
-            [dependencies.foo]
-            git = '{}'
-        "#,
+                    [dependencies.foo]
+                    git = '{}'
+                "#,
                 git_project.url()
             ),
         )
         .file(
             "src/lib.rs",
             r#"
-            pub fn foo() -> u32 { 0 }
-        "#,
+                pub fn foo() -> u32 { 0 }
+            "#,
         );
     let p = p.build();
 
@@ -1225,23 +1221,23 @@ fn lockfile_can_specify_nonexistant_members() {
         .file(
             "Cargo.toml",
             r#"
-            [workspace]
-            members = ["a"]
-        "#,
+                [workspace]
+                members = ["a"]
+            "#,
         )
         .file("a/Cargo.toml", &basic_manifest("a", "0.1.0"))
         .file("a/src/main.rs", "fn main() {}")
         .file(
             "Cargo.lock",
             r#"
-            [[package]]
-            name = "a"
-            version = "0.1.0"
+                [[package]]
+                name = "a"
+                version = "0.1.0"
 
-            [[package]]
-            name = "b"
-            version = "0.1.0"
-        "#,
+                [[package]]
+                name = "b"
+                version = "0.1.0"
+            "#,
         );
 
     let p = p.build();
@@ -1255,8 +1251,8 @@ fn you_cannot_generate_lockfile_for_empty_workspaces() {
         .file(
             "Cargo.toml",
             r#"
-            [workspace]
-        "#,
+                [workspace]
+            "#,
         )
         .file("bar/Cargo.toml", &basic_manifest("foo", "0.1.0"))
         .file("bar/src/main.rs", "fn main() {}");
@@ -1274,43 +1270,43 @@ fn workspace_with_transitive_dev_deps() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = ["mbrubeck@example.com"]
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = ["mbrubeck@example.com"]
 
-            [dependencies.bar]
-            path = "bar"
+                [dependencies.bar]
+                path = "bar"
 
-            [workspace]
-        "#,
+                [workspace]
+            "#,
         )
         .file("src/main.rs", r#"fn main() {}"#)
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
-            name = "bar"
-            version = "0.5.0"
-            authors = ["mbrubeck@example.com"]
+                [project]
+                name = "bar"
+                version = "0.5.0"
+                authors = ["mbrubeck@example.com"]
 
-            [dev-dependencies.baz]
-            path = "../baz"
-        "#,
+                [dev-dependencies.baz]
+                path = "../baz"
+            "#,
         )
         .file(
             "bar/src/lib.rs",
             r#"
-            pub fn init() {}
+                pub fn init() {}
 
-            #[cfg(test)]
+                #[cfg(test)]
 
-            #[test]
-            fn test() {
-                extern crate baz;
-                baz::do_stuff();
-            }
-        "#,
+                #[test]
+                fn test() {
+                    extern crate baz;
+                    baz::do_stuff();
+                }
+            "#,
         )
         .file("baz/Cargo.toml", &basic_manifest("baz", "0.5.0"))
         .file("baz/src/lib.rs", r#"pub fn do_stuff() {}"#);
@@ -1340,25 +1336,25 @@ fn relative_path_for_member_works() {
         .file(
             "foo/Cargo.toml",
             r#"
-        [project]
-        name = "foo"
-        version = "0.1.0"
-        authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-        [workspace]
-        members = ["../bar"]
-    "#,
+                [workspace]
+                members = ["../bar"]
+            "#,
         )
         .file("foo/src/main.rs", "fn main() {}")
         .file(
             "bar/Cargo.toml",
             r#"
-        [project]
-        name = "bar"
-        version = "0.1.0"
-        authors = []
-        workspace = "../foo"
-    "#,
+                [project]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
+                workspace = "../foo"
+            "#,
         )
         .file("bar/src/main.rs", "fn main() {}");
     let p = p.build();
@@ -1373,16 +1369,16 @@ fn relative_path_for_root_works() {
         .file(
             "Cargo.toml",
             r#"
-        [project]
-        name = "foo"
-        version = "0.1.0"
-        authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-        [workspace]
+                [workspace]
 
-        [dependencies]
-        subproj = { path = "./subproj" }
-    "#,
+                [dependencies]
+                subproj = { path = "./subproj" }
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file("subproj/Cargo.toml", &basic_manifest("subproj", "0.1.0"))
@@ -1403,18 +1399,18 @@ fn path_dep_outside_workspace_is_not_member() {
         .file(
             "ws/Cargo.toml",
             r#"
-            [project]
-            name = "ws"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "ws"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            foo = { path = "../foo" }
+                [dependencies]
+                foo = { path = "../foo" }
 
-            [workspace]
-        "#,
+                [workspace]
+            "#,
         )
-        .file("ws/src/lib.rs", r"extern crate foo;")
+        .file("ws/src/lib.rs", "extern crate foo;")
         .file("foo/Cargo.toml", &basic_manifest("foo", "0.1.0"))
         .file("foo/src/lib.rs", "");
     let p = p.build();
@@ -1429,33 +1425,30 @@ fn test_in_and_out_of_workspace() {
         .file(
             "ws/Cargo.toml",
             r#"
-            [project]
-            name = "ws"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "ws"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            foo = { path = "../foo" }
+                [dependencies]
+                foo = { path = "../foo" }
 
-            [workspace]
-            members = [ "../bar" ]
-        "#,
+                [workspace]
+                members = [ "../bar" ]
+            "#,
         )
-        .file(
-            "ws/src/lib.rs",
-            r"extern crate foo; pub fn f() { foo::f() }",
-        )
+        .file("ws/src/lib.rs", "extern crate foo; pub fn f() { foo::f() }")
         .file(
             "foo/Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            bar = { path = "../bar" }
-        "#,
+                [dependencies]
+                bar = { path = "../bar" }
+            "#,
         )
         .file(
             "foo/src/lib.rs",
@@ -1464,12 +1457,12 @@ fn test_in_and_out_of_workspace() {
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
-            workspace = "../ws"
-            name = "bar"
-            version = "0.1.0"
-            authors = []
-        "#,
+                [project]
+                workspace = "../ws"
+                name = "bar"
+                version = "0.1.0"
+                authors = []
+            "#,
         )
         .file("bar/src/lib.rs", "pub fn f() { }");
     let p = p.build();
@@ -1496,33 +1489,30 @@ fn test_path_dependency_under_member() {
         .file(
             "ws/Cargo.toml",
             r#"
-            [project]
-            name = "ws"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "ws"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            foo = { path = "../foo" }
+                [dependencies]
+                foo = { path = "../foo" }
 
-            [workspace]
-        "#,
+                [workspace]
+            "#,
         )
-        .file(
-            "ws/src/lib.rs",
-            r"extern crate foo; pub fn f() { foo::f() }",
-        )
+        .file("ws/src/lib.rs", "extern crate foo; pub fn f() { foo::f() }")
         .file(
             "foo/Cargo.toml",
             r#"
-            [project]
-            workspace = "../ws"
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                workspace = "../ws"
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            bar = { path = "./bar" }
-        "#,
+                [dependencies]
+                bar = { path = "./bar" }
+            "#,
         )
         .file(
             "foo/src/lib.rs",
@@ -1549,14 +1539,14 @@ fn excluded_simple() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "ws"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "ws"
+                version = "0.1.0"
+                authors = []
 
-            [workspace]
-            exclude = ["foo"]
-        "#,
+                [workspace]
+                exclude = ["foo"]
+            "#,
         )
         .file("src/lib.rs", "")
         .file("foo/Cargo.toml", &basic_manifest("foo", "0.1.0"))
@@ -1575,15 +1565,15 @@ fn exclude_members_preferred() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "ws"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "ws"
+                version = "0.1.0"
+                authors = []
 
-            [workspace]
-            members = ["foo/bar"]
-            exclude = ["foo"]
-        "#,
+                [workspace]
+                members = ["foo/bar"]
+                exclude = ["foo"]
+            "#,
         )
         .file("src/lib.rs", "")
         .file("foo/Cargo.toml", &basic_manifest("foo", "0.1.0"))
@@ -1606,17 +1596,17 @@ fn exclude_but_also_depend() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "ws"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "ws"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            bar = { path = "foo/bar" }
+                [dependencies]
+                bar = { path = "foo/bar" }
 
-            [workspace]
-            exclude = ["foo"]
-        "#,
+                [workspace]
+                exclude = ["foo"]
+            "#,
         )
         .file("src/lib.rs", "")
         .file("foo/Cargo.toml", &basic_manifest("foo", "0.1.0"))
@@ -1634,52 +1624,142 @@ fn exclude_but_also_depend() {
 }
 
 #[cargo_test]
+fn excluded_default_members_still_must_be_members() {
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [workspace]
+                members = ["foo"]
+                default-members = ["foo", "bar"]
+                exclude = ["bar"]
+            "#,
+        )
+        .file("foo/Cargo.toml", &basic_manifest("foo", "0.1.0"))
+        .file("foo/src/lib.rs", "")
+        .file("bar/something.txt", "");
+    let p = p.build();
+    p.cargo("build")
+        .with_status(101)
+        .with_stderr(
+            "\
+error: package `[..]bar` is listed in workspace’s default-members \
+but is not a member.
+",
+        )
+        .run();
+}
+
+#[cargo_test]
+fn excluded_default_members_crate_glob() {
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [workspace]
+                members = ["foo", "bar/*"]
+                default-members = ["bar/*"]
+                exclude = ["bar/quux"]
+            "#,
+        )
+        .file("foo/Cargo.toml", &basic_manifest("foo", "0.1.0"))
+        .file("foo/src/main.rs", "fn main() {}")
+        .file("bar/baz/Cargo.toml", &basic_manifest("baz", "0.1.0"))
+        .file("bar/baz/src/main.rs", "fn main() {}")
+        .file("bar/quux/Cargo.toml", &basic_manifest("quux", "0.1.0"))
+        .file("bar/quux/src/main.rs", "fn main() {}");
+
+    let p = p.build();
+    p.cargo("build").run();
+
+    assert!(p.root().join("target").is_dir());
+    assert!(!p.bin("foo").is_file());
+    assert!(p.bin("baz").is_file());
+    assert!(!p.bin("quux").exists());
+
+    p.cargo("build --workspace").run();
+    assert!(p.root().join("target").is_dir());
+    assert!(p.bin("foo").is_file());
+    assert!(!p.bin("quux").exists());
+
+    p.cargo("build").cwd("bar/quux").run();
+    assert!(p.root().join("bar/quux/target").is_dir());
+}
+
+#[cargo_test]
+fn excluded_default_members_not_crate_glob() {
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [workspace]
+                members = ["foo", "bar/*"]
+                default-members = ["bar/*"]
+                exclude = ["bar/docs"]
+            "#,
+        )
+        .file("foo/Cargo.toml", &basic_manifest("foo", "0.1.0"))
+        .file("foo/src/main.rs", "fn main() {}")
+        .file("bar/baz/Cargo.toml", &basic_manifest("baz", "0.1.0"))
+        .file("bar/baz/src/main.rs", "fn main() {}")
+        .file("bar/docs/readme.txt", "This folder is not a crate!");
+
+    let p = p.build();
+    p.cargo("build").run();
+
+    assert!(!p.bin("foo").is_file());
+    assert!(p.bin("baz").is_file());
+    p.cargo("build --workspace").run();
+    assert!(p.bin("foo").is_file());
+}
+
+#[cargo_test]
 fn glob_syntax() {
     let p = project()
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [workspace]
-            members = ["crates/*"]
-            exclude = ["crates/qux"]
-        "#,
+                [workspace]
+                members = ["crates/*"]
+                exclude = ["crates/qux"]
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file(
             "crates/bar/Cargo.toml",
             r#"
-            [project]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
-            workspace = "../.."
-        "#,
+                [project]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
+                workspace = "../.."
+            "#,
         )
         .file("crates/bar/src/main.rs", "fn main() {}")
         .file(
             "crates/baz/Cargo.toml",
             r#"
-            [project]
-            name = "baz"
-            version = "0.1.0"
-            authors = []
-            workspace = "../.."
-        "#,
+                [project]
+                name = "baz"
+                version = "0.1.0"
+                authors = []
+                workspace = "../.."
+            "#,
         )
         .file("crates/baz/src/main.rs", "fn main() {}")
         .file(
             "crates/qux/Cargo.toml",
             r#"
-            [project]
-            name = "qux"
-            version = "0.1.0"
-            authors = []
-        "#,
+                [project]
+                name = "qux"
+                version = "0.1.0"
+                authors = []
+            "#,
         )
         .file("crates/qux/src/main.rs", "fn main() {}");
     let p = p.build();
@@ -1775,14 +1855,14 @@ fn glob_syntax_invalid_members() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
 
-            [workspace]
-            members = ["crates/*"]
-        "#,
+                [workspace]
+                members = ["crates/*"]
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file("crates/bar/src/main.rs", "fn main() {}");
@@ -1792,7 +1872,10 @@ fn glob_syntax_invalid_members() {
         .with_status(101)
         .with_stderr(
             "\
-error: failed to read `[..]Cargo.toml`
+[ERROR] failed to load manifest for workspace member `[..]/crates/bar`
+
+Caused by:
+  failed to read `[..]foo/crates/bar/Cargo.toml`
 
 Caused by:
   [..]
@@ -1815,49 +1898,49 @@ fn dep_used_with_separate_features() {
         .file(
             "Cargo.toml",
             r#"
-            [workspace]
-            members = ["feat_lib", "caller1", "caller2"]
-        "#,
+                [workspace]
+                members = ["feat_lib", "caller1", "caller2"]
+            "#,
         )
         .file(
             "feat_lib/Cargo.toml",
             r#"
-            [project]
-            name = "feat_lib"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "feat_lib"
+                version = "0.1.0"
+                authors = []
 
-            [features]
-            myfeature = []
-        "#,
+                [features]
+                myfeature = []
+            "#,
         )
         .file("feat_lib/src/lib.rs", "")
         .file(
             "caller1/Cargo.toml",
             r#"
-            [project]
-            name = "caller1"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "caller1"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            feat_lib = { path = "../feat_lib" }
-        "#,
+                [dependencies]
+                feat_lib = { path = "../feat_lib" }
+            "#,
         )
         .file("caller1/src/main.rs", "fn main() {}")
         .file("caller1/src/lib.rs", "")
         .file(
             "caller2/Cargo.toml",
             r#"
-            [project]
-            name = "caller2"
-            version = "0.1.0"
-            authors = []
+                [project]
+                name = "caller2"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            feat_lib = { path = "../feat_lib", features = ["myfeature"] }
-            caller1 = { path = "../caller1" }
-        "#,
+                [dependencies]
+                feat_lib = { path = "../feat_lib", features = ["myfeature"] }
+                caller1 = { path = "../caller1" }
+            "#,
         )
         .file("caller2/src/main.rs", "fn main() {}")
         .file("caller2/src/lib.rs", "");
@@ -1917,24 +2000,24 @@ fn dont_recurse_out_of_cargo_home() {
             .file(
                 "build.rs",
                 r#"
-                use std::env;
-                use std::path::Path;
-                use std::process::{self, Command};
+                    use std::env;
+                    use std::path::Path;
+                    use std::process::{self, Command};
 
-                fn main() {
-                    let cargo = env::var_os("CARGO").unwrap();
-                    let cargo_manifest_dir = env::var_os("CARGO_MANIFEST_DIR").unwrap();
-                    let output = Command::new(cargo)
-                        .args(&["metadata", "--format-version", "1", "--manifest-path"])
-                        .arg(&Path::new(&cargo_manifest_dir).join("Cargo.toml"))
-                        .output()
-                        .unwrap();
-                    if !output.status.success() {
-                        eprintln!("{}", String::from_utf8(output.stderr).unwrap());
-                        process::exit(1);
+                    fn main() {
+                        let cargo = env::var_os("CARGO").unwrap();
+                        let cargo_manifest_dir = env::var_os("CARGO_MANIFEST_DIR").unwrap();
+                        let output = Command::new(cargo)
+                            .args(&["metadata", "--format-version", "1", "--manifest-path"])
+                            .arg(&Path::new(&cargo_manifest_dir).join("Cargo.toml"))
+                            .output()
+                            .unwrap();
+                        if !output.status.success() {
+                            eprintln!("{}", String::from_utf8(output.stderr).unwrap());
+                            process::exit(1);
+                        }
                     }
-                }
-            "#,
+                "#,
             )
     });
     let p = project()
@@ -1942,15 +2025,15 @@ fn dont_recurse_out_of_cargo_home() {
             "Cargo.toml",
             &format!(
                 r#"
-            [package]
-            name = "foo"
-            version = "0.1.0"
+                    [package]
+                    name = "foo"
+                    version = "0.1.0"
 
-            [dependencies.dep]
-            git = "{}"
+                    [dependencies.dep]
+                    git = "{}"
 
-            [workspace]
-        "#,
+                    [workspace]
+                "#,
                 git_project.url()
             ),
         )
@@ -1992,13 +2075,13 @@ fn cargo_home_at_root_works() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.1.0"
+                [package]
+                name = "foo"
+                version = "0.1.0"
 
-            [workspace]
-            members = ["a"]
-        "#,
+                [workspace]
+                members = ["a"]
+            "#,
         )
         .file("src/lib.rs", "")
         .file("a/Cargo.toml", &basic_manifest("a", "0.1.0"))
@@ -2015,17 +2098,17 @@ fn relative_rustc() {
         .file(
             "src/main.rs",
             r#"
-            use std::process::Command;
-            use std::env;
+                use std::process::Command;
+                use std::env;
 
-            fn main() {
-                let mut cmd = Command::new("rustc");
-                for arg in env::args_os().skip(1) {
-                    cmd.arg(arg);
+                fn main() {
+                    let mut cmd = Command::new("rustc");
+                    for arg in env::args_os().skip(1) {
+                        cmd.arg(arg);
+                    }
+                    std::process::exit(cmd.status().unwrap().code().unwrap());
                 }
-                std::process::exit(cmd.status().unwrap().code().unwrap());
-            }
-        "#,
+            "#,
         )
         .build();
     p.cargo("build").run();
@@ -2042,13 +2125,13 @@ fn relative_rustc() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "lib"
-            version = "0.1.0"
+                [package]
+                name = "lib"
+                version = "0.1.0"
 
-            [dependencies]
-            a = "0.1"
-        "#,
+                [dependencies]
+                a = "0.1"
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -2065,9 +2148,9 @@ fn ws_rustc_err() {
         .file(
             "Cargo.toml",
             r#"
-            [workspace]
-            members = ["a"]
-        "#,
+                [workspace]
+                members = ["a"]
+            "#,
         )
         .file("a/Cargo.toml", &basic_lib_manifest("a"))
         .file("a/src/lib.rs", "")
@@ -2122,7 +2205,7 @@ fn ws_err_unused() {
 [ERROR] failed to parse manifest at `[..]/foo/Cargo.toml`
 
 Caused by:
-  virtual manifests do not specify {}
+  this virtual manifest specifies a {} section, which is not allowed
 ",
                 key
             ))
@@ -2203,7 +2286,7 @@ fn ws_warn_path() {
 
 #[cargo_test]
 fn invalid_missing() {
-    // Warnings include path to manifest.
+    // Make sure errors are not suppressed with -q.
     let p = project()
         .file(
             "Cargo.toml",
@@ -2223,16 +2306,146 @@ fn invalid_missing() {
         .with_status(101)
         .with_stderr(
             "\
-error: [..]
+[ERROR] failed to get `x` as a dependency of package `foo v0.1.0 [..]`
+
+Caused by:
+  failed to load source for dependency `x`
+
+Caused by:
+  Unable to update [..]/foo/x
+
+Caused by:
+  failed to read `[..]foo/x/Cargo.toml`
 
 Caused by:
   [..]
-
-Caused by:
-  [..]
-
-Caused by:
-  [..]",
+",
         )
         .run();
+}
+
+#[cargo_test]
+fn member_dep_missing() {
+    // Make sure errors are not suppressed with -q.
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [project]
+                name = "foo"
+                version = "0.1.0"
+
+                [workspace]
+                members = ["bar"]
+            "#,
+        )
+        .file("src/main.rs", "fn main() {}")
+        .file(
+            "bar/Cargo.toml",
+            r#"
+                [project]
+                name = "bar"
+                version = "0.1.0"
+
+                [dependencies]
+                baz = { path = "baz" }
+            "#,
+        )
+        .file("bar/src/main.rs", "fn main() {}")
+        .build();
+
+    p.cargo("build -q")
+        .with_status(101)
+        .with_stderr(
+            "\
+[ERROR] failed to load manifest for workspace member `[..]/bar`
+
+Caused by:
+  failed to load manifest for dependency `baz`
+
+Caused by:
+  failed to read `[..]foo/bar/baz/Cargo.toml`
+
+Caused by:
+  [..]
+",
+        )
+        .run();
+}
+
+#[cargo_test]
+fn simple_primary_package_env_var() {
+    let is_primary_package = r#"
+        #[test]
+        fn verify_primary_package() {{
+            assert!(option_env!("CARGO_PRIMARY_PACKAGE").is_some());
+        }}
+    "#;
+
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
+
+                [workspace]
+                members = ["bar"]
+            "#,
+        )
+        .file("src/lib.rs", is_primary_package)
+        .file(
+            "bar/Cargo.toml",
+            r#"
+                [project]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
+                workspace = ".."
+            "#,
+        )
+        .file("bar/src/lib.rs", is_primary_package);
+    let p = p.build();
+
+    p.cargo("test").run();
+
+    // Again, this time selecting a specific crate
+    p.cargo("clean").run();
+    p.cargo("test -p bar").run();
+
+    // Again, this time selecting all crates
+    p.cargo("clean").run();
+    p.cargo("test --all").run();
+}
+
+#[cargo_test]
+fn virtual_primary_package_env_var() {
+    let is_primary_package = r#"
+        #[test]
+        fn verify_primary_package() {{
+            assert!(option_env!("CARGO_PRIMARY_PACKAGE").is_some());
+        }}
+    "#;
+
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [workspace]
+                members = ["foo", "bar"]
+            "#,
+        )
+        .file("foo/Cargo.toml", &basic_manifest("foo", "0.1.0"))
+        .file("foo/src/lib.rs", is_primary_package)
+        .file("bar/Cargo.toml", &basic_manifest("bar", "0.1.0"))
+        .file("bar/src/lib.rs", is_primary_package);
+    let p = p.build();
+
+    p.cargo("test").run();
+
+    // Again, this time selecting a specific crate
+    p.cargo("clean").run();
+    p.cargo("test -p foo").run();
 }

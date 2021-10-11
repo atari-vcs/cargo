@@ -3,7 +3,10 @@
 A *workspace* is a collection of one or more packages that share common
 dependency resolution (with a shared `Cargo.lock`), output directory, and
 various settings such as profiles. Packages that are part of a workspaces are
-called *workspace members*.
+called *workspace members*. There are two flavours of workspaces: as root
+package or as virtual manifest.
+
+### Root package
 
 A workspace can be created by adding a [`[workspace]`
 section](#the-workspace-section) to `Cargo.toml`. This can be added to a
@@ -11,10 +14,14 @@ section](#the-workspace-section) to `Cargo.toml`. This can be added to a
 the *root package* of the workspace. The *workspace root* is the directory
 where the workspace's `Cargo.toml` is located.
 
+### Virtual manifest
+
 Alternatively, a `Cargo.toml` file can be created with a `[workspace]` section
 but without a [`[package]` section][package]. This is called a *virtual
 manifest*. This is typically useful when there isn't a "primary" package, or
 you want to keep all the packages organized in separate directories.
+
+### Key features
 
 The key points of workspaces are:
 
@@ -82,7 +89,31 @@ default-members = ["path/to/member2", "path/to/member3/foo"]
 
 When specified, `default-members` must expand to a subset of `members`.
 
+### The `workspace.metadata` table
+
+The `workspace.metadata` table is ignored by Cargo and will not be warned
+about. This section can be used for tools that would like to store workspace
+configuration in `Cargo.toml`. For example:
+
+```toml
+[workspace]
+members = ["member1", "member2"]
+
+[workspace.metadata.webcontents]
+root = "path/to/webproject"
+tool = ["npm", "run", "build"]
+# ...
+```
+
+There is a similar set of tables at the package level at
+[`package.metadata`][package-metadata]. While cargo does not specify a
+format for the content of either of these tables, it is suggested that
+external tools may wish to use them in a consistent fashion, such as referring
+to the data in `workspace.metadata` if data is missing from `package.metadata`,
+if that makes sense for the tool in question.
+
 [package]: manifest.md#the-package-section
+[package-metadata]: manifest.md#the-metadata-table
 [output directory]: ../guide/build-cache.md
 [patch]: overriding-dependencies.md#the-patch-section
 [replace]: overriding-dependencies.md#the-replace-section

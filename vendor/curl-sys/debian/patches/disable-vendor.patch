@@ -1,11 +1,25 @@
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -47,7 +47,7 @@
+@@ -51,7 +51,7 @@
  spnego = []
  ssl = ["openssl-sys"]
  static-curl = []
 -static-ssl = ["openssl-sys/vendored"]
 +static-ssl = ["openssl-sys"]
+ upkeep_7_62_0 = []
+ zlib-ng-compat = ["libz-sys/zlib-ng", "static-curl"]
  [target."cfg(all(unix, not(target_os = \"macos\")))".dependencies.openssl-sys]
- version = "0.9"
- optional = true
+--- a/build.rs
++++ b/build.rs
+@@ -23,8 +23,9 @@
+         return println!("cargo:rustc-flags=-l curl");
+     }
+ 
+-    // If the static-curl feature is disabled, probe for a system-wide libcurl.
+-    if !cfg!(feature = "static-curl") {
++    // On Debian, always probe for a system-wide libcurl even when linking statically
++    if true {
++        if cfg!(feature = "static-curl") { println!("cargo:static=1"); }
+         // OSX ships libcurl by default, so we just use that version
+         // so long as it has the right features enabled.
+         if target.contains("apple") && (!cfg!(feature = "http2") || curl_config_reports_http2()) {

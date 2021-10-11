@@ -5,16 +5,16 @@ Forwarded: TODO
 This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
 --- a/tests/testsuite/git_auth.rs
 +++ b/tests/testsuite/git_auth.rs
-@@ -13,7 +13,7 @@
- use git2;
+@@ -102,7 +102,7 @@
+ }
  
  // Tests that HTTP auth is offered from `credential.helper`.
 -#[cargo_test]
 +#[allow(dead_code)]
  fn http_auth_offered() {
-     let server = TcpListener::bind("127.0.0.1:0").unwrap();
-     let addr = server.local_addr().unwrap();
-@@ -157,7 +157,7 @@
+     let (addr, t, connections) = setup_failed_auth_test();
+     let p = project()
+@@ -167,7 +167,7 @@
  }
  
  // Boy, sure would be nice to have a TLS implementation in rust!

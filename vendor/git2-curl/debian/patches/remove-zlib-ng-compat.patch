@@ -1,0 +1,11 @@
+Index: git2-curl/Cargo.toml
+===================================================================
+--- git2-curl.orig/Cargo.toml
++++ git2-curl/Cargo.toml
+@@ -46,6 +46,3 @@ version = "0.8"
+ 
+ [dev-dependencies.tempfile]
+ version = "3.0"
+-
+-[features]
+-zlib-ng-compat = ["git2/zlib-ng-compat", "curl/zlib-ng-compat"]

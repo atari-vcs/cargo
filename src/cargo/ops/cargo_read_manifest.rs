@@ -3,13 +3,13 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use log::{info, trace};
-
 use crate::core::{EitherManifest, Package, PackageId, SourceId};
 use crate::util::errors::CargoResult;
 use crate::util::important_paths::find_project_manifest_exact;
 use crate::util::toml::read_manifest;
-use crate::util::{self, Config};
+use crate::util::Config;
+use cargo_util::paths;
+use log::{info, trace};
 
 pub fn read_package(
     path: &Path,
@@ -60,7 +60,7 @@ pub fn read_packages(
             }
 
             // Don't automatically discover packages across git submodules
-            if fs::metadata(&dir.join(".git")).is_ok() {
+            if dir.join(".git").exists() {
                 return Ok(false);
             }
         }
@@ -88,10 +88,19 @@ pub fn read_packages(
     if all_packages.is_empty() {
         match errors.pop() {
             Some(err) => Err(err),
-            None => Err(anyhow::format_err!(
-                "Could not find Cargo.toml in `{}`",
+            None => {
+                if find_project_manifest_exact(path, "cargo.toml").is_ok() {
+                    Err(anyhow::format_err!(
+                "Could not find Cargo.toml in `{}`, but found cargo.toml please try to rename it to Cargo.toml",
                 path.display()
-            )),
+            ))
+                } else {
+                    Err(anyhow::format_err!(
+                        "Could not find Cargo.toml in `{}`",
+                        path.display()
+                    ))
+                }
+            }
         }
     } else {
         Ok(all_packages.into_iter().map(|(_, v)| v).collect())
@@ -112,7 +121,7 @@ fn walk(path: &Path, callback: &mut dyn FnMut(&Path) -> CargoResult<bool>) -> Ca
         Err(e) => {
             let cx = format!("failed to read directory `{}`", path.display());
             let e = anyhow::Error::from(e);
-            return Err(e.context(cx).into());
+            return Err(e.context(cx));
         }
     };
     for dir in dirs {
@@ -192,8 +201,27 @@ fn read_nested_packages(
     // TODO: filesystem/symlink implications?
     if !source_id.is_registry() {
         for p in nested.iter() {
-            let path = util::normalize_path(&path.join(p));
-            read_nested_packages(&path, all_packages, source_id, config, visited, errors)?;
+            let path = paths::normalize_path(&path.join(p));
+            let result =
+                read_nested_packages(&path, all_packages, source_id, config, visited, errors);
+            // Ignore broken manifests found on git repositories.
+            //
+            // A well formed manifest might still fail to load due to reasons
+            // like referring to a "path" that requires an extra build step.
+            //
+            // See https://github.com/rust-lang/cargo/issues/6822.
+            if let Err(err) = result {
+                if source_id.is_git() {
+                    info!(
+                        "skipping nested package found at `{}`: {:?}",
+                        path.display(),
+                        &err,
+                    );
+                    errors.push(err);
+                } else {
+                    return Err(err);
+                }
+            }
         }
     }
 

@@ -207,7 +207,7 @@ impl<'a> Parser<'a> {
 /// The duration object is a concatenation of time spans. Where each time
 /// span is an integer number and a suffix. Supported suffixes:
 ///
-/// * `nsec`, `ns` -- microseconds
+/// * `nsec`, `ns` -- nanoseconds
 /// * `usec`, `us` -- microseconds
 /// * `msec`, `ms` -- milliseconds
 /// * `seconds`, `second`, `sec`, `s`
@@ -283,6 +283,13 @@ fn item(f: &mut fmt::Formatter, started: &mut bool, name: &str, value: u32)
         *started = true;
     }
     Ok(())
+}
+
+impl FormattedDuration {
+    /// Returns a reference to the [`Duration`][] that is being formatted.
+    pub fn get_ref(&self) -> &Duration {
+        &self.0
+    }
 }
 
 impl fmt::Display for FormattedDuration {

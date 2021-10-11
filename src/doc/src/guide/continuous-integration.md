@@ -2,7 +2,8 @@
 
 ### Travis CI
 
-To test your package on Travis CI, here is a sample `.travis.yml` file:
+To test your [package][def-package] on Travis CI, here is a sample
+`.travis.yml` file:
 
 ```yaml
 language: rust
@@ -46,7 +47,7 @@ rust-nightly:
 
 This will test on the stable channel and nightly channel, but any
 breakage in nightly will not fail your overall build. Please see the
-[GitLab CI](https://docs.gitlab.com/ce/ci/yaml/README.html) for more
+[GitLab CI documentation](https://docs.gitlab.com/ce/ci/yaml/index.html) for more
 information.
 
 ### builds.sr.ht
@@ -86,3 +87,5 @@ This will test and build documentation on the stable channel and nightly
 channel, but any breakage in nightly will not fail your overall build. Please
 see the [builds.sr.ht documentation](https://man.sr.ht/builds.sr.ht/) for more
 information.
+
+[def-package]:  ../appendix/glossary.md#package  '"package" (glossary entry)'

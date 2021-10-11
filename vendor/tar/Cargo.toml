@@ -13,7 +13,7 @@
 [package]
 edition = "2018"
 name = "tar"
-version = "0.4.26"
+version = "0.4.37"
 authors = ["Alex Crichton <alex@alexcrichton.com>"]
 exclude = ["tests/archives/*"]
 description = "A Rust implementation of a TAR file reader and writer. This library does not\ncurrently handle compression, but it is abstract over all I/O readers and\nwriters. Additionally, great lengths are taken to ensure that the entire\ncontents are never required to be entirely resident in memory all at once.\n"
@@ -24,14 +24,12 @@ keywords = ["tar", "tarfile", "encoding"]
 license = "MIT/Apache-2.0"
 repository = "https://github.com/alexcrichton/tar-rs"
 [dependencies.filetime]
-version = "0.2.6"
-[dev-dependencies.tempdir]
-version = "0.3"
+version = "0.2.8"
+[dev-dependencies.tempfile]
+version = "3"
 
 [features]
 default = ["xattr"]
-[target."cfg(target_os = \"redox\")".dependencies.redox_syscall]
-version = "0.1"
 [target."cfg(unix)".dependencies.libc]
 version = "0.2"
 

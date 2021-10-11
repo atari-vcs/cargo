@@ -1,6 +1,6 @@
 //! Tests for --message-format flag.
 
-use cargo_test_support::{basic_manifest, project};
+use cargo_test_support::{basic_lib_manifest, basic_manifest, project};
 
 #[cargo_test]
 fn cannot_specify_two() {
@@ -64,7 +64,10 @@ fn cargo_renders() {
 
     p.cargo("build --message-format json-render-diagnostics")
         .with_status(101)
-        .with_stdout("{\"reason\":\"compiler-artifact\",[..]")
+        .with_stdout(
+            "{\"reason\":\"compiler-artifact\",[..]\n\
+             {\"reason\":\"build-finished\",\"success\":false}",
+        )
         .with_stderr_contains(
             "\
 [COMPILING] bar [..]
@@ -104,5 +107,27 @@ fn cargo_renders_ansi() {
     p.cargo("build --message-format json-diagnostic-rendered-ansi")
         .with_status(101)
         .with_stdout_contains("[..]\\u001b[38;5;9merror[..]")
+        .run();
+}
+
+#[cargo_test]
+fn cargo_renders_doctests() {
+    let p = project()
+        .file("Cargo.toml", &basic_lib_manifest("foo"))
+        .file(
+            "src/lib.rs",
+            "\
+            /// ```rust
+            /// bar()
+            /// ```
+            pub fn bar() {}
+            ",
+        )
+        .build();
+
+    p.cargo("test --doc --message-format short")
+        .with_status(101)
+        .with_stdout_contains("src/lib.rs:2:1: error[E0425]:[..]")
+        .with_stdout_contains("[..]src/lib.rs - bar (line 1)[..]")
         .run();
 }

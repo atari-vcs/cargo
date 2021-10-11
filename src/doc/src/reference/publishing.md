@@ -10,7 +10,7 @@ limit to the number of versions which can be published, however.
 
 ### Before your first publish
 
-First thing’s first, you’ll need an account on [crates.io] to acquire
+First things first, you’ll need an account on [crates.io] to acquire
 an API token. To do so, [visit the home page][crates.io] and log in via a GitHub
 account (required for now). After this, visit your [Account
 Settings](https://crates.io/me) page and run the [`cargo login`] command
@@ -21,8 +21,8 @@ $ cargo login abcdefghijklmnopqrstuvwxyz012345
 ```
 
 This command will inform Cargo of your API token and store it locally in your
-`~/.cargo/credentials`. Note that this token is a **secret** and should not be
-shared with anyone else. If it leaks for any reason, you should regenerate it
+`~/.cargo/credentials.toml`. Note that this token is a **secret** and should not be
+shared with anyone else. If it leaks for any reason, you should revoke it
 immediately.
 
 ### Before publishing a new crate
@@ -34,7 +34,6 @@ Check out the [metadata you can specify](manifest.md) in `Cargo.toml` to
 ensure your crate can be discovered more easily! Before publishing, make sure
 you have filled out the following fields:
 
-- [`authors`]
 - [`license` or `license-file`]
 - [`description`]
 - [`homepage`]
@@ -195,8 +194,7 @@ is likely for you to encounter the following message when working with them:
 
 > It looks like you don’t have permission to query a necessary property from
 GitHub to complete this request. You may need to re-authenticate on [crates.io]
-to grant permission to read GitHub org memberships. Just go to
-<https://crates.io/login>.
+to grant permission to read GitHub org memberships.
 
 This is basically a catch-all for “you tried to query a team, and one of the
 five levels of membership access control denied this”. That is not an
@@ -215,13 +213,16 @@ you will get the error above. You may also see this error if you ever try to
 publish a crate that you don’t own at all, but otherwise happens to have a team.
 
 If you ever change your mind, or just aren’t sure if [crates.io] has sufficient
-permission, you can always go to <https://crates.io/login>, which will prompt you
-for permission if [crates.io] doesn’t have all the scopes it would like to.
+permission, you can always go to <https://crates.io/> and re-authenticate,
+which will prompt you for permission if [crates.io] doesn’t have all the scopes
+it would like to.
 
 An additional barrier to querying GitHub is that the organization may be
 actively denying third party access. To check this, you can go to:
 
-    https://github.com/organizations/:org/settings/oauth_application_policy
+```text
+https://github.com/organizations/:org/settings/oauth_application_policy
+```
 
 where `:org` is the name of the organization (e.g., `rust-lang`). You may see
 something like:
@@ -238,9 +239,24 @@ the “Grant Access” button next to its name:
 
 ![Authentication Access Control](../images/auth-level-acl.png)
 
+#### Troubleshooting GitHub team access errors
+
+When trying to add a GitHub team as crate owner, you may see an error like:
+
+```text
+error: failed to invite owners to crate <crate_name>: api errors (status 200 OK): could not find the github team org/repo
+```
+In that case, you should go to [the GitHub Application settings page] and
+check if crates.io is listed in the `Authorized OAuth Apps` tab.
+If it isn't, you should go to <https://crates.io/> and authorize it.
+Then go back to the Application Settings page on GitHub, click on the
+crates.io application in the list, and make sure you or your organization is
+listed in the "Organization access" list with a green check mark. If there's
+a button labeled `Grant` or `Request`, you should grant the access or
+request the org owner to do so.
+
 [RFC 1105]: https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md
-[Rust API Guidelines]: https://rust-lang-nursery.github.io/api-guidelines/
-[`authors`]: manifest.md#the-authors-field
+[Rust API Guidelines]: https://rust-lang.github.io/api-guidelines/
 [`cargo login`]: ../commands/cargo-login.md
 [`cargo package`]: ../commands/cargo-package.md
 [`cargo publish`]: ../commands/cargo-publish.md
@@ -254,3 +270,4 @@ the “Grant Access” button next to its name:
 [`repository`]: manifest.md#the-repository-field
 [crates.io]: https://crates.io/
 [oauth-scopes]: https://developer.github.com/apps/building-oauth-apps/understanding-scopes-for-oauth-apps/
+[the GitHub Application settings page]: https://github.com/settings/applications

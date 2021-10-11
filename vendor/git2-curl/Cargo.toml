@@ -13,7 +13,7 @@
 [package]
 edition = "2018"
 name = "git2-curl"
-version = "0.12.0"
+version = "0.14.1"
 authors = ["Josh Triplett <josh@joshtriplett.org>", "Alex Crichton <alex@alexcrichton.com>"]
 description = "Backend for an HTTP transport in libgit2 powered by libcurl.\n\nIntended to be used with the git2 crate.\n"
 documentation = "https://docs.rs/git2-curl"
@@ -24,10 +24,10 @@ repository = "https://github.com/rust-lang/git2-rs"
 name = "all"
 harness = false
 [dependencies.curl]
-version = "0.4"
+version = "0.4.33"
 
 [dependencies.git2]
-version = "0.11"
+version = "0.13"
 default-features = false
 
 [dependencies.log]

@@ -6,7 +6,7 @@ differs from the standard library's `String` and `str` types in that they are
 not required to be valid UTF-8, but may be fully or partially valid UTF-8.
 
 [![Build status](https://github.com/BurntSushi/bstr/workflows/ci/badge.svg)](https://github.com/BurntSushi/bstr/actions)
-[![](http://meritbadge.herokuapp.com/bstr)](https://crates.io/crates/bstr)
+[![](https://meritbadge.herokuapp.com/bstr)](https://crates.io/crates/bstr)
 
 
 ### Documentation
@@ -17,7 +17,7 @@ https://docs.rs/bstr
 ### When should I use byte strings?
 
 See this part of the documentation for more details:
-https://docs.rs/bstr/0.2.0/bstr/#when-should-i-use-byte-strings.
+https://docs.rs/bstr/0.2.*/bstr/#when-should-i-use-byte-strings.
 
 The short story is that byte strings are useful when it is inconvenient or
 incorrect to require valid UTF-8.
@@ -158,7 +158,7 @@ and Unicode support.
 
 ### Minimum Rust version policy
 
-This crate's minimum supported `rustc` version (MSRV) is `1.28.0`.
+This crate's minimum supported `rustc` version (MSRV) is `1.41.1`.
 
 In general, this crate will be conservative with respect to the minimum
 supported version of Rust. MSRV may be bumped in minor version releases.
@@ -171,19 +171,19 @@ My hope is to move to `1.0` within the next year and commit to its API so that
 `bstr` can be used as a public dependency.
 
 A large part of the API surface area was taken from the standard library, so
-from an API design perspective, a good portion of this crate should be mature.
-The main differences from the standard library are in how the various substring
-search routines work. The standard library provides generic infrastructure for
-supporting different types of searches with a single method, where as this
-library prefers to define new methods for each type of search and drop the
-generic infrastructure.
+from an API design perspective, a good portion of this crate should be on solid
+ground already. The main differences from the standard library are in how the
+various substring search routines work. The standard library provides generic
+infrastructure for supporting different types of searches with a single method,
+where as this library prefers to define new methods for each type of search and
+drop the generic infrastructure.
 
 Some _probable_ future considerations for APIs include, but are not limited to:
 
 * A convenience layer on top of the `aho-corasick` crate.
 * Unicode normalization.
 * More sophisticated support for dealing with Unicode case, perhaps by
-  combining the use cases supported by [`caseless`](http://docs.rs/caseless)
+  combining the use cases supported by [`caseless`](https://docs.rs/caseless)
   and [`unicase`](https://docs.rs/unicase).
 * Add facilities for dealing with OS strings and file paths, probably via
   simple conversion routines.
@@ -195,10 +195,10 @@ Here are some examples that are _probably_ out of scope for this crate:
 
 The exact scope isn't quite clear, but I expect we can iterate on it.
 
-In general, as stated below, this crate is an experiment in bringing lots of
-related APIs together into a single crate while simultaneously attempting to
-keep the total number of dependencies low. Indeed, every dependency of `bstr`,
-except for `memchr`, is optional.
+In general, as stated below, this crate brings lots of related APIs together
+into a single crate while simultaneously attempting to keep the total number of
+dependencies low. Indeed, every dependency of `bstr`, except for `memchr`, is
+optional.
 
 
 ### High level motivation
@@ -216,7 +216,7 @@ library crates. For example:
   implemented for `&str` types. One could use `Utf8Error` above to implement
   grapheme iteration with the same semantics as what `bstr` provides (automatic
   Unicode replacement codepoint substitution).
-* The [`twoway`](https://docs.rs/twoway/0.2.0/twoway/) crate can be used for
+* The [`twoway`](https://docs.rs/twoway) crate can be used for
   fast substring searching on `&[u8]`.
 
 So why create `bstr`? Part of the point of the `bstr` crate is to provide a
@@ -229,13 +229,10 @@ Consider, for example, trimming and splitting, along with their different
 variants.
 
 In other words, `bstr` is partially a way of pushing back against the
-micro-crate ecosystem that appears to be evolving. It's not clear to me whether
-this experiment will be successful or not, but it is definitely a goal of
+micro-crate ecosystem that appears to be evolving. Namely, it is a goal of
 `bstr` to keep its dependency list lightweight. For example, `serde` is an
-optional dependency because there is no feasible alternative, but `twoway` is
-not, where we instead prefer to implement our own substring search. In service
-of this philosophy, currently, the only required dependency of `bstr` is
-`memchr`.
+optional dependency because there is no feasible alternative. In service of
+this philosophy, currently, the only required dependency of `bstr` is `memchr`.
 
 
 ### License
@@ -243,12 +240,12 @@ of this philosophy, currently, the only required dependency of `bstr` is
 This project is licensed under either of
 
  * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or
-   http://www.apache.org/licenses/LICENSE-2.0)
+   https://www.apache.org/licenses/LICENSE-2.0)
  * MIT license ([LICENSE-MIT](LICENSE-MIT) or
-   http://opensource.org/licenses/MIT)
+   https://opensource.org/licenses/MIT)
 
 at your option.
 
 The data in `src/unicode/data/` is licensed under the Unicode License Agreement
-([LICENSE-UNICODE](http://www.unicode.org/copyright.html#License)), although
+([LICENSE-UNICODE](https://www.unicode.org/copyright.html#License)), although
 this data is only used in tests.

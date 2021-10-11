@@ -85,7 +85,7 @@
 //! ```
 //!
 //! The root of the index contains a `config.json` file with a few entries
-//! corresponding to the registry (see `RegistryConfig` below).
+//! corresponding to the registry (see [`RegistryConfig`] below).
 //!
 //! Otherwise, there are three numbered directories (1, 2, 3) for crates with
 //! names 1, 2, and 3 characters in length. The 1/2 directories simply have the
@@ -165,37 +165,67 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use anyhow::Context as _;
 use flate2::read::GzDecoder;
 use log::debug;
-use semver::{Version, VersionReq};
+use semver::Version;
 use serde::Deserialize;
 use tar::Archive;
 
 use crate::core::dependency::{DepKind, Dependency};
 use crate::core::source::MaybePackage;
-use crate::core::{InternedString, Package, PackageId, Source, SourceId, Summary};
+use crate::core::{Package, PackageId, Source, SourceId, Summary};
 use crate::sources::PathSource;
-use crate::util::errors::CargoResultExt;
 use crate::util::hex;
+use crate::util::interning::InternedString;
 use crate::util::into_url::IntoUrl;
-use crate::util::{internal, CargoResult, Config, Filesystem};
+use crate::util::{restricted_names, CargoResult, Config, Filesystem, OptVersionReq};
 
 const PACKAGE_SOURCE_LOCK: &str = ".cargo-ok";
 pub const CRATES_IO_INDEX: &str = "https://github.com/rust-lang/crates.io-index";
 pub const CRATES_IO_REGISTRY: &str = "crates-io";
+pub const CRATES_IO_DOMAIN: &str = "crates.io";
 const CRATE_TEMPLATE: &str = "{crate}";
 const VERSION_TEMPLATE: &str = "{version}";
+const PREFIX_TEMPLATE: &str = "{prefix}";
+const LOWER_PREFIX_TEMPLATE: &str = "{lowerprefix}";
 
+/// A "source" for a local (see `local::LocalRegistry`) or remote (see
+/// `remote::RemoteRegistry`) registry.
+///
+/// This contains common functionality that is shared between the two registry
+/// kinds, with the registry-specific logic implemented as part of the
+/// [`RegistryData`] trait referenced via the `ops` field.
 pub struct RegistrySource<'cfg> {
     source_id: SourceId,
+    /// The path where crate files are extracted (`$CARGO_HOME/registry/src/$REG-HASH`).
     src_path: Filesystem,
+    /// Local reference to [`Config`] for convenience.
     config: &'cfg Config,
+    /// Whether or not the index has been updated.
+    ///
+    /// This is used as an optimization to avoid updating if not needed, such
+    /// as `Cargo.lock` already exists and the index already contains the
+    /// locked entries. Or, to avoid updating multiple times.
+    ///
+    /// Only remote registries really need to update. Local registries only
+    /// check that the index exists.
     updated: bool,
+    /// Abstraction for interfacing to the different registry kinds.
     ops: Box<dyn RegistryData + 'cfg>,
+    /// Interface for managing the on-disk index.
     index: index::RegistryIndex<'cfg>,
+    /// A set of packages that should be allowed to be used, even if they are
+    /// yanked.
+    ///
+    /// This is populated from the entries in `Cargo.lock` to ensure that
+    /// `cargo update -p somepkg` won't unlock yanked entries in `Cargo.lock`.
+    /// Otherwise, the resolver would think that those entries no longer
+    /// exist, and it would trigger updates to unrelated packages.
     yanked_whitelist: HashSet<PackageId>,
 }
 
+/// The `config.json` file stored in the index.
 #[derive(Deserialize)]
 pub struct RegistryConfig {
     /// Download endpoint for all crates.
@@ -203,10 +233,14 @@ pub struct RegistryConfig {
     /// The string is a template which will generate the download URL for the
     /// tarball of a specific version of a crate. The substrings `{crate}` and
     /// `{version}` will be replaced with the crate's name and version
-    /// respectively.
+    /// respectively.  The substring `{prefix}` will be replaced with the
+    /// crate's prefix directory name, and the substring `{lowerprefix}` will
+    /// be replaced with the crate's prefix directory name converted to
+    /// lowercase.
     ///
-    /// For backwards compatibility, if the string does not contain `{crate}` or
-    /// `{version}`, it will be extended with `/{crate}/{version}/download` to
+    /// For backwards compatibility, if the string does not contain any
+    /// markers (`{crate}`, `{version}`, `{prefix}`, or ``{lowerprefix}`), it
+    /// will be extended with `/{crate}/{version}/download` to
     /// support registries like crates.io which were created before the
     /// templating setup was created.
     pub dl: String,
@@ -217,6 +251,11 @@ pub struct RegistryConfig {
     pub api: Option<String>,
 }
 
+/// The maximum version of the `v` field in the index this version of cargo
+/// understands.
+pub(crate) const INDEX_V_MAX: u32 = 2;
+
+/// A single line in the index representing a single version of a package.
 #[derive(Deserialize)]
 pub struct RegistryPackage<'a> {
     name: InternedString,
@@ -224,9 +263,44 @@ pub struct RegistryPackage<'a> {
     #[serde(borrow)]
     deps: Vec<RegistryDependency<'a>>,
     features: BTreeMap<InternedString, Vec<InternedString>>,
+    /// This field contains features with new, extended syntax. Specifically,
+    /// namespaced features (`dep:`) and weak dependencies (`pkg?/feat`).
+    ///
+    /// This is separated from `features` because versions older than 1.19
+    /// will fail to load due to not being able to parse the new syntax, even
+    /// with a `Cargo.lock` file.
+    features2: Option<BTreeMap<InternedString, Vec<InternedString>>>,
     cksum: String,
+    /// If `true`, Cargo will skip this version when resolving.
+    ///
+    /// This was added in 2014. Everything in the crates.io index has this set
+    /// now, so this probably doesn't need to be an option anymore.
     yanked: Option<bool>,
+    /// Native library name this package links to.
+    ///
+    /// Added early 2018 (see <https://github.com/rust-lang/cargo/pull/4978>),
+    /// can be `None` if published before then.
     links: Option<InternedString>,
+    /// The schema version for this entry.
+    ///
+    /// If this is None, it defaults to version 1. Entries with unknown
+    /// versions are ignored.
+    ///
+    /// Version `2` format adds the `features2` field.
+    ///
+    /// This provides a method to safely introduce changes to index entries
+    /// and allow older versions of cargo to ignore newer entries it doesn't
+    /// understand. This is honored as of 1.51, so unfortunately older
+    /// versions will ignore it, and potentially misinterpret version 2 and
+    /// newer entries.
+    ///
+    /// The intent is that versions older than 1.51 will work with a
+    /// pre-existing `Cargo.lock`, but they may not correctly process `cargo
+    /// update` or build a lock from scratch. In that case, cargo may
+    /// incorrectly select a new package that uses a new index format. A
+    /// workaround is to downgrade any packages that are incompatible with the
+    /// `--precise` flag of `cargo update`.
+    v: Option<u32>,
 }
 
 #[test]
@@ -262,18 +336,7 @@ fn escaped_char_in_json() {
     .unwrap();
 }
 
-#[derive(Deserialize)]
-#[serde(field_identifier, rename_all = "lowercase")]
-enum Field {
-    Name,
-    Vers,
-    Deps,
-    Features,
-    Cksum,
-    Yanked,
-    Links,
-}
-
+/// A dependency as encoded in the index JSON.
 #[derive(Deserialize)]
 struct RegistryDependency<'a> {
     name: InternedString,
@@ -311,11 +374,11 @@ impl<'a> RegistryDependency<'a> {
             default
         };
 
-        let mut dep = Dependency::parse_no_deprecated(package.unwrap_or(name), Some(&req), id)?;
+        let mut dep = Dependency::parse(package.unwrap_or(name), Some(&req), id)?;
         if package.is_some() {
             dep.set_explicit_name_in_toml(name);
         }
-        let kind = match kind.as_ref().map(|s| &s[..]).unwrap_or("") {
+        let kind = match kind.as_deref().unwrap_or("") {
             "dev" => DepKind::Development,
             "build" => DepKind::Build,
             _ => DepKind::Normal,
@@ -353,30 +416,108 @@ impl<'a> RegistryDependency<'a> {
     }
 }
 
+/// An abstract interface to handle both a local (see `local::LocalRegistry`)
+/// and remote (see `remote::RemoteRegistry`) registry.
+///
+/// This allows [`RegistrySource`] to abstractly handle both registry kinds.
 pub trait RegistryData {
+    /// Performs initialization for the registry.
+    ///
+    /// This should be safe to call multiple times, the implementation is
+    /// expected to not do any work if it is already prepared.
     fn prepare(&self) -> CargoResult<()>;
+
+    /// Returns the path to the index.
+    ///
+    /// Note that different registries store the index in different formats
+    /// (remote=git, local=files).
     fn index_path(&self) -> &Filesystem;
+
+    /// Loads the JSON for a specific named package from the index.
+    ///
+    /// * `root` is the root path to the index.
+    /// * `path` is the relative path to the package to load (like `ca/rg/cargo`).
+    /// * `data` is a callback that will receive the raw bytes of the index JSON file.
     fn load(
         &self,
         root: &Path,
         path: &Path,
         data: &mut dyn FnMut(&[u8]) -> CargoResult<()>,
     ) -> CargoResult<()>;
+
+    /// Loads the `config.json` file and returns it.
+    ///
+    /// Local registries don't have a config, and return `None`.
     fn config(&mut self) -> CargoResult<Option<RegistryConfig>>;
+
+    /// Updates the index.
+    ///
+    /// For a remote registry, this updates the index over the network. Local
+    /// registries only check that the index exists.
     fn update_index(&mut self) -> CargoResult<()>;
+
+    /// Prepare to start downloading a `.crate` file.
+    ///
+    /// Despite the name, this doesn't actually download anything. If the
+    /// `.crate` is already downloaded, then it returns [`MaybeLock::Ready`].
+    /// If it hasn't been downloaded, then it returns [`MaybeLock::Download`]
+    /// which contains the URL to download. The [`crate::core::package::Downloads`]
+    /// system handles the actual download process. After downloading, it
+    /// calls [`Self::finish_download`] to save the downloaded file.
+    ///
+    /// `checksum` is currently only used by local registries to verify the
+    /// file contents (because local registries never actually download
+    /// anything). Remote registries will validate the checksum in
+    /// `finish_download`. For already downloaded `.crate` files, it does not
+    /// validate the checksum, assuming the filesystem does not suffer from
+    /// corruption or manipulation.
     fn download(&mut self, pkg: PackageId, checksum: &str) -> CargoResult<MaybeLock>;
+
+    /// Finish a download by saving a `.crate` file to disk.
+    ///
+    /// After [`crate::core::package::Downloads`] has finished a download,
+    /// it will call this to save the `.crate` file. This is only relevant
+    /// for remote registries. This should validate the checksum and save
+    /// the given data to the on-disk cache.
+    ///
+    /// Returns a [`File`] handle to the `.crate` file, positioned at the start.
     fn finish_download(&mut self, pkg: PackageId, checksum: &str, data: &[u8])
         -> CargoResult<File>;
 
+    /// Returns whether or not the `.crate` file is already downloaded.
     fn is_crate_downloaded(&self, _pkg: PackageId) -> bool {
         true
     }
+
+    /// Validates that the global package cache lock is held.
+    ///
+    /// Given the [`Filesystem`], this will make sure that the package cache
+    /// lock is held. If not, it will panic. See
+    /// [`Config::acquire_package_cache_lock`] for acquiring the global lock.
+    ///
+    /// Returns the [`Path`] to the [`Filesystem`].
     fn assert_index_locked<'a>(&self, path: &'a Filesystem) -> &'a Path;
+
+    /// Returns the current "version" of the index.
+    ///
+    /// For local registries, this returns `None` because there is no
+    /// versioning. For remote registries, this returns the SHA hash of the
+    /// git index on disk (or None if the index hasn't been downloaded yet).
+    ///
+    /// This is used by index caching to check if the cache is out of date.
     fn current_version(&self) -> Option<InternedString>;
 }
 
+/// The status of [`RegistryData::download`] which indicates if a `.crate`
+/// file has already been downloaded, or if not then the URL to download.
 pub enum MaybeLock {
+    /// The `.crate` file is already downloaded. [`File`] is a handle to the
+    /// opened `.crate` file on the filesystem.
     Ready(File),
+    /// The `.crate` file is not downloaded, here's the URL to download it from.
+    ///
+    /// `descriptor` is just a text string to display to the user of what is
+    /// being downloaded.
     Download { url: String, descriptor: String },
 }
 
@@ -455,22 +596,15 @@ impl<'cfg> RegistrySource<'cfg> {
                 return Ok(unpack_dir.to_path_buf());
             }
         }
-        let mut ok = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .open(&path)?;
-
         let gz = GzDecoder::new(tarball);
         let mut tar = Archive::new(gz);
-        tar.set_preserve_mtime(false);
         let prefix = unpack_dir.file_name().unwrap();
         let parent = unpack_dir.parent().unwrap();
         for entry in tar.entries()? {
-            let mut entry = entry.chain_err(|| "failed to iterate over archive")?;
+            let mut entry = entry.with_context(|| "failed to iterate over archive")?;
             let entry_path = entry
                 .path()
-                .chain_err(|| "failed to read entry path")?
+                .with_context(|| "failed to read entry path")?
                 .into_owned();
 
             // We're going to unpack this tarball into the global source
@@ -487,12 +621,29 @@ impl<'cfg> RegistrySource<'cfg> {
                     prefix
                 )
             }
-
-            // Once that's verified, unpack the entry as usual.
-            entry
-                .unpack_in(parent)
-                .chain_err(|| format!("failed to unpack entry at `{}`", entry_path.display()))?;
+            // Unpacking failed
+            let mut result = entry.unpack_in(parent).map_err(anyhow::Error::from);
+            if cfg!(windows) && restricted_names::is_windows_reserved_path(&entry_path) {
+                result = result.with_context(|| {
+                    format!(
+                        "`{}` appears to contain a reserved Windows path, \
+                        it cannot be extracted on Windows",
+                        entry_path.display()
+                    )
+                });
+            }
+            result
+                .with_context(|| format!("failed to unpack entry at `{}`", entry_path.display()))?;
         }
+
+        // The lock file is created after unpacking so we overwrite a lock file
+        // which may have been extracted from the package.
+        let mut ok = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("failed to open `{}`", path.display()))?;
 
         // Write to the lock file to indicate that unpacking was successful.
         write!(ok, "ok")?;
@@ -511,7 +662,7 @@ impl<'cfg> RegistrySource<'cfg> {
     fn get_pkg(&mut self, package: PackageId, path: &File) -> CargoResult<Package> {
         let path = self
             .unpack_package(package, path)
-            .chain_err(|| internal(format!("failed to unpack package `{}`", package)))?;
+            .with_context(|| format!("failed to unpack package `{}`", package))?;
         let mut src = PathSource::new(&path, self.source_id, self.config);
         src.update()?;
         let mut pkg = match src.download(package)? {
@@ -521,7 +672,7 @@ impl<'cfg> RegistrySource<'cfg> {
 
         // After we've loaded the package configure its summary's `checksum`
         // field with the checksum we know for this `PackageId`.
-        let req = VersionReq::exact(package.version());
+        let req = OptVersionReq::exact(package.version());
         let summary_with_cksum = self
             .index
             .summaries(package.name(), &req, &mut *self.ops)?

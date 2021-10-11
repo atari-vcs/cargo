@@ -14,14 +14,14 @@
 
 #![deny(warnings)]
 
-use docopt::Docopt;
 use git2::{AutotagOption, FetchOptions, RemoteCallbacks, Repository};
-use serde_derive::Deserialize;
 use std::io::{self, Write};
 use std::str;
+use structopt::StructOpt;
 
-#[derive(Deserialize)]
+#[derive(StructOpt)]
 struct Args {
+    #[structopt(name = "remote")]
     arg_remote: Option<String>,
 }
 
@@ -107,7 +107,7 @@ fn run(args: &Args) -> Result<(), git2::Error> {
     }
 
     // Disconnect the underlying connection to prevent from idling.
-    remote.disconnect();
+    remote.disconnect()?;
 
     // Update the references in the remote's namespace to point to the right
     // commits. This may be needed even if there was no packfile to download,
@@ -119,16 +119,7 @@ fn run(args: &Args) -> Result<(), git2::Error> {
 }
 
 fn main() {
-    const USAGE: &str = "
-usage: fetch [options] [<remote>]
-
-Options:
-    -h, --help          show this message
-";
-
-    let args = Docopt::new(USAGE)
-        .and_then(|d| d.deserialize())
-        .unwrap_or_else(|e| e.exit());
+    let args = Args::from_args();
     match run(&args) {
         Ok(()) => {}
         Err(e) => println!("error: {}", e),

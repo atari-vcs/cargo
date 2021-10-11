@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/) and this project
 adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [15.0.0] - 2020-05-15
+
+### Changed
+
+-   Map iterators now return `(&K, &V)` and `(&K, &mut V)` respectively, to be consistent with
+    `std::collections`'s API. `DiffIter` for `OrdMap` has also changed in the same manner. (#121)
+
+### Removed
+
+-   The `pool` feature flag has been removed from the `im` version of the crate, as `refpool` no
+    longer supports threadsafe pools.
+-   `HashSet::iter_mut()` has been removed, because if you modify the hashed values in a hash set,
+    you break the hash set.
+
+### Added
+
+-   The `pool` feature flag was missing from the `im-rc` version of the crate, which is the version
+    where it's actually useful. It's been added now.
+-   `DiffIter` now has a `Debug` implementation.
+-   There is now a `Vector::is_inline()` method to determine whether a `Vector` is currently
+    inlined. (#129)
+
+### Fixed
+
+-   A smarter implementation of the sorting algorithm for `Vector` has improved the performance of
+    `Vector::sort` by approximately 2x. (#126)
+
 ## [14.3.0] - 2020-03-03
 
 ### Changed

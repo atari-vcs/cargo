@@ -1,12 +1,14 @@
-use ffi;
+use cfg_if::cfg_if;
+use std::ffi::CString;
 use std::fmt;
 use std::io;
 use std::io::prelude::*;
 use std::ops::{Deref, DerefMut};
+use std::ptr;
 
-use error::ErrorStack;
-use nid::Nid;
-use {cvt, cvt_p};
+use crate::error::ErrorStack;
+use crate::nid::Nid;
+use crate::{cvt, cvt_p};
 
 cfg_if! {
     if #[cfg(ossl110)] {
@@ -20,6 +22,11 @@ cfg_if! {
 pub struct MessageDigest(*const ffi::EVP_MD);
 
 impl MessageDigest {
+    /// Creates a `MessageDigest` from a raw OpenSSL pointer.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the pointer is valid.
     pub unsafe fn from_ptr(x: *const ffi::EVP_MD) -> Self {
         MessageDigest(x)
     }
@@ -32,6 +39,24 @@ impl MessageDigest {
     pub fn from_nid(type_: Nid) -> Option<MessageDigest> {
         unsafe {
             let ptr = ffi::EVP_get_digestbynid(type_.as_raw());
+            if ptr.is_null() {
+                None
+            } else {
+                Some(MessageDigest(ptr))
+            }
+        }
+    }
+
+    /// Returns the `MessageDigest` corresponding to an algorithm name.
+    ///
+    /// This corresponds to [`EVP_get_digestbyname`].
+    ///
+    /// [`EVP_get_digestbyname`]: https://www.openssl.org/docs/man1.1.0/crypto/EVP_DigestInit.html
+    pub fn from_name(name: &str) -> Option<MessageDigest> {
+        ffi::init();
+        let name = CString::new(name).ok()?;
+        unsafe {
+            let ptr = ffi::EVP_get_digestbyname(name.as_ptr());
             if ptr.is_null() {
                 None
             } else {
@@ -98,20 +123,29 @@ impl MessageDigest {
         unsafe { MessageDigest(ffi::EVP_shake256()) }
     }
 
+    #[cfg(not(osslconf = "OPENSSL_NO_RMD160"))]
     pub fn ripemd160() -> MessageDigest {
         unsafe { MessageDigest(ffi::EVP_ripemd160()) }
     }
 
+    #[cfg(all(any(ossl111, libressl291), not(osslconf = "OPENSSL_NO_SM3")))]
+    pub fn sm3() -> MessageDigest {
+        unsafe { MessageDigest(ffi::EVP_sm3()) }
+    }
+
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn as_ptr(&self) -> *const ffi::EVP_MD {
         self.0
     }
 
-    /// The size of the digest in bytes
+    /// The size of the digest in bytes.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn size(&self) -> usize {
         unsafe { ffi::EVP_MD_size(self.0) as usize }
     }
 
-    /// The name of the digest
+    /// The name of the digest.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn type_(&self) -> Nid {
         Nid::from_raw(unsafe { ffi::EVP_MD_type(self.0) })
     }
@@ -199,7 +233,7 @@ impl Hasher {
         let ctx = unsafe { cvt_p(EVP_MD_CTX_new())? };
 
         let mut h = Hasher {
-            ctx: ctx,
+            ctx,
             md: ty.as_ptr(),
             type_: ty,
             state: Finalized,
@@ -217,7 +251,7 @@ impl Hasher {
             Finalized => (),
         }
         unsafe {
-            cvt(ffi::EVP_DigestInit_ex(self.ctx, self.md, 0 as *mut _))?;
+            cvt(ffi::EVP_DigestInit_ex(self.ctx, self.md, ptr::null_mut()))?;
         }
         self.state = Reset;
         Ok(())
@@ -254,7 +288,7 @@ impl Hasher {
             ))?;
             self.state = Finalized;
             Ok(DigestBytes {
-                buf: buf,
+                buf,
                 len: len as usize,
             })
         }
@@ -301,7 +335,7 @@ impl Clone for Hasher {
             ctx
         };
         Hasher {
-            ctx: ctx,
+            ctx,
             md: self.md,
             type_: self.type_,
             state: self.state,
@@ -361,7 +395,7 @@ impl AsRef<[u8]> for DigestBytes {
 }
 
 impl fmt::Debug for DigestBytes {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&**self, fmt)
     }
 }
@@ -407,14 +441,13 @@ mod tests {
     }
 
     fn hash_recycle_test(h: &mut Hasher, hashtest: &(&str, &str)) {
-        let _ = h.write_all(&Vec::from_hex(hashtest.0).unwrap()).unwrap();
+        h.write_all(&Vec::from_hex(hashtest.0).unwrap()).unwrap();
         let res = h.finish().unwrap();
         assert_eq!(hex::encode(res), hashtest.1);
     }
 
     // Test vectors from http://www.nsrl.nist.gov/testdata/
-    #[allow(non_upper_case_globals)]
-    const md5_tests: [(&'static str, &'static str); 13] = [
+    const MD5_TESTS: [(&str, &str); 13] = [
         ("", "d41d8cd98f00b204e9800998ecf8427e"),
         ("7F", "83acb6e67e50e31db6ed341dd2de1595"),
         ("EC9C", "0b07f0d4ca797d8ac58874f887cb0b68"),
@@ -435,7 +468,7 @@ mod tests {
 
     #[test]
     fn test_md5() {
-        for test in md5_tests.iter() {
+        for test in MD5_TESTS.iter() {
             hash_test(MessageDigest::md5(), test);
         }
     }
@@ -443,7 +476,7 @@ mod tests {
     #[test]
     fn test_md5_recycle() {
         let mut h = Hasher::new(MessageDigest::md5()).unwrap();
-        for test in md5_tests.iter() {
+        for test in MD5_TESTS.iter() {
             hash_recycle_test(&mut h, test);
         }
     }
@@ -451,7 +484,7 @@ mod tests {
     #[test]
     fn test_finish_twice() {
         let mut h = Hasher::new(MessageDigest::md5()).unwrap();
-        h.write_all(&Vec::from_hex(md5_tests[6].0).unwrap())
+        h.write_all(&Vec::from_hex(MD5_TESTS[6].0).unwrap())
             .unwrap();
         h.finish().unwrap();
         let res = h.finish().unwrap();
@@ -460,9 +493,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::redundant_clone)]
     fn test_clone() {
         let i = 7;
-        let inp = Vec::from_hex(md5_tests[i].0).unwrap();
+        let inp = Vec::from_hex(MD5_TESTS[i].0).unwrap();
         assert!(inp.len() > 2);
         let p = inp.len() / 2;
         let h0 = Hasher::new(MessageDigest::md5()).unwrap();
@@ -475,18 +509,18 @@ mod tests {
             let mut h2 = h1.clone();
             h2.write_all(&inp[p..]).unwrap();
             let res = h2.finish().unwrap();
-            assert_eq!(hex::encode(res), md5_tests[i].1);
+            assert_eq!(hex::encode(res), MD5_TESTS[i].1);
         }
         h1.write_all(&inp[p..]).unwrap();
         let res = h1.finish().unwrap();
-        assert_eq!(hex::encode(res), md5_tests[i].1);
+        assert_eq!(hex::encode(res), MD5_TESTS[i].1);
 
         println!("Clone a finished hasher");
         let mut h3 = h1.clone();
-        h3.write_all(&Vec::from_hex(md5_tests[i + 1].0).unwrap())
+        h3.write_all(&Vec::from_hex(MD5_TESTS[i + 1].0).unwrap())
             .unwrap();
         let res = h3.finish().unwrap();
-        assert_eq!(hex::encode(res), md5_tests[i + 1].1);
+        assert_eq!(hex::encode(res), MD5_TESTS[i + 1].1);
     }
 
     #[test]
@@ -589,11 +623,25 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(ossl300, ignore)]
     fn test_ripemd160() {
         let tests = [("616263", "8eb208f7e05d987a9b044a8e98c6b087f15a0bfc")];
 
         for test in tests.iter() {
             hash_test(MessageDigest::ripemd160(), test);
+        }
+    }
+
+    #[cfg(all(any(ossl111, libressl291), not(osslconf = "OPENSSL_NO_SM3")))]
+    #[test]
+    fn test_sm3() {
+        let tests = [(
+            "616263",
+            "66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0",
+        )];
+
+        for test in tests.iter() {
+            hash_test(MessageDigest::sm3(), test);
         }
     }
 
@@ -603,5 +651,13 @@ mod tests {
             MessageDigest::from_nid(Nid::SHA256).unwrap().as_ptr(),
             MessageDigest::sha256().as_ptr()
         );
+    }
+
+    #[test]
+    fn from_name() {
+        assert_eq!(
+            MessageDigest::from_name("SHA256").unwrap().as_ptr(),
+            MessageDigest::sha256().as_ptr()
+        )
     }
 }

@@ -1,12 +1,10 @@
 //! Tests for `path` dependencies.
 
-use std::fs::{self, File};
-use std::io::prelude::*;
-
 use cargo_test_support::paths::{self, CargoPathExt};
 use cargo_test_support::registry::Package;
 use cargo_test_support::{basic_lib_manifest, basic_manifest, main_file, project};
 use cargo_test_support::{sleep_ms, t};
+use std::fs;
 
 #[cargo_test]
 // I have no idea why this is failing spuriously on Windows;
@@ -17,56 +15,56 @@ fn cargo_compile_with_nested_deps_shorthand() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "foo"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
+                name = "foo"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
 
-            [dependencies.bar]
+                [dependencies.bar]
 
-            version = "0.5.0"
-            path = "bar"
-        "#,
+                version = "0.5.0"
+                path = "bar"
+            "#,
         )
         .file("src/main.rs", &main_file(r#""{}", bar::gimme()"#, &["bar"]))
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "bar"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
+                name = "bar"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
 
-            [dependencies.baz]
+                [dependencies.baz]
 
-            version = "0.5.0"
-            path = "baz"
+                version = "0.5.0"
+                path = "baz"
 
-            [lib]
+                [lib]
 
-            name = "bar"
-        "#,
+                name = "bar"
+            "#,
         )
         .file(
             "bar/src/bar.rs",
             r#"
-            extern crate baz;
+                extern crate baz;
 
-            pub fn gimme() -> String {
-                baz::gimme()
-            }
-        "#,
+                pub fn gimme() -> String {
+                    baz::gimme()
+                }
+            "#,
         )
         .file("bar/baz/Cargo.toml", &basic_lib_manifest("baz"))
         .file(
             "bar/baz/src/baz.rs",
             r#"
-            pub fn gimme() -> String {
-                "test passed".to_string()
-            }
-        "#,
+                pub fn gimme() -> String {
+                    "test passed".to_string()
+                }
+            "#,
         )
         .build();
 
@@ -111,20 +109,20 @@ fn cargo_compile_with_root_dev_deps() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "foo"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
+                name = "foo"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
 
-            [dev-dependencies.bar]
+                [dev-dependencies.bar]
 
-            version = "0.5.0"
-            path = "../bar"
+                version = "0.5.0"
+                path = "../bar"
 
-            [[bin]]
-            name = "foo"
-        "#,
+                [[bin]]
+                name = "foo"
+            "#,
         )
         .file("src/main.rs", &main_file(r#""{}", bar::gimme()"#, &["bar"]))
         .build();
@@ -134,10 +132,10 @@ fn cargo_compile_with_root_dev_deps() {
         .file(
             "src/lib.rs",
             r#"
-            pub fn gimme() -> &'static str {
-                "zoidberg"
-            }
-        "#,
+                pub fn gimme() -> &'static str {
+                    "zoidberg"
+                }
+            "#,
         )
         .build();
 
@@ -153,20 +151,20 @@ fn cargo_compile_with_root_dev_deps_with_testing() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "foo"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
+                name = "foo"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
 
-            [dev-dependencies.bar]
+                [dev-dependencies.bar]
 
-            version = "0.5.0"
-            path = "../bar"
+                version = "0.5.0"
+                path = "../bar"
 
-            [[bin]]
-            name = "foo"
-        "#,
+                [[bin]]
+                name = "foo"
+            "#,
         )
         .file("src/main.rs", &main_file(r#""{}", bar::gimme()"#, &["bar"]))
         .build();
@@ -176,10 +174,10 @@ fn cargo_compile_with_root_dev_deps_with_testing() {
         .file(
             "src/lib.rs",
             r#"
-            pub fn gimme() -> &'static str {
-                "zoidberg"
-            }
-        "#,
+                pub fn gimme() -> &'static str {
+                    "zoidberg"
+                }
+            "#,
         )
         .build();
 
@@ -189,7 +187,7 @@ fn cargo_compile_with_root_dev_deps_with_testing() {
 [COMPILING] [..] v0.5.0 ([..])
 [COMPILING] [..] v0.5.0 ([..])
 [FINISHED] test [unoptimized + debuginfo] target(s) in [..]
-[RUNNING] target/debug/deps/foo-[..][EXE]",
+[RUNNING] [..] (target/debug/deps/foo-[..][EXE])",
         )
         .with_stdout_contains("running 0 tests")
         .run();
@@ -201,44 +199,44 @@ fn cargo_compile_with_transitive_dev_deps() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "foo"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
+                name = "foo"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
 
-            [dependencies.bar]
+                [dependencies.bar]
 
-            version = "0.5.0"
-            path = "bar"
-        "#,
+                version = "0.5.0"
+                path = "bar"
+            "#,
         )
         .file("src/main.rs", &main_file(r#""{}", bar::gimme()"#, &["bar"]))
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "bar"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
+                name = "bar"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
 
-            [dev-dependencies.baz]
+                [dev-dependencies.baz]
 
-            git = "git://example.com/path/to/nowhere"
+                git = "git://example.com/path/to/nowhere"
 
-            [lib]
+                [lib]
 
-            name = "bar"
-        "#,
+                name = "bar"
+            "#,
         )
         .file(
             "bar/src/bar.rs",
             r#"
-            pub fn gimme() -> &'static str {
-                "zoidberg"
-            }
-        "#,
+                pub fn gimme() -> &'static str {
+                    "zoidberg"
+                }
+            "#,
         )
         .build();
 
@@ -262,15 +260,15 @@ fn no_rebuild_dependency() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "foo"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
+                name = "foo"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
 
-            [dependencies.bar]
-            path = "bar"
-        "#,
+                [dependencies.bar]
+                path = "bar"
+            "#,
         )
         .file("src/main.rs", "extern crate bar; fn main() { bar::bar() }")
         .file("bar/Cargo.toml", &basic_lib_manifest("bar"))
@@ -290,9 +288,9 @@ fn no_rebuild_dependency() {
     p.change_file(
         "src/main.rs",
         r#"
-        extern crate bar;
-        fn main() { bar::bar(); }
-    "#,
+            extern crate bar;
+            fn main() { bar::bar(); }
+        "#,
     );
     // Don't compile bar, but do recompile foo.
     p.cargo("build")
@@ -310,31 +308,31 @@ fn deep_dependencies_trigger_rebuild() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "foo"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
+                name = "foo"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
 
-            [dependencies.bar]
-            path = "bar"
-        "#,
+                [dependencies.bar]
+                path = "bar"
+            "#,
         )
         .file("src/main.rs", "extern crate bar; fn main() { bar::bar() }")
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "bar"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
+                name = "bar"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
 
-            [lib]
-            name = "bar"
-            [dependencies.baz]
-            path = "../baz"
-        "#,
+                [lib]
+                name = "bar"
+                [dependencies.baz]
+                path = "../baz"
+            "#,
         )
         .file(
             "bar/src/bar.rs",
@@ -359,10 +357,7 @@ fn deep_dependencies_trigger_rebuild() {
     // We base recompilation off mtime, so sleep for at least a second to ensure
     // that this write will change the mtime.
     sleep_ms(1000);
-    File::create(&p.root().join("baz/src/baz.rs"))
-        .unwrap()
-        .write_all(br#"pub fn baz() { println!("hello!"); }"#)
-        .unwrap();
+    p.change_file("baz/src/baz.rs", r#"pub fn baz() { println!("hello!"); }"#);
     sleep_ms(1000);
     p.cargo("build")
         .with_stderr(
@@ -376,15 +371,13 @@ fn deep_dependencies_trigger_rebuild() {
 
     // Make sure an update to bar doesn't trigger baz
     sleep_ms(1000);
-    File::create(&p.root().join("bar/src/bar.rs"))
-        .unwrap()
-        .write_all(
-            br#"
-        extern crate baz;
-        pub fn bar() { println!("hello!"); baz::baz(); }
-    "#,
-        )
-        .unwrap();
+    p.change_file(
+        "bar/src/bar.rs",
+        r#"
+            extern crate baz;
+            pub fn bar() { println!("hello!"); baz::baz(); }
+        "#,
+    );
     sleep_ms(1000);
     p.cargo("build")
         .with_stderr(
@@ -402,33 +395,33 @@ fn no_rebuild_two_deps() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "foo"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
+                name = "foo"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
 
-            [dependencies.bar]
-            path = "bar"
-            [dependencies.baz]
-            path = "baz"
-        "#,
+                [dependencies.bar]
+                path = "bar"
+                [dependencies.baz]
+                path = "baz"
+            "#,
         )
         .file("src/main.rs", "extern crate bar; fn main() { bar::bar() }")
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "bar"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
+                name = "bar"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
 
-            [lib]
-            name = "bar"
-            [dependencies.baz]
-            path = "../baz"
-        "#,
+                [lib]
+                name = "bar"
+                [dependencies.baz]
+                path = "../baz"
+            "#,
         )
         .file("bar/src/bar.rs", "pub fn bar() {}")
         .file("baz/Cargo.toml", &basic_lib_manifest("baz"))
@@ -454,17 +447,17 @@ fn nested_deps_recompile() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "foo"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
+                name = "foo"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
 
-            [dependencies.bar]
+                [dependencies.bar]
 
-            version = "0.5.0"
-            path = "src/bar"
-        "#,
+                version = "0.5.0"
+                path = "src/bar"
+            "#,
         )
         .file("src/main.rs", &main_file(r#""{}", bar::gimme()"#, &["bar"]))
         .file("src/bar/Cargo.toml", &basic_lib_manifest("bar"))
@@ -481,10 +474,7 @@ fn nested_deps_recompile() {
         .run();
     sleep_ms(1000);
 
-    File::create(&p.root().join("src/main.rs"))
-        .unwrap()
-        .write_all(br#"fn main() {}"#)
-        .unwrap();
+    p.change_file("src/main.rs", r#"fn main() {}"#);
 
     // This shouldn't recompile `bar`
     p.cargo("build")
@@ -502,16 +492,16 @@ fn error_message_for_missing_manifest() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "foo"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
+                name = "foo"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
 
-            [dependencies.bar]
+                [dependencies.bar]
 
-            path = "src/bar"
-        "#,
+                path = "src/bar"
+            "#,
         )
         .file("src/lib.rs", "")
         .file("src/bar/not-a-manifest", "")
@@ -521,7 +511,10 @@ fn error_message_for_missing_manifest() {
         .with_status(101)
         .with_stderr(
             "\
-[ERROR] failed to load source for a dependency on `bar`
+[ERROR] failed to get `bar` as a dependency of package `foo v0.5.0 [..]`
+
+Caused by:
+  failed to load source for dependency `bar`
 
 Caused by:
   Unable to update [CWD]/src/bar
@@ -545,25 +538,22 @@ fn override_relative() {
         .build();
 
     fs::create_dir(&paths::root().join(".cargo")).unwrap();
-    File::create(&paths::root().join(".cargo/config"))
-        .unwrap()
-        .write_all(br#"paths = ["bar"]"#)
-        .unwrap();
+    fs::write(&paths::root().join(".cargo/config"), r#"paths = ["bar"]"#).unwrap();
 
     let p = project()
         .file(
             "Cargo.toml",
             &format!(
                 r#"
-            [package]
+                    [package]
 
-            name = "foo"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
+                    name = "foo"
+                    version = "0.5.0"
+                    authors = ["wycats@example.com"]
 
-            [dependencies.bar]
-            path = '{}'
-        "#,
+                    [dependencies.bar]
+                    path = '{}'
+                "#,
                 bar.root().display()
             ),
         )
@@ -588,16 +578,16 @@ fn override_self() {
             "Cargo.toml",
             &format!(
                 r#"
-            [package]
+                    [package]
 
-            name = "foo"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
+                    name = "foo"
+                    version = "0.5.0"
+                    authors = ["wycats@example.com"]
 
-            [dependencies.bar]
-            path = '{}'
+                    [dependencies.bar]
+                    path = '{}'
 
-        "#,
+                "#,
                 bar.root().display()
             ),
         )
@@ -615,14 +605,14 @@ fn override_path_dep() {
         .file(
             "p1/Cargo.toml",
             r#"
-            [package]
-            name = "p1"
-            version = "0.5.0"
-            authors = []
+                 [package]
+                 name = "p1"
+                 version = "0.5.0"
+                 authors = []
 
-            [dependencies.p2]
-            path = "../p2"
-       "#,
+                 [dependencies.p2]
+                 path = "../p2"
+            "#,
         )
         .file("p1/src/lib.rs", "")
         .file("p2/Cargo.toml", &basic_manifest("p2", "0.5.0"))
@@ -642,16 +632,16 @@ fn override_path_dep() {
             "Cargo.toml",
             &format!(
                 r#"
-            [package]
+                    [package]
 
-            name = "foo"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
+                    name = "foo"
+                    version = "0.5.0"
+                    authors = ["wycats@example.com"]
 
-            [dependencies.p2]
-            path = '{}'
+                    [dependencies.p2]
+                    path = '{}'
 
-        "#,
+                "#,
                 bar.root().join("p2").display()
             ),
         )
@@ -667,42 +657,42 @@ fn path_dep_build_cmd() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "foo"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
+                name = "foo"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
 
-            [dependencies.bar]
+                [dependencies.bar]
 
-            version = "0.5.0"
-            path = "bar"
-        "#,
+                version = "0.5.0"
+                path = "bar"
+            "#,
         )
         .file("src/main.rs", &main_file(r#""{}", bar::gimme()"#, &["bar"]))
         .file(
             "bar/Cargo.toml",
             r#"
-            [project]
+                [project]
 
-            name = "bar"
-            version = "0.5.0"
-            authors = ["wycats@example.com"]
-            build = "build.rs"
+                name = "bar"
+                version = "0.5.0"
+                authors = ["wycats@example.com"]
+                build = "build.rs"
 
-            [lib]
-            name = "bar"
-            path = "src/bar.rs"
-        "#,
+                [lib]
+                name = "bar"
+                path = "src/bar.rs"
+            "#,
         )
         .file(
             "bar/build.rs",
             r#"
-            use std::fs;
-            fn main() {
-                fs::copy("src/bar.rs.in", "src/bar.rs").unwrap();
-            }
-        "#,
+                use std::fs;
+                fn main() {
+                    fs::copy("src/bar.rs.in", "src/bar.rs").unwrap();
+                }
+            "#,
         )
         .file("bar/src/bar.rs.in", "pub fn gimme() -> i32 { 0 }")
         .build();
@@ -722,12 +712,7 @@ fn path_dep_build_cmd() {
     p.process(&p.bin("foo")).with_stdout("0\n").run();
 
     // Touching bar.rs.in should cause the `build` command to run again.
-    {
-        let file = fs::File::create(&p.root().join("bar/src/bar.rs.in"));
-        file.unwrap()
-            .write_all(br#"pub fn gimme() -> i32 { 1 }"#)
-            .unwrap();
-    }
+    p.change_file("bar/src/bar.rs.in", "pub fn gimme() -> i32 { 1 }");
 
     p.cargo("build")
         .with_stderr(
@@ -747,25 +732,25 @@ fn dev_deps_no_rebuild_lib() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-                name = "foo"
-                version = "0.5.0"
-                authors = []
+                [project]
+                    name = "foo"
+                    version = "0.5.0"
+                    authors = []
 
-            [dev-dependencies.bar]
-                path = "bar"
+                [dev-dependencies.bar]
+                    path = "bar"
 
-            [lib]
-                name = "foo"
-                doctest = false
-        "#,
+                [lib]
+                    name = "foo"
+                    doctest = false
+            "#,
         )
         .file(
             "src/lib.rs",
             r#"
-            #[cfg(test)] #[allow(unused_extern_crates)] extern crate bar;
-            #[cfg(not(test))] pub fn foo() { env!("FOO"); }
-        "#,
+                #[cfg(test)] #[allow(unused_extern_crates)] extern crate bar;
+                #[cfg(not(test))] pub fn foo() { env!("FOO"); }
+            "#,
         )
         .file("bar/Cargo.toml", &basic_manifest("bar", "0.5.0"))
         .file("bar/src/lib.rs", "pub fn bar() {}")
@@ -785,7 +770,7 @@ fn dev_deps_no_rebuild_lib() {
 [COMPILING] [..] v0.5.0 ([CWD][..])
 [COMPILING] [..] v0.5.0 ([CWD][..])
 [FINISHED] test [unoptimized + debuginfo] target(s) in [..]
-[RUNNING] target/debug/deps/foo-[..][EXE]",
+[RUNNING] [..] (target/debug/deps/foo-[..][EXE])",
         )
         .with_stdout_contains("running 0 tests")
         .run();
@@ -797,15 +782,15 @@ fn custom_target_no_rebuild() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
-            [dependencies]
-            a = { path = "a" }
-            [workspace]
-            members = ["a", "b"]
-        "#,
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
+                [dependencies]
+                a = { path = "a" }
+                [workspace]
+                members = ["a", "b"]
+            "#,
         )
         .file("src/lib.rs", "")
         .file("a/Cargo.toml", &basic_manifest("a", "0.5.0"))
@@ -813,13 +798,13 @@ fn custom_target_no_rebuild() {
         .file(
             "b/Cargo.toml",
             r#"
-            [project]
-            name = "b"
-            version = "0.5.0"
-            authors = []
-            [dependencies]
-            a = { path = "../a" }
-        "#,
+                [project]
+                name = "b"
+                version = "0.5.0"
+                authors = []
+                [dependencies]
+                a = { path = "../a" }
+            "#,
         )
         .file("b/src/lib.rs", "")
         .build();
@@ -855,13 +840,13 @@ fn override_and_depend() {
         .file(
             "a/a1/Cargo.toml",
             r#"
-            [project]
-            name = "a1"
-            version = "0.5.0"
-            authors = []
-            [dependencies]
-            a2 = { path = "../a2" }
-        "#,
+                [project]
+                name = "a1"
+                version = "0.5.0"
+                authors = []
+                [dependencies]
+                a2 = { path = "../a2" }
+            "#,
         )
         .file("a/a1/src/lib.rs", "")
         .file("a/a2/Cargo.toml", &basic_manifest("a2", "0.5.0"))
@@ -869,14 +854,14 @@ fn override_and_depend() {
         .file(
             "b/Cargo.toml",
             r#"
-            [project]
-            name = "b"
-            version = "0.5.0"
-            authors = []
-            [dependencies]
-            a1 = { path = "../a/a1" }
-            a2 = { path = "../a/a2" }
-        "#,
+                [project]
+                name = "b"
+                version = "0.5.0"
+                authors = []
+                [dependencies]
+                a1 = { path = "../a/a1" }
+                a2 = { path = "../a/a2" }
+            "#,
         )
         .file("b/src/lib.rs", "")
         .file("b/.cargo/config", r#"paths = ["../a"]"#)
@@ -929,29 +914,29 @@ fn invalid_path_dep_in_workspace_with_lockfile() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "top"
-            version = "0.5.0"
-            authors = []
+                [project]
+                name = "top"
+                version = "0.5.0"
+                authors = []
 
-            [workspace]
+                [workspace]
 
-            [dependencies]
-            foo = { path = "foo" }
-        "#,
+                [dependencies]
+                foo = { path = "foo" }
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "foo/Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.5.0"
+                authors = []
 
-            [dependencies]
-            bar = "*"
-        "#,
+                [dependencies]
+                bar = "*"
+            "#,
         )
         .file("foo/src/lib.rs", "")
         .build();
@@ -960,20 +945,18 @@ fn invalid_path_dep_in_workspace_with_lockfile() {
     p.cargo("build").run();
 
     // Change the dependency on `bar` to an invalid path
-    File::create(&p.root().join("foo/Cargo.toml"))
-        .unwrap()
-        .write_all(
-            br#"
-        [project]
-        name = "foo"
-        version = "0.5.0"
-        authors = []
+    p.change_file(
+        "foo/Cargo.toml",
+        r#"
+            [project]
+            name = "foo"
+            version = "0.5.0"
+            authors = []
 
-        [dependencies]
-        bar = { path = "" }
-    "#,
-        )
-        .unwrap();
+            [dependencies]
+            bar = { path = "" }
+        "#,
+    );
 
     // Make sure we get a nice error. In the past this actually stack
     // overflowed!
@@ -981,9 +964,10 @@ fn invalid_path_dep_in_workspace_with_lockfile() {
         .with_status(101)
         .with_stderr(
             "\
-error: no matching package named `bar` found
+error: no matching package found
+searched package name: `bar`
+perhaps you meant:      foo
 location searched: [..]
-perhaps you meant: foo
 required by package `foo v0.5.0 ([..])`
 ",
         )
@@ -996,16 +980,16 @@ fn workspace_produces_rlib() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "top"
-            version = "0.5.0"
-            authors = []
+                [project]
+                name = "top"
+                version = "0.5.0"
+                authors = []
 
-            [workspace]
+                [workspace]
 
-            [dependencies]
-            foo = { path = "foo" }
-        "#,
+                [dependencies]
+                foo = { path = "foo" }
+            "#,
         )
         .file("src/lib.rs", "")
         .file("foo/Cargo.toml", &basic_manifest("foo", "0.5.0"))
@@ -1016,4 +1000,139 @@ fn workspace_produces_rlib() {
 
     assert!(p.root().join("target/debug/libtop.rlib").is_file());
     assert!(!p.root().join("target/debug/libfoo.rlib").is_file());
+}
+
+#[cargo_test]
+fn deep_path_error() {
+    // Test for an error loading a path deep in the dependency graph.
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+            [package]
+            name = "foo"
+            version = "0.1.0"
+            [dependencies]
+            a = {path="a"}
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .file(
+            "a/Cargo.toml",
+            r#"
+             [package]
+             name = "a"
+             version = "0.1.0"
+             [dependencies]
+             b = {path="../b"}
+            "#,
+        )
+        .file("a/src/lib.rs", "")
+        .file(
+            "b/Cargo.toml",
+            r#"
+             [package]
+             name = "b"
+             version = "0.1.0"
+             [dependencies]
+             c = {path="../c"}
+            "#,
+        )
+        .file("b/src/lib.rs", "")
+        .build();
+
+    p.cargo("check")
+        .with_status(101)
+        .with_stderr(
+            "\
+[ERROR] failed to get `c` as a dependency of package `b v0.1.0 [..]`
+    ... which is depended on by `a v0.1.0 [..]`
+    ... which is depended on by `foo v0.1.0 [..]`
+
+Caused by:
+  failed to load source for dependency `c`
+
+Caused by:
+  Unable to update [..]/foo/c
+
+Caused by:
+  failed to read `[..]/foo/c/Cargo.toml`
+
+Caused by:
+  [..]
+",
+        )
+        .run();
+}
+
+#[cargo_test]
+fn catch_tricky_cycle() {
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [package]
+                name = "message"
+                version = "0.1.0"
+
+                [dev-dependencies]
+                test = { path = "test" }
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .file(
+            "tangle/Cargo.toml",
+            r#"
+                [package]
+                name = "tangle"
+                version = "0.1.0"
+
+                [dependencies]
+                message = { path = ".." }
+                snapshot = { path = "../snapshot" }
+            "#,
+        )
+        .file("tangle/src/lib.rs", "")
+        .file(
+            "snapshot/Cargo.toml",
+            r#"
+                [package]
+                name = "snapshot"
+                version = "0.1.0"
+
+                [dependencies]
+                ledger = { path = "../ledger" }
+            "#,
+        )
+        .file("snapshot/src/lib.rs", "")
+        .file(
+            "ledger/Cargo.toml",
+            r#"
+                [package]
+                name = "ledger"
+                version = "0.1.0"
+
+                [dependencies]
+                tangle = { path = "../tangle" }
+            "#,
+        )
+        .file("ledger/src/lib.rs", "")
+        .file(
+            "test/Cargo.toml",
+            r#"
+                [package]
+                name = "test"
+                version = "0.1.0"
+
+                [dependencies]
+                snapshot = { path = "../snapshot" }
+            "#,
+        )
+        .file("test/src/lib.rs", "")
+        .build();
+
+    p.cargo("test")
+        .with_stderr_contains("[..]cyclic package dependency[..]")
+        .with_status(101)
+        .run();
 }

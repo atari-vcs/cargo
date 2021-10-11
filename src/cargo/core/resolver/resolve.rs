@@ -1,15 +1,12 @@
-use std::borrow::Borrow;
-use std::cmp;
-use std::collections::{HashMap, HashSet};
-use std::fmt;
-use std::iter::FromIterator;
-
+use super::encode::Metadata;
 use crate::core::dependency::DepKind;
 use crate::core::{Dependency, PackageId, PackageIdSpec, Summary, Target};
 use crate::util::errors::CargoResult;
+use crate::util::interning::InternedString;
 use crate::util::Graph;
-
-use super::encode::Metadata;
+use std::borrow::Borrow;
+use std::collections::{HashMap, HashSet};
+use std::fmt;
 
 /// Represents a fully-resolved package dependency graph. Each node in the graph
 /// is a package and edges represent dependencies between packages.
@@ -18,19 +15,19 @@ use super::encode::Metadata;
 /// for each package.
 pub struct Resolve {
     /// A graph, whose vertices are packages and edges are dependency specifications
-    /// from `Cargo.toml`. We need a `Vec` here because the same package
+    /// from `Cargo.toml`. We need a `HashSet` here because the same package
     /// might be present in both `[dependencies]` and `[build-dependencies]`.
-    graph: Graph<PackageId, Vec<Dependency>>,
+    graph: Graph<PackageId, HashSet<Dependency>>,
     /// Replacements from the `[replace]` table.
     replacements: HashMap<PackageId, PackageId>,
     /// Inverted version of `replacements`.
     reverse_replacements: HashMap<PackageId, PackageId>,
-    /// An empty `HashSet` to avoid creating a new `HashSet` for every package
+    /// An empty `Vec` to avoid creating a new `Vec` for every package
     /// that does not have any features, and to avoid using `Option` to
     /// simplify the API.
-    empty_features: HashSet<String>,
+    empty_features: Vec<InternedString>,
     /// Features enabled for a given package.
-    features: HashMap<PackageId, HashSet<String>>,
+    features: HashMap<PackageId, Vec<InternedString>>,
     /// Checksum for each package. A SHA256 hash of the `.crate` file used to
     /// validate the correct crate file is used. This is `None` for sources
     /// that do not use `.crate` files, like path or git dependencies.
@@ -50,6 +47,7 @@ pub struct Resolve {
     /// Version of the `Cargo.lock` format, see
     /// `cargo::core::resolver::encode` for more.
     version: ResolveVersion,
+    summaries: HashMap<PackageId, Summary>,
 }
 
 /// A version to indicate how a `Cargo.lock` should be serialized. Currently
@@ -67,17 +65,23 @@ pub enum ResolveVersion {
     /// listed inline. Introduced in 2019 in version 1.38. New lockfiles use
     /// V2 by default starting in 1.41.
     V2,
+    /// A format that explicitly lists a `version` at the top of the file as
+    /// well as changing how git dependencies are encoded. Dependencies with
+    /// `branch = "master"` are no longer encoded the same way as those without
+    /// branch specifiers.
+    V3,
 }
 
 impl Resolve {
     pub fn new(
-        graph: Graph<PackageId, Vec<Dependency>>,
+        graph: Graph<PackageId, HashSet<Dependency>>,
         replacements: HashMap<PackageId, PackageId>,
-        features: HashMap<PackageId, HashSet<String>>,
+        features: HashMap<PackageId, Vec<InternedString>>,
         checksums: HashMap<PackageId, Option<String>>,
         metadata: Metadata,
         unused_patches: Vec<PackageId>,
         version: ResolveVersion,
+        summaries: HashMap<PackageId, Summary>,
     ) -> Resolve {
         let reverse_replacements = replacements.iter().map(|(&p, &r)| (r, p)).collect();
         let public_dependencies = graph
@@ -103,10 +107,11 @@ impl Resolve {
             checksums,
             metadata,
             unused_patches,
-            empty_features: HashSet::new(),
+            empty_features: Vec::new(),
             reverse_replacements,
             public_dependencies,
             version,
+            summaries,
         }
     }
 
@@ -118,10 +123,9 @@ impl Resolve {
 
     pub fn register_used_patches(&mut self, patches: &[Summary]) {
         for summary in patches {
-            if self.iter().any(|id| id == summary.package_id()) {
-                continue;
-            }
-            self.unused_patches.push(summary.package_id());
+            if !self.graph.contains(&summary.package_id()) {
+                self.unused_patches.push(summary.package_id())
+            };
         }
     }
 
@@ -214,35 +218,8 @@ unable to verify that `{0}` is the same as when the lockfile was generated
         // Be sure to just copy over any unknown metadata.
         self.metadata = previous.metadata.clone();
 
-        // The goal of Cargo is largely to preserve the encoding of `Cargo.lock`
-        // that it finds on the filesystem. Sometimes `Cargo.lock` changes are
-        // in the works where they haven't been set as the default yet but will
-        // become the default soon.
-        //
-        // The scenarios we could be in are:
-        //
-        // * This is a brand new lock file with nothing previous. In that case
-        //   this method isn't actually called at all, but instead
-        //   `default_for_new_lockfiles` called below was encoded during the
-        //   resolution step, so that's what we're gonna use.
-        //
-        // * We have an old lock file. In this case we want to switch the
-        //   version to `default_for_old_lockfiles`. That puts us in one of
-        //   three cases:
-        //
-        //   * Our version is older than the default. This means that we're
-        //     migrating someone forward, so we switch the encoding.
-        //   * Our version is equal to the default, nothing to do!
-        //   * Our version is *newer* than the default. This is where we
-        //     critically keep the new version of encoding.
-        //
-        // This strategy should get new lockfiles into the pipeline more quickly
-        // while ensuring that any time an old cargo sees a future lock file it
-        // keeps the future lockfile encoding.
-        self.version = cmp::max(
-            previous.version,
-            ResolveVersion::default_for_old_lockfiles(),
-        );
+        // Preserve the lockfile encoding where possible to avoid lockfile churn
+        self.version = previous.version;
 
         Ok(())
     }
@@ -259,11 +236,11 @@ unable to verify that `{0}` is the same as when the lockfile was generated
         self.graph.sort()
     }
 
-    pub fn iter<'a>(&'a self) -> impl Iterator<Item = PackageId> + 'a {
+    pub fn iter(&self) -> impl Iterator<Item = PackageId> + '_ {
         self.graph.iter().cloned()
     }
 
-    pub fn deps(&self, pkg: PackageId) -> impl Iterator<Item = (PackageId, &[Dependency])> {
+    pub fn deps(&self, pkg: PackageId) -> impl Iterator<Item = (PackageId, &HashSet<Dependency>)> {
         self.deps_not_replaced(pkg)
             .map(move |(id, deps)| (self.replacement(id).unwrap_or(id), deps))
     }
@@ -271,10 +248,8 @@ unable to verify that `{0}` is the same as when the lockfile was generated
     pub fn deps_not_replaced(
         &self,
         pkg: PackageId,
-    ) -> impl Iterator<Item = (PackageId, &[Dependency])> {
-        self.graph
-            .edges(&pkg)
-            .map(|(id, deps)| (*id, deps.as_slice()))
+    ) -> impl Iterator<Item = (PackageId, &HashSet<Dependency>)> {
+        self.graph.edges(&pkg).map(|(id, deps)| (*id, deps))
     }
 
     pub fn replacement(&self, pkg: PackageId) -> Option<PackageId> {
@@ -285,8 +260,14 @@ unable to verify that `{0}` is the same as when the lockfile was generated
         &self.replacements
     }
 
-    pub fn features(&self, pkg: PackageId) -> &HashSet<String> {
+    pub fn features(&self, pkg: PackageId) -> &[InternedString] {
         self.features.get(&pkg).unwrap_or(&self.empty_features)
+    }
+
+    /// This is only here for legacy support, it will be removed when
+    /// switching to the new feature resolver.
+    pub fn features_clone(&self) -> HashMap<PackageId, Vec<InternedString>> {
+        self.features.clone()
     }
 
     pub fn is_public_dep(&self, pkg: PackageId, dep: PackageId) -> bool {
@@ -296,14 +277,12 @@ unable to verify that `{0}` is the same as when the lockfile was generated
             .unwrap_or_else(|| panic!("Unknown dependency {:?} for package {:?}", dep, pkg))
     }
 
-    pub fn features_sorted(&self, pkg: PackageId) -> Vec<&str> {
-        let mut v = Vec::from_iter(self.features(pkg).iter().map(|s| s.as_ref()));
-        v.sort_unstable();
-        v
-    }
-
     pub fn query(&self, spec: &str) -> CargoResult<PackageId> {
         PackageIdSpec::query_str(spec, self.iter())
+    }
+
+    pub fn specs_to_ids(&self, specs: &[PackageIdSpec]) -> CargoResult<Vec<PackageId>> {
+        specs.iter().map(|s| s.query(self.iter())).collect()
     }
 
     pub fn unused_patches(&self) -> &[PackageId] {
@@ -324,8 +303,9 @@ unable to verify that `{0}` is the same as when the lockfile was generated
         to: PackageId,
         to_target: &Target,
     ) -> CargoResult<String> {
+        let empty_set: HashSet<Dependency> = HashSet::new();
         let deps = if from == to {
-            &[]
+            &empty_set
         } else {
             self.dependencies_listed(from, to)
         };
@@ -348,7 +328,7 @@ unable to verify that `{0}` is the same as when the lockfile was generated
         Ok(name)
     }
 
-    fn dependencies_listed(&self, from: PackageId, to: PackageId) -> &[Dependency] {
+    fn dependencies_listed(&self, from: PackageId, to: PackageId) -> &HashSet<Dependency> {
         // We've got a dependency on `from` to `to`, but this dependency edge
         // may be affected by [replace]. If the `to` package is listed as the
         // target of a replacement (aka the key of a reverse replacement map)
@@ -371,8 +351,16 @@ unable to verify that `{0}` is the same as when the lockfile was generated
 
     /// Returns the version of the encoding that's being used for this lock
     /// file.
-    pub fn version(&self) -> &ResolveVersion {
-        &self.version
+    pub fn version(&self) -> ResolveVersion {
+        self.version
+    }
+
+    pub fn set_version(&mut self, version: ResolveVersion) {
+        self.version = version;
+    }
+
+    pub fn summary(&self, pkg_id: PackageId) -> &Summary {
+        &self.summaries[&pkg_id]
     }
 }
 
@@ -380,15 +368,14 @@ impl PartialEq for Resolve {
     fn eq(&self, other: &Resolve) -> bool {
         macro_rules! compare {
             ($($fields:ident)* | $($ignored:ident)*) => {
-                let Resolve { $($fields,)* $($ignored,)* } = self;
-                $(drop($ignored);)*
+                let Resolve { $($fields,)* $($ignored: _,)* } = self;
                 $($fields == &other.$fields)&&*
             }
         }
         compare! {
             // fields to compare
             graph replacements reverse_replacements empty_features features
-            checksums metadata unused_patches public_dependencies
+            checksums metadata unused_patches public_dependencies summaries
             |
             // fields to ignore
             version
@@ -407,27 +394,21 @@ impl fmt::Debug for Resolve {
     }
 }
 
-impl ResolveVersion {
-    /// The default way to encode new `Cargo.lock` files.
+impl Default for ResolveVersion {
+    /// The default way to encode new or updated `Cargo.lock` files.
     ///
     /// It's important that if a new version of `ResolveVersion` is added that
     /// this is not updated until *at least* the support for the version is in
-    /// the stable release of Rust. It's ok for this to be newer than
-    /// `default_for_old_lockfiles` below.
-    pub fn default_for_new_lockfiles() -> ResolveVersion {
-        ResolveVersion::V2
-    }
-
-    /// The default way to encode old preexisting `Cargo.lock` files. This is
-    /// often trailing the new lockfiles one above to give older projects a
-    /// longer time to catch up.
+    /// the stable release of Rust.
     ///
-    /// It's important that this trails behind `default_for_new_lockfiles` for
-    /// quite some time. This gives projects a quite large window to update in
-    /// where we don't force updates, so if projects span many versions of Cargo
-    /// all those versions of Cargo will have support for a new version of the
-    /// lock file.
-    pub fn default_for_old_lockfiles() -> ResolveVersion {
-        ResolveVersion::V1
+    /// This resolve version will be used for all new lock files, for example
+    /// those generated by `cargo update` (update everything) or building after
+    /// a `cargo new` (where no lock file previously existed). This is also used
+    /// for *updated* lock files such as when a dependency is added or when a
+    /// version requirement changes. In this situation Cargo's updating the lock
+    /// file anyway so it takes the opportunity to bump the lock file version
+    /// forward.
+    fn default() -> ResolveVersion {
+        ResolveVersion::V3
     }
 }

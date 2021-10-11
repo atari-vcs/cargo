@@ -14,7 +14,38 @@ pub type pthread_cond_t = *mut ::c_void;
 pub type pthread_condattr_t = *mut ::c_void;
 pub type pthread_rwlock_t = *mut ::c_void;
 pub type pthread_rwlockattr_t = *mut ::c_void;
+pub type pthread_spinlock_t = ::uintptr_t;
 pub type caddr_t = *mut ::c_char;
+
+// elf.h
+
+pub type Elf32_Addr = u32;
+pub type Elf32_Half = u16;
+pub type Elf32_Lword = u64;
+pub type Elf32_Off = u32;
+pub type Elf32_Sword = i32;
+pub type Elf32_Word = u32;
+
+pub type Elf64_Addr = u64;
+pub type Elf64_Half = u16;
+pub type Elf64_Lword = u64;
+pub type Elf64_Off = u64;
+pub type Elf64_Sword = i32;
+pub type Elf64_Sxword = i64;
+pub type Elf64_Word = u32;
+pub type Elf64_Xword = u64;
+
+cfg_if! {
+    if #[cfg(target_pointer_width = "64")] {
+        type Elf_Addr = Elf64_Addr;
+        type Elf_Half = Elf64_Half;
+        type Elf_Phdr = Elf64_Phdr;
+    } else if #[cfg(target_pointer_width = "32")] {
+        type Elf_Addr = Elf32_Addr;
+        type Elf_Half = Elf32_Half;
+        type Elf_Phdr = Elf32_Phdr;
+    }
+}
 
 s! {
     pub struct glob_t {
@@ -321,9 +352,62 @@ s! {
         __shm_ctimensec: c_long,
         pub shm_internal: *mut ::c_void,
     }
+
+    // elf.h
+    pub struct Elf32_Phdr {
+        pub p_type: Elf32_Word,
+        pub p_offset: Elf32_Off,
+        pub p_vaddr: Elf32_Addr,
+        pub p_paddr: Elf32_Addr,
+        pub p_filesz: Elf32_Word,
+        pub p_memsz: Elf32_Word,
+        pub p_flags: Elf32_Word,
+        pub p_align: Elf32_Word,
+    }
+
+    pub struct Elf64_Phdr {
+        pub p_type: Elf64_Word,
+        pub p_flags: Elf64_Word,
+        pub p_offset: Elf64_Off,
+        pub p_vaddr: Elf64_Addr,
+        pub p_paddr: Elf64_Addr,
+        pub p_filesz: Elf64_Xword,
+        pub p_memsz: Elf64_Xword,
+        pub p_align: Elf64_Xword,
+    }
+
+    // link.h
+
+    pub struct dl_phdr_info {
+        pub dlpi_addr: Elf_Addr,
+        pub dlpi_name: *const ::c_char,
+        pub dlpi_phdr: *const Elf_Phdr,
+        pub dlpi_phnum: Elf_Half,
+    }
+
+    // sys/sysctl.h
+    pub struct kinfo_vmentry {
+        pub kve_start: ::c_ulong,
+        pub kve_end: ::c_ulong,
+        pub kve_guard: ::c_ulong,
+        pub kve_fspace: ::c_ulong,
+        pub kve_fspace_augment: ::c_ulong,
+        pub kve_offset: u64,
+        pub kve_wired_count: ::c_int,
+        pub kve_etype: ::c_int,
+        pub kve_protection: ::c_int,
+        pub kve_max_protection: ::c_int,
+        pub kve_advice: ::c_int,
+        pub kve_inheritance: ::c_int,
+        pub kve_flags: u8,
+    }
 }
 
 impl siginfo_t {
+    pub unsafe fn si_addr(&self) -> *mut ::c_char {
+        self.si_addr
+    }
+
     pub unsafe fn si_value(&self) -> ::sigval {
         #[repr(C)]
         struct siginfo_timer {
@@ -874,6 +958,10 @@ pub const NET_RT_STATS: ::c_int = 4;
 pub const NET_RT_TABLE: ::c_int = 5;
 pub const NET_RT_IFNAMES: ::c_int = 6;
 #[doc(hidden)]
+#[deprecated(
+    since = "0.2.95",
+    note = "Possibly increasing over the releases and might not be so used in the field"
+)]
 pub const NET_RT_MAXID: ::c_int = 7;
 
 pub const IPV6_JOIN_GROUP: ::c_int = 12;
@@ -1098,6 +1186,12 @@ pub const NOTE_CHILD: u32 = 0x00000004;
 
 pub const TMP_MAX: ::c_uint = 0x7fffffff;
 
+pub const NI_NUMERICHOST: ::c_int = 1;
+pub const NI_NUMERICSERV: ::c_int = 2;
+pub const NI_NOFQDN: ::c_int = 4;
+pub const NI_NAMEREQD: ::c_int = 8;
+pub const NI_DGRAM: ::c_int = 16;
+
 pub const NI_MAXHOST: ::size_t = 256;
 
 pub const RTLD_LOCAL: ::c_int = 0;
@@ -1150,12 +1244,14 @@ pub const KERN_NTHREADS: ::c_int = 26;
 pub const KERN_OSVERSION: ::c_int = 27;
 pub const KERN_SOMAXCONN: ::c_int = 28;
 pub const KERN_SOMINCONN: ::c_int = 29;
+#[deprecated(since = "0.2.71", note = "Removed in OpenBSD 6.0")]
 pub const KERN_USERMOUNT: ::c_int = 30;
 pub const KERN_NOSUIDCOREDUMP: ::c_int = 32;
 pub const KERN_FSYNC: ::c_int = 33;
 pub const KERN_SYSVMSG: ::c_int = 34;
 pub const KERN_SYSVSEM: ::c_int = 35;
 pub const KERN_SYSVSHM: ::c_int = 36;
+#[deprecated(since = "0.2.71", note = "Removed in OpenBSD 6.0")]
 pub const KERN_ARND: ::c_int = 37;
 pub const KERN_MSGBUFSIZE: ::c_int = 38;
 pub const KERN_MALLOCSTATS: ::c_int = 39;
@@ -1202,6 +1298,10 @@ pub const KERN_AUDIO: ::c_int = 84;
 pub const KERN_CPUSTATS: ::c_int = 85;
 pub const KERN_PFSTATUS: ::c_int = 86;
 pub const KERN_TIMEOUT_STATS: ::c_int = 87;
+#[deprecated(
+    since = "0.2.95",
+    note = "Possibly increasing over the releases and might not be so used in the field"
+)]
 pub const KERN_MAXID: ::c_int = 88;
 
 pub const KERN_PROC_ALL: ::c_int = 0;
@@ -1296,6 +1396,7 @@ pub const NTFS_MFLAG_ALLNAMES: ::c_int = 0x2;
 pub const TMPFS_ARGS_VERSION: ::c_int = 1;
 
 pub const MAP_STACK: ::c_int = 0x4000;
+pub const MAP_CONCEAL: ::c_int = 0x8000;
 
 // https://github.com/openbsd/src/blob/master/sys/net/if.h#L187
 pub const IFF_UP: ::c_int = 0x1; // interface is up
@@ -1333,16 +1434,14 @@ pub const PTRACE_FORK: ::c_int = 0x0002;
 
 pub const WCONTINUED: ::c_int = 8;
 
-fn _ALIGN(p: usize) -> usize {
-    (p + _ALIGNBYTES) & !_ALIGNBYTES
+const_fn! {
+    {const} fn _ALIGN(p: usize) -> usize {
+        (p + _ALIGNBYTES) & !_ALIGNBYTES
+    }
 }
 
 f! {
-    pub fn WIFCONTINUED(status: ::c_int) -> bool {
-        status & 0o177777 == 0o177777
-    }
-
-        pub fn CMSG_DATA(cmsg: *const ::cmsghdr) -> *mut ::c_uchar {
+    pub fn CMSG_DATA(cmsg: *const ::cmsghdr) -> *mut ::c_uchar {
         (cmsg as *mut ::c_uchar)
             .offset(_ALIGN(::mem::size_of::<::cmsghdr>()) as isize)
     }
@@ -1369,39 +1468,40 @@ f! {
         }
     }
 
-    pub fn CMSG_SPACE(length: ::c_uint) -> ::c_uint {
+    pub {const} fn CMSG_SPACE(length: ::c_uint) -> ::c_uint {
         (_ALIGN(::mem::size_of::<::cmsghdr>()) + _ALIGN(length as usize))
             as ::c_uint
     }
+}
 
-    pub fn WSTOPSIG(status: ::c_int) -> ::c_int {
+safe_f! {
+    pub {const} fn WSTOPSIG(status: ::c_int) -> ::c_int {
         status >> 8
     }
 
-    pub fn WIFSIGNALED(status: ::c_int) -> bool {
+    pub {const} fn WIFSIGNALED(status: ::c_int) -> bool {
         (status & 0o177) != 0o177 && (status & 0o177) != 0
     }
 
-    pub fn WIFSTOPPED(status: ::c_int) -> bool {
-        (status & 0o177) == 0o177
+    pub {const} fn WIFSTOPPED(status: ::c_int) -> bool {
+        (status & 0xff) == 0o177
+    }
+
+    pub {const} fn WIFCONTINUED(status: ::c_int) -> bool {
+        (status & 0o177777) == 0o177777
     }
 }
 
 extern "C" {
     pub fn gettimeofday(tp: *mut ::timeval, tz: *mut ::timezone) -> ::c_int;
-    pub fn settimeofday(
-        tp: *const ::timeval,
-        tz: *const ::timezone,
-    ) -> ::c_int;
+    pub fn settimeofday(tp: *const ::timeval, tz: *const ::timezone) -> ::c_int;
     pub fn execvpe(
         file: *const ::c_char,
         argv: *const *const ::c_char,
         envp: *const *const ::c_char,
     ) -> ::c_int;
-    pub fn pledge(
-        promises: *const ::c_char,
-        execpromises: *const ::c_char,
-    ) -> ::c_int;
+    pub fn pledge(promises: *const ::c_char, execpromises: *const ::c_char) -> ::c_int;
+    pub fn unveil(path: *const ::c_char, permissions: *const ::c_char) -> ::c_int;
     pub fn strtonum(
         nptr: *const ::c_char,
         minval: ::c_longlong,
@@ -1435,11 +1535,7 @@ extern "C" {
         nevents: ::c_int,
         timeout: *const ::timespec,
     ) -> ::c_int;
-    pub fn mprotect(
-        addr: *mut ::c_void,
-        len: ::size_t,
-        prot: ::c_int,
-    ) -> ::c_int;
+    pub fn mprotect(addr: *mut ::c_void, len: ::size_t, prot: ::c_int) -> ::c_int;
     pub fn pthread_attr_getguardsize(
         attr: *const ::pthread_attr_t,
         guardsize: *mut ::size_t,
@@ -1450,11 +1546,10 @@ extern "C" {
         stacksize: *mut ::size_t,
     ) -> ::c_int;
     pub fn pthread_main_np() -> ::c_int;
+    pub fn pthread_get_name_np(tid: ::pthread_t, name: *mut ::c_char, len: ::size_t);
     pub fn pthread_set_name_np(tid: ::pthread_t, name: *const ::c_char);
-    pub fn pthread_stackseg_np(
-        thread: ::pthread_t,
-        sinfo: *mut ::stack_t,
-    ) -> ::c_int;
+    pub fn pthread_stackseg_np(thread: ::pthread_t, sinfo: *mut ::stack_t) -> ::c_int;
+
     pub fn sysctl(
         name: *const ::c_int,
         namelen: ::c_uint,
@@ -1466,18 +1561,38 @@ extern "C" {
     pub fn getentropy(buf: *mut ::c_void, buflen: ::size_t) -> ::c_int;
     pub fn setresgid(rgid: ::gid_t, egid: ::gid_t, sgid: ::gid_t) -> ::c_int;
     pub fn setresuid(ruid: ::uid_t, euid: ::uid_t, suid: ::uid_t) -> ::c_int;
-    pub fn ptrace(
-        request: ::c_int,
-        pid: ::pid_t,
-        addr: caddr_t,
-        data: ::c_int,
-    ) -> ::c_int;
+    pub fn ptrace(request: ::c_int, pid: ::pid_t, addr: caddr_t, data: ::c_int) -> ::c_int;
+    pub fn utrace(label: *const ::c_char, addr: *const ::c_void, len: ::size_t) -> ::c_int;
     pub fn memmem(
         haystack: *const ::c_void,
         haystacklen: ::size_t,
         needle: *const ::c_void,
         needlelen: ::size_t,
     ) -> *mut ::c_void;
+    // #include <link.h>
+    pub fn dl_iterate_phdr(
+        callback: ::Option<
+            unsafe extern "C" fn(
+                info: *mut dl_phdr_info,
+                size: usize,
+                data: *mut ::c_void,
+            ) -> ::c_int,
+        >,
+        data: *mut ::c_void,
+    ) -> ::c_int;
+    pub fn uselocale(loc: ::locale_t) -> ::locale_t;
+    pub fn freelocale(loc: ::locale_t);
+    pub fn newlocale(mask: ::c_int, locale: *const ::c_char, base: ::locale_t) -> ::locale_t;
+    pub fn duplocale(base: ::locale_t) -> ::locale_t;
+
+    // Added in `OpenBSD` 5.5
+    pub fn explicit_bzero(s: *mut ::c_void, len: ::size_t);
+
+    pub fn setproctitle(fmt: *const ::c_char, ...);
+
+    pub fn freezero(ptr: *mut ::c_void, size: ::size_t);
+    pub fn malloc_conceal(size: ::size_t) -> *mut ::c_void;
+    pub fn calloc_conceal(nmemb: ::size_t, size: ::size_t) -> *mut ::c_void;
 }
 
 cfg_if! {

@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::cmp;
+use std::fs;
 use std::io;
 use std::io::prelude::*;
 use std::marker;
@@ -8,6 +9,7 @@ use std::path::Path;
 use crate::entry::{EntryFields, EntryIo};
 use crate::error::TarError;
 use crate::other;
+use crate::pax::pax_extensions_size;
 use crate::{Entry, GnuExtSparseHeader, GnuSparseHeader, Header};
 
 /// A top-level representation of an archive file.
@@ -22,6 +24,7 @@ pub struct ArchiveInner<R: ?Sized> {
     unpack_xattrs: bool,
     preserve_permissions: bool,
     preserve_mtime: bool,
+    overwrite: bool,
     ignore_zeros: bool,
     obj: RefCell<R>,
 }
@@ -33,7 +36,7 @@ pub struct Entries<'a, R: 'a + Read> {
 }
 
 struct EntriesFields<'a> {
-    archive: &'a Archive<Read + 'a>,
+    archive: &'a Archive<dyn Read + 'a>,
     next: u64,
     done: bool,
     raw: bool,
@@ -47,6 +50,7 @@ impl<R: Read> Archive<R> {
                 unpack_xattrs: false,
                 preserve_permissions: false,
                 preserve_mtime: true,
+                overwrite: true,
                 ignore_zeros: false,
                 obj: RefCell::new(obj),
                 pos: Cell::new(0),
@@ -66,7 +70,7 @@ impl<R: Read> Archive<R> {
     /// iterator returns), then the contents read for each entry may be
     /// corrupted.
     pub fn entries(&mut self) -> io::Result<Entries<R>> {
-        let me: &mut Archive<Read> = self;
+        let me: &mut Archive<dyn Read> = self;
         me._entries().map(|fields| Entries {
             fields: fields,
             _ignored: marker::PhantomData,
@@ -93,7 +97,7 @@ impl<R: Read> Archive<R> {
     /// ar.unpack("foo").unwrap();
     /// ```
     pub fn unpack<P: AsRef<Path>>(&mut self, dst: P) -> io::Result<()> {
-        let me: &mut Archive<Read> = self;
+        let me: &mut Archive<dyn Read> = self;
         me._unpack(dst.as_ref())
     }
 
@@ -117,6 +121,11 @@ impl<R: Read> Archive<R> {
         self.inner.preserve_permissions = preserve;
     }
 
+    /// Indicate whether files and symlinks should be overwritten on extraction.
+    pub fn set_overwrite(&mut self, overwrite: bool) {
+        self.inner.overwrite = overwrite;
+    }
+
     /// Indicate whether access time information is preserved when unpacking
     /// this entry.
     ///
@@ -134,7 +143,7 @@ impl<R: Read> Archive<R> {
     }
 }
 
-impl<'a> Archive<Read + 'a> {
+impl<'a> Archive<dyn Read + 'a> {
     fn _entries(&mut self) -> io::Result<EntriesFields> {
         if self.inner.pos.get() != 0 {
             return Err(other(
@@ -151,10 +160,34 @@ impl<'a> Archive<Read + 'a> {
     }
 
     fn _unpack(&mut self, dst: &Path) -> io::Result<()> {
+        if dst.symlink_metadata().is_err() {
+            fs::create_dir_all(&dst)
+                .map_err(|e| TarError::new(&format!("failed to create `{}`", dst.display()), e))?;
+        }
+
+        // Canonicalizing the dst directory will prepend the path with '\\?\'
+        // on windows which will allow windows APIs to treat the path as an
+        // extended-length path with a 32,767 character limit. Otherwise all
+        // unpacked paths over 260 characters will fail on creation with a
+        // NotFound exception.
+        let dst = &dst.canonicalize().unwrap_or(dst.to_path_buf());
+
+        // Delay any directory entries until the end (they will be created if needed by
+        // descendants), to ensure that directory permissions do not interfer with descendant
+        // extraction.
+        let mut directories = Vec::new();
         for entry in self._entries()? {
             let mut file = entry.map_err(|e| TarError::new("failed to iterate over archive", e))?;
-            file.unpack_in(dst)?;
+            if file.header().entry_type() == crate::EntryType::Directory {
+                directories.push(file);
+            } else {
+                file.unpack_in(dst)?;
+            }
         }
+        for mut dir in directories {
+            dir.unpack_in(dst)?;
+        }
+
         Ok(())
     }
 
@@ -176,7 +209,7 @@ impl<'a, R: Read> Entries<'a, R> {
     /// Indicates whether this iterator will return raw entries or not.
     ///
     /// If the raw list of entries are returned, then no preprocessing happens
-    /// on account of this library, for example taking into accout GNU long name
+    /// on account of this library, for example taking into account GNU long name
     /// or long link archive members. Raw iteration is disabled by default.
     pub fn raw(self, raw: bool) -> Entries<'a, R> {
         Entries {
@@ -199,10 +232,12 @@ impl<'a, R: Read> Iterator for Entries<'a, R> {
 }
 
 impl<'a> EntriesFields<'a> {
-    fn next_entry_raw(&mut self) -> io::Result<Option<Entry<'a, io::Empty>>> {
+    fn next_entry_raw(
+        &mut self,
+        pax_size: Option<u64>,
+    ) -> io::Result<Option<Entry<'a, io::Empty>>> {
         let mut header = Header::new_old();
         let mut header_pos = self.next;
-
         loop {
             // Seek to the start of the next header in the archive
             let delta = self.next - self.archive.inner.pos.get();
@@ -224,7 +259,6 @@ impl<'a> EntriesFields<'a> {
             if !self.archive.inner.ignore_zeros {
                 return Ok(None);
             }
-
             self.next += 512;
             header_pos = self.next;
         }
@@ -241,8 +275,12 @@ impl<'a> EntriesFields<'a> {
         }
 
         let file_pos = self.next;
-        let size = header.entry_size()?;
-
+        let mut size = header.entry_size()?;
+        if size == 0 {
+            if let Some(pax_size) = pax_size {
+                size = pax_size;
+            }
+        }
         let ret = EntryFields {
             size: size,
             header_pos: header_pos,
@@ -255,6 +293,7 @@ impl<'a> EntriesFields<'a> {
             unpack_xattrs: self.archive.inner.unpack_xattrs,
             preserve_permissions: self.archive.inner.preserve_permissions,
             preserve_mtime: self.archive.inner.preserve_mtime,
+            overwrite: self.archive.inner.overwrite,
         };
 
         // Store where the next entry is, rounding up by 512 bytes (the size of
@@ -267,16 +306,17 @@ impl<'a> EntriesFields<'a> {
 
     fn next_entry(&mut self) -> io::Result<Option<Entry<'a, io::Empty>>> {
         if self.raw {
-            return self.next_entry_raw();
+            return self.next_entry_raw(None);
         }
 
         let mut gnu_longname = None;
         let mut gnu_longlink = None;
         let mut pax_extensions = None;
+        let mut pax_size = None;
         let mut processed = 0;
         loop {
             processed += 1;
-            let entry = match self.next_entry_raw()? {
+            let entry = match self.next_entry_raw(pax_size)? {
                 Some(entry) => entry,
                 None if processed > 1 => {
                     return Err(other(
@@ -287,7 +327,10 @@ impl<'a> EntriesFields<'a> {
                 None => return Ok(None),
             };
 
-            if entry.header().as_gnu().is_some() && entry.header().entry_type().is_gnu_longname() {
+            let is_recognized_header =
+                entry.header().as_gnu().is_some() || entry.header().as_ustar().is_some();
+
+            if is_recognized_header && entry.header().entry_type().is_gnu_longname() {
                 if gnu_longname.is_some() {
                     return Err(other(
                         "two long name entries describing \
@@ -298,7 +341,7 @@ impl<'a> EntriesFields<'a> {
                 continue;
             }
 
-            if entry.header().as_gnu().is_some() && entry.header().entry_type().is_gnu_longlink() {
+            if is_recognized_header && entry.header().entry_type().is_gnu_longlink() {
                 if gnu_longlink.is_some() {
                     return Err(other(
                         "two long name entries describing \
@@ -309,9 +352,7 @@ impl<'a> EntriesFields<'a> {
                 continue;
             }
 
-            if entry.header().as_ustar().is_some()
-                && entry.header().entry_type().is_pax_local_extensions()
-            {
+            if is_recognized_header && entry.header().entry_type().is_pax_local_extensions() {
                 if pax_extensions.is_some() {
                     return Err(other(
                         "two pax extensions entries describing \
@@ -319,6 +360,9 @@ impl<'a> EntriesFields<'a> {
                     ));
                 }
                 pax_extensions = Some(EntryFields::from(entry).read_all()?);
+                if let Some(pax_extensions_ref) = &pax_extensions {
+                    pax_size = pax_extensions_size(pax_extensions_ref);
+                }
                 continue;
             }
 
@@ -373,8 +417,7 @@ impl<'a> EntriesFields<'a> {
                 }
                 let off = block.offset()?;
                 let len = block.length()?;
-
-                if (size - remaining) % 512 != 0 {
+                if len != 0 && (size - remaining) % 512 != 0 {
                     return Err(other(
                         "previous block in sparse file was not \
                          aligned to 512-byte boundary",

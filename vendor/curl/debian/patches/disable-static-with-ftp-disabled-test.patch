@@ -1,0 +1,18 @@
+--- rust-curl-0.4.33/tests/protocols.rs	2020-07-18 02:50:13.000000000 +0000
++++ curl/tests/protocols.rs	2020-12-07 02:56:44.334196826 +0000
+@@ -1,15 +1,5 @@
+ extern crate curl;
+ 
+-#[cfg(all(feature = "static-curl", not(feature = "protocol-ftp")))]
+-#[test]
+-fn static_with_ftp_disabled() {
+-    assert!(curl::Version::get()
+-        .protocols()
+-        .filter(|&p| p == "ftp")
+-        .next()
+-        .is_none());
+-}
+-
+ #[cfg(all(feature = "static-curl", feature = "protocol-ftp"))]
+ #[test]
+ fn static_with_ftp_enabled() {

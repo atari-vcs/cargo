@@ -16,29 +16,25 @@
 //! Generate a 2048-bit RSA key pair and use the public key to encrypt some data.
 //!
 //! ```rust
-//!
-//! extern crate openssl;
-//!
 //! use openssl::rsa::{Rsa, Padding};
 //!
-//! fn main() {
-//!     let rsa = Rsa::generate(2048).unwrap();
-//!     let data = b"foobar";
-//!     let mut buf = vec![0; rsa.size() as usize];
-//!     let encrypted_len = rsa.public_encrypt(data, &mut buf, Padding::PKCS1).unwrap();
-//! }
+//! let rsa = Rsa::generate(2048).unwrap();
+//! let data = b"foobar";
+//! let mut buf = vec![0; rsa.size() as usize];
+//! let encrypted_len = rsa.public_encrypt(data, &mut buf, Padding::PKCS1).unwrap();
 //! ```
-use ffi;
+use cfg_if::cfg_if;
 use foreign_types::{ForeignType, ForeignTypeRef};
 use libc::c_int;
 use std::fmt;
 use std::mem;
 use std::ptr;
 
-use bn::{BigNum, BigNumRef};
-use error::ErrorStack;
-use pkey::{HasPrivate, HasPublic, Private, Public};
-use {cvt, cvt_n, cvt_p};
+use crate::bn::{BigNum, BigNumRef};
+use crate::error::ErrorStack;
+use crate::pkey::{HasPrivate, HasPublic, Private, Public};
+use crate::util::ForeignTypeRefExt;
+use crate::{cvt, cvt_n, cvt_p};
 
 /// Type of encryption padding to use.
 ///
@@ -49,20 +45,21 @@ use {cvt, cvt_n, cvt_p};
 pub struct Padding(c_int);
 
 impl Padding {
+    pub const NONE: Padding = Padding(ffi::RSA_NO_PADDING);
+    pub const PKCS1: Padding = Padding(ffi::RSA_PKCS1_PADDING);
+    pub const PKCS1_OAEP: Padding = Padding(ffi::RSA_PKCS1_OAEP_PADDING);
+    pub const PKCS1_PSS: Padding = Padding(ffi::RSA_PKCS1_PSS_PADDING);
+
     /// Creates a `Padding` from an integer representation.
     pub fn from_raw(value: c_int) -> Padding {
         Padding(value)
     }
 
     /// Returns the integer representation of `Padding`.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn as_raw(&self) -> c_int {
         self.0
     }
-
-    pub const NONE: Padding = Padding(ffi::RSA_NO_PADDING);
-    pub const PKCS1: Padding = Padding(ffi::RSA_PKCS1_PADDING);
-    pub const PKCS1_OAEP: Padding = Padding(ffi::RSA_PKCS1_OAEP_PADDING);
-    pub const PKCS1_PSS: Padding = Padding(ffi::RSA_PKCS1_PSS_PADDING);
 }
 
 generic_foreign_type_and_impl_send_sync! {
@@ -190,7 +187,7 @@ where
         unsafe {
             let mut d = ptr::null();
             RSA_get0_key(self.as_ptr(), ptr::null_mut(), ptr::null_mut(), &mut d);
-            BigNumRef::from_ptr(d as *mut _)
+            BigNumRef::from_const_ptr(d)
         }
     }
 
@@ -203,11 +200,7 @@ where
         unsafe {
             let mut p = ptr::null();
             RSA_get0_factors(self.as_ptr(), &mut p, ptr::null_mut());
-            if p.is_null() {
-                None
-            } else {
-                Some(BigNumRef::from_ptr(p as *mut _))
-            }
+            BigNumRef::from_const_ptr_opt(p)
         }
     }
 
@@ -220,11 +213,7 @@ where
         unsafe {
             let mut q = ptr::null();
             RSA_get0_factors(self.as_ptr(), ptr::null_mut(), &mut q);
-            if q.is_null() {
-                None
-            } else {
-                Some(BigNumRef::from_ptr(q as *mut _))
-            }
+            BigNumRef::from_const_ptr_opt(q)
         }
     }
 
@@ -237,11 +226,7 @@ where
         unsafe {
             let mut dp = ptr::null();
             RSA_get0_crt_params(self.as_ptr(), &mut dp, ptr::null_mut(), ptr::null_mut());
-            if dp.is_null() {
-                None
-            } else {
-                Some(BigNumRef::from_ptr(dp as *mut _))
-            }
+            BigNumRef::from_const_ptr_opt(dp)
         }
     }
 
@@ -254,11 +239,7 @@ where
         unsafe {
             let mut dq = ptr::null();
             RSA_get0_crt_params(self.as_ptr(), ptr::null_mut(), &mut dq, ptr::null_mut());
-            if dq.is_null() {
-                None
-            } else {
-                Some(BigNumRef::from_ptr(dq as *mut _))
-            }
+            BigNumRef::from_const_ptr_opt(dq)
         }
     }
 
@@ -271,11 +252,7 @@ where
         unsafe {
             let mut qi = ptr::null();
             RSA_get0_crt_params(self.as_ptr(), ptr::null_mut(), ptr::null_mut(), &mut qi);
-            if qi.is_null() {
-                None
-            } else {
-                Some(BigNumRef::from_ptr(qi as *mut _))
-            }
+            BigNumRef::from_const_ptr_opt(qi)
         }
     }
 
@@ -414,7 +391,7 @@ where
         unsafe {
             let mut n = ptr::null();
             RSA_get0_key(self.as_ptr(), &mut n, ptr::null_mut(), ptr::null_mut());
-            BigNumRef::from_ptr(n as *mut _)
+            BigNumRef::from_const_ptr(n)
         }
     }
 
@@ -427,7 +404,7 @@ where
         unsafe {
             let mut e = ptr::null();
             RSA_get0_key(self.as_ptr(), ptr::null_mut(), &mut e, ptr::null_mut());
-            BigNumRef::from_ptr(e as *mut _)
+            BigNumRef::from_const_ptr(e)
         }
     }
 }
@@ -579,6 +556,7 @@ impl Rsa<Private> {
     ///
     /// This a convenience method over
     /// `Rsa::build(n, e, d)?.set_factors(p, q)?.set_crt_params(dmp1, dmq1, iqmp)?.build()`
+    #[allow(clippy::too_many_arguments, clippy::many_single_char_names)]
     pub fn from_private_components(
         n: BigNum,
         e: BigNum,
@@ -668,7 +646,7 @@ impl Rsa<Private> {
 }
 
 impl<T> fmt::Debug for Rsa<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Rsa")
     }
 }
@@ -771,7 +749,7 @@ cfg_if! {
 
 #[cfg(test)]
 mod test {
-    use symm::Cipher;
+    use crate::symm::Cipher;
 
     use super::*;
 
@@ -895,11 +873,11 @@ mod test {
         let keypair = super::Rsa::generate(2048).unwrap();
         let pubkey_pem = keypair.public_key_to_pem_pkcs1().unwrap();
         let pubkey = super::Rsa::public_key_from_pem_pkcs1(&pubkey_pem).unwrap();
-        let msg = "Hello, world!".as_bytes();
+        let msg = b"Hello, world!";
 
         let mut encrypted = vec![0; pubkey.size() as usize];
         let len = pubkey
-            .public_encrypt(&msg, &mut encrypted, Padding::PKCS1)
+            .public_encrypt(msg, &mut encrypted, Padding::PKCS1)
             .unwrap();
         assert!(len > msg.len());
         let mut decrypted = vec![0; keypair.size() as usize];
@@ -907,7 +885,7 @@ mod test {
             .private_decrypt(&encrypted, &mut decrypted, Padding::PKCS1)
             .unwrap();
         assert_eq!(len, msg.len());
-        assert_eq!("Hello, world!", String::from_utf8_lossy(&decrypted[..len]));
+        assert_eq!(&decrypted[..len], msg);
     }
 
     #[test]
@@ -915,15 +893,15 @@ mod test {
         let keypair = super::Rsa::generate(2048).unwrap();
         let pubkey_pem = keypair.public_key_to_pem_pkcs1().unwrap();
         let pubkey = super::Rsa::public_key_from_pem_pkcs1(&pubkey_pem).unwrap();
-        let msg = "foo".as_bytes();
+        let msg = b"foo";
 
         let mut encrypted1 = vec![0; pubkey.size() as usize];
         let mut encrypted2 = vec![0; pubkey.size() as usize];
         let len1 = pubkey
-            .public_encrypt(&msg, &mut encrypted1, Padding::PKCS1)
+            .public_encrypt(msg, &mut encrypted1, Padding::PKCS1)
             .unwrap();
         let len2 = pubkey
-            .public_encrypt(&msg, &mut encrypted2, Padding::PKCS1)
+            .public_encrypt(msg, &mut encrypted2, Padding::PKCS1)
             .unwrap();
         assert!(len1 > (msg.len() + 1));
         assert_eq!(len1, len2);
@@ -931,6 +909,7 @@ mod test {
     }
 
     #[test]
+    #[allow(clippy::redundant_clone)]
     fn clone() {
         let key = Rsa::generate(2048).unwrap();
         drop(key.clone());

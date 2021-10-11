@@ -316,6 +316,31 @@ impl<A: Clone> Vector<A> {
         self.len() == 0
     }
 
+    /// Test whether a vector is currently inlined.
+    ///
+    /// Vectors small enough that their contents could be stored entirely inside
+    /// the space of `std::mem::size_of::<Vector<A>>()` bytes are stored inline on
+    /// the stack instead of allocating any chunks. This method returns `true` if
+    /// this vector is currently inlined, or `false` if it currently has chunks allocated
+    /// on the heap.
+    ///
+    /// This may be useful in conjunction with [`ptr_eq()`][ptr_eq], which checks if
+    /// two vectors' heap allocations are the same, and thus will never return `true`
+    /// for inlined vectors.
+    ///
+    /// Time: O(1)
+    ///
+    /// [ptr_eq]: #method.ptr_eq
+    #[inline]
+    #[must_use]
+    pub fn is_inline(&self) -> bool {
+        if let Inline(_, _) = &self.vector {
+            true
+        } else {
+            false
+        }
+    }
+
     /// Test whether two vectors refer to the same content in memory.
     ///
     /// This uses the following rules to determine equality:
@@ -347,8 +372,8 @@ impl<A: Clone> Vector<A> {
                     && cmp_chunk(&left.inner_f, &right.inner_f)
                     && cmp_chunk(&left.inner_b, &right.inner_b)
                     && cmp_chunk(&left.outer_b, &right.outer_b)
-                    && (left.middle.is_empty() && right.middle.is_empty())
-                    || Ref::ptr_eq(&left.middle, &right.middle)
+                    && ((left.middle.is_empty() && right.middle.is_empty())
+                        || Ref::ptr_eq(&left.middle, &right.middle))
             }
             _ => false,
         }
@@ -1475,7 +1500,7 @@ impl<A: Clone> Vector<A> {
     {
         let len = self.len();
         if len > 1 {
-            sort::quicksort(&mut self.focus_mut(), 0, len - 1, &cmp);
+            sort::quicksort(self.focus_mut(), &cmp);
         }
     }
 
@@ -1732,8 +1757,8 @@ impl<A: Clone + Eq> PartialEq for Vector<A> {
                     && cmp_chunk(&left.inner_f, &right.inner_f)
                     && cmp_chunk(&left.inner_b, &right.inner_b)
                     && cmp_chunk(&left.outer_b, &right.outer_b)
-                    && (left.middle.is_empty() && right.middle.is_empty())
-                    || Ref::ptr_eq(&left.middle, &right.middle)
+                    && ((left.middle.is_empty() && right.middle.is_empty())
+                        || Ref::ptr_eq(&left.middle, &right.middle))
                 {
                     return true;
                 }
@@ -2479,6 +2504,33 @@ mod test {
         let vec = Vector::from_iter(0..300);
         let rev_vec: Vector<u32> = vec.clone().into_iter().rev().collect();
         assert_eq!(vec.len(), rev_vec.len());
+    }
+
+    #[test]
+    fn issue_131() {
+        let smol = std::iter::repeat(42).take(64).collect::<Vector<_>>();
+        let mut smol2 = smol.clone();
+        assert!(smol.ptr_eq(&smol2));
+        smol2.set(63, 420);
+        assert!(!smol.ptr_eq(&smol2));
+
+        let huge = std::iter::repeat(42).take(65).collect::<Vector<_>>();
+        let mut huge2 = huge.clone();
+        assert!(huge.ptr_eq(&huge2));
+        huge2.set(63, 420);
+        assert!(!huge.ptr_eq(&huge2));
+    }
+
+    #[test]
+    fn ptr_eq() {
+        for len in 32..256 {
+            let input = std::iter::repeat(42).take(len).collect::<Vector<_>>();
+            let mut inp2 = input.clone();
+            assert!(input.ptr_eq(&inp2));
+            inp2.set(len - 1, 98);
+            assert_ne!(inp2.get(len - 1), input.get(len - 1));
+            assert!(!input.ptr_eq(&inp2), len);
+        }
     }
 
     proptest! {

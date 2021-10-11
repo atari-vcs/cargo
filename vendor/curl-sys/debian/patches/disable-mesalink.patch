@@ -1,9 +1,11 @@
 Description: for now, disable mesalink as it has some extra deps
---- a/Cargo.toml
-+++ b/Cargo.toml
-@@ -35,11 +35,6 @@
- [dependencies.libz-sys]
- version = "1.0.18"
+Index: curl-sys/Cargo.toml
+===================================================================
+--- curl-sys.orig/Cargo.toml
++++ curl-sys/Cargo.toml
+@@ -37,11 +37,6 @@ version = "1.0.18"
+ features = ["libc"]
+ default-features = false
  
 -[dependencies.mesalink]
 -version = "1.1.0-cratesio"

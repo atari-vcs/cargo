@@ -23,7 +23,7 @@ pub struct Container<'a> {
 
 /// The fields of a struct or enum.
 ///
-/// Analagous to `syn::Data`.
+/// Analogous to `syn::Data`.
 pub enum Data<'a> {
     Enum(Vec<Variant<'a>>),
     Struct(Style, Vec<Field<'a>>),
@@ -110,8 +110,8 @@ impl<'a> Container<'a> {
 
         let mut item = Container {
             ident: item.ident.clone(),
-            attrs: attrs,
-            data: data,
+            attrs,
+            data,
             generics: &item.generics,
             original: item,
         };
@@ -148,9 +148,9 @@ fn enum_from_ast<'a>(
                 struct_from_ast(cx, &variant.fields, Some(&attrs), container_default);
             Variant {
                 ident: variant.ident.clone(),
-                attrs: attrs,
-                style: style,
-                fields: fields,
+                attrs,
+                style,
+                fields,
                 original: variant,
             }
         })

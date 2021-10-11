@@ -3,38 +3,32 @@
 //! # Example
 //!
 //! ```rust
-//!
-//! extern crate openssl;
-//!
 //! use openssl::rsa::Rsa;
 //! use openssl::envelope::Seal;
 //! use openssl::pkey::PKey;
 //! use openssl::symm::Cipher;
 //!
-//! fn main() {
-//!     let rsa = Rsa::generate(2048).unwrap();
-//!     let key = PKey::from_rsa(rsa).unwrap();
+//! let rsa = Rsa::generate(2048).unwrap();
+//! let key = PKey::from_rsa(rsa).unwrap();
 //!
-//!     let cipher = Cipher::aes_256_cbc();
-//!     let mut seal = Seal::new(cipher, &[key]).unwrap();
+//! let cipher = Cipher::aes_256_cbc();
+//! let mut seal = Seal::new(cipher, &[key]).unwrap();
 //!
-//!     let secret = b"My secret message";
-//!     let mut encrypted = vec![0; secret.len() + cipher.block_size()];
+//! let secret = b"My secret message";
+//! let mut encrypted = vec![0; secret.len() + cipher.block_size()];
 //!
-//!     let mut enc_len = seal.update(secret, &mut encrypted).unwrap();
-//!     enc_len += seal.finalize(&mut encrypted[enc_len..]).unwrap();
-//!     encrypted.truncate(enc_len);
-//! }
+//! let mut enc_len = seal.update(secret, &mut encrypted).unwrap();
+//! enc_len += seal.finalize(&mut encrypted[enc_len..]).unwrap();
+//! encrypted.truncate(enc_len);
 //! ```
-use error::ErrorStack;
-use ffi;
+use crate::error::ErrorStack;
+use crate::pkey::{HasPrivate, HasPublic, PKey, PKeyRef};
+use crate::symm::Cipher;
+use crate::{cvt, cvt_p};
 use foreign_types::{ForeignType, ForeignTypeRef};
 use libc::c_int;
-use pkey::{HasPrivate, HasPublic, PKey, PKeyRef};
 use std::cmp;
 use std::ptr;
-use symm::Cipher;
-use {cvt, cvt_p};
 
 /// Represents an EVP_Seal context.
 pub struct Seal {
@@ -92,6 +86,7 @@ impl Seal {
     }
 
     /// Returns the initialization vector, if the cipher uses one.
+    #[allow(clippy::option_as_ref_deref)]
     pub fn iv(&self) -> Option<&[u8]> {
         self.iv.as_ref().map(|v| &**v)
     }
@@ -258,8 +253,8 @@ impl Drop for Open {
 #[cfg(test)]
 mod test {
     use super::*;
-    use pkey::PKey;
-    use symm::Cipher;
+    use crate::pkey::PKey;
+    use crate::symm::Cipher;
 
     #[test]
     fn public_encrypt_private_decrypt() {
@@ -277,7 +272,7 @@ mod test {
         let iv = seal.iv();
         let encrypted_key = &seal.encrypted_keys()[0];
 
-        let mut open = Open::new(cipher, &private_key, iv, &encrypted_key).unwrap();
+        let mut open = Open::new(cipher, &private_key, iv, encrypted_key).unwrap();
         let mut decrypted = vec![0; enc_len + cipher.block_size()];
         let mut dec_len = open.update(&encrypted[..enc_len], &mut decrypted).unwrap();
         dec_len += open.finalize(&mut decrypted[dec_len..]).unwrap();

@@ -54,7 +54,7 @@ pub trait SmartSubtransport: Send + 'static {
 }
 
 /// Actions that a smart transport can ask a subtransport to perform
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq)]
 #[allow(missing_docs)]
 pub enum Service {
     UploadPackLs,
@@ -87,6 +87,8 @@ struct TransportData {
 #[repr(C)]
 struct RawSmartSubtransport {
     raw: raw::git_smart_subtransport,
+    stream: Option<*mut raw::git_smart_subtransport_stream>,
+    rpc: bool,
     obj: Box<dyn SmartSubtransport>,
 }
 
@@ -113,11 +115,8 @@ where
     });
     let prefix = CString::new(prefix)?;
     let datap = (&mut *data) as *mut TransportData as *mut c_void;
-    try_call!(raw::git_transport_register(
-        prefix,
-        transport_factory,
-        datap
-    ));
+    let factory: raw::git_transport_cb = Some(transport_factory);
+    try_call!(raw::git_transport_register(prefix, factory, datap));
     mem::forget(data);
     Ok(())
 }
@@ -141,10 +140,12 @@ impl Transport {
 
         let mut raw = Box::new(RawSmartSubtransport {
             raw: raw::git_smart_subtransport {
-                action: subtransport_action,
-                close: subtransport_close,
-                free: subtransport_free,
+                action: Some(subtransport_action),
+                close: Some(subtransport_close),
+                free: Some(subtransport_free),
             },
+            stream: None,
+            rpc,
             obj: Box::new(subtransport),
         });
         let mut defn = raw::git_smart_subtransport_definition {
@@ -249,20 +250,36 @@ extern "C" fn subtransport_action(
             raw::GIT_SERVICE_RECEIVEPACK => Service::ReceivePack,
             n => panic!("unknown action: {}", n),
         };
-        let transport = &mut *(raw_transport as *mut RawSmartSubtransport);
-        let obj = match transport.obj.action(url, action) {
-            Ok(s) => s,
-            Err(e) => return e.raw_code() as c_int,
-        };
-        *stream = mem::transmute(Box::new(RawSmartSubtransportStream {
-            raw: raw::git_smart_subtransport_stream {
-                subtransport: raw_transport,
-                read: stream_read,
-                write: stream_write,
-                free: stream_free,
-            },
-            obj: obj,
-        }));
+
+        let mut transport = &mut *(raw_transport as *mut RawSmartSubtransport);
+        // Note: we only need to generate if rpc is on. Else, for receive-pack and upload-pack
+        // libgit2 reuses the stream generated for receive-pack-ls or upload-pack-ls.
+        let generate_stream =
+            transport.rpc || action == Service::UploadPackLs || action == Service::ReceivePackLs;
+        if generate_stream {
+            let obj = match transport.obj.action(url, action) {
+                Ok(s) => s,
+                Err(e) => {
+                    set_err(&e);
+                    return e.raw_code() as c_int;
+                }
+            };
+            *stream = mem::transmute(Box::new(RawSmartSubtransportStream {
+                raw: raw::git_smart_subtransport_stream {
+                    subtransport: raw_transport,
+                    read: Some(stream_read),
+                    write: Some(stream_write),
+                    free: Some(stream_free),
+                },
+                obj: obj,
+            }));
+            transport.stream = Some(*stream);
+        } else {
+            if transport.stream.is_none() {
+                return -1;
+            }
+            *stream = transport.stream.unwrap();
+        }
         0
     })
     .unwrap_or(-1)
@@ -312,7 +329,7 @@ extern "C" fn stream_read(
     match ret {
         Some(Ok(_)) => 0,
         Some(Err(e)) => unsafe {
-            set_err(&e);
+            set_err_io(&e);
             -2
         },
         None => -1,
@@ -334,16 +351,21 @@ extern "C" fn stream_write(
     match ret {
         Some(Ok(())) => 0,
         Some(Err(e)) => unsafe {
-            set_err(&e);
+            set_err_io(&e);
             -2
         },
         None => -1,
     }
 }
 
-unsafe fn set_err(e: &io::Error) {
+unsafe fn set_err_io(e: &io::Error) {
     let s = CString::new(e.to_string()).unwrap();
-    raw::git_error_set_str(raw::GIT_ERROR_NET as c_int, s.as_ptr())
+    raw::git_error_set_str(raw::GIT_ERROR_NET as c_int, s.as_ptr());
+}
+
+unsafe fn set_err(e: &Error) {
+    let s = CString::new(e.message()).unwrap();
+    raw::git_error_set_str(e.raw_class() as c_int, s.as_ptr());
 }
 
 // callback used by smart transports to free a `SmartSubtransportStream`
@@ -352,4 +374,56 @@ extern "C" fn stream_free(stream: *mut raw::git_smart_subtransport_stream) {
     let _ = panic::wrap(|| unsafe {
         mem::transmute::<_, Box<RawSmartSubtransportStream>>(stream);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ErrorClass, ErrorCode};
+    use std::sync::Once;
+
+    struct DummyTransport;
+
+    // in lieu of lazy_static
+    fn dummy_error() -> Error {
+        Error::new(ErrorCode::Ambiguous, ErrorClass::Net, "bleh")
+    }
+
+    impl SmartSubtransport for DummyTransport {
+        fn action(
+            &self,
+            _url: &str,
+            _service: Service,
+        ) -> Result<Box<dyn SmartSubtransportStream>, Error> {
+            Err(dummy_error())
+        }
+
+        fn close(&self) -> Result<(), Error> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn transport_error_propagates() {
+        static INIT: Once = Once::new();
+
+        unsafe {
+            INIT.call_once(|| {
+                register("dummy", move |remote| {
+                    Transport::smart(&remote, true, DummyTransport)
+                })
+                .unwrap();
+            })
+        }
+
+        let (_td, repo) = crate::test::repo_init();
+        t!(repo.remote("origin", "dummy://ball"));
+
+        let mut origin = t!(repo.find_remote("origin"));
+
+        match origin.fetch(&["main"], None, None) {
+            Ok(()) => unreachable!(),
+            Err(e) => assert_eq!(e, dummy_error()),
+        }
+    }
 }

@@ -1,23 +1,29 @@
 use std::cell::RefCell;
 use std::collections::hash_map::{Entry, HashMap};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
-use std::slice;
+use std::rc::Rc;
 
+use anyhow::{bail, Context as _};
 use glob::glob;
+use itertools::Itertools;
 use log::debug;
 use url::Url;
 
 use crate::core::features::Features;
 use crate::core::registry::PackageRegistry;
-use crate::core::{Dependency, PackageId, PackageIdSpec};
+use crate::core::resolver::features::CliFeatures;
+use crate::core::resolver::ResolveBehavior;
+use crate::core::{Dependency, Edition, FeatureValue, PackageId, PackageIdSpec};
 use crate::core::{EitherManifest, Package, SourceId, VirtualManifest};
 use crate::ops;
-use crate::sources::PathSource;
-use crate::util::errors::{CargoResult, CargoResultExt, ManifestError};
-use crate::util::paths;
-use crate::util::toml::{read_manifest, TomlProfiles};
-use crate::util::{Config, Filesystem};
+use crate::sources::{PathSource, CRATES_IO_INDEX, CRATES_IO_REGISTRY};
+use crate::util::errors::{CargoResult, ManifestError};
+use crate::util::interning::InternedString;
+use crate::util::lev_distance;
+use crate::util::toml::{read_manifest, TomlDependency, TomlProfiles};
+use crate::util::{config::ConfigRelativePath, Config, Filesystem, IntoUrl};
+use cargo_util::paths;
 
 /// The core abstraction in Cargo for working with a workspace of crates.
 ///
@@ -82,6 +88,12 @@ pub struct Workspace<'cfg> {
     // If `true`, then the resolver will ignore any existing `Cargo.lock`
     // file. This is set for `cargo install` without `--locked`.
     ignore_lock: bool,
+
+    /// The resolver behavior specified with the `resolver` field.
+    resolve_behavior: ResolveBehavior,
+
+    /// Workspace-level custom metadata
+    custom_metadata: Option<toml::Value>,
 }
 
 // Separate structure for tracking loaded packages (to avoid loading anything
@@ -93,7 +105,7 @@ struct Packages<'cfg> {
 }
 
 #[derive(Debug)]
-enum MaybePackage {
+pub enum MaybePackage {
     Package(Package),
     Virtual(VirtualManifest),
 }
@@ -120,13 +132,7 @@ pub struct WorkspaceRootConfig {
     members: Option<Vec<String>>,
     default_members: Option<Vec<String>>,
     exclude: Vec<String>,
-}
-
-/// An iterator over the member packages of a workspace, returned by
-/// `Workspace::members`
-pub struct Members<'a, 'cfg> {
-    ws: &'a Workspace<'cfg>,
-    iter: slice::Iter<'a, PathBuf>,
+    custom_metadata: Option<toml::Value>,
 }
 
 impl<'cfg> Workspace<'cfg> {
@@ -139,8 +145,21 @@ impl<'cfg> Workspace<'cfg> {
     pub fn new(manifest_path: &Path, config: &'cfg Config) -> CargoResult<Workspace<'cfg>> {
         let mut ws = Workspace::new_default(manifest_path.to_path_buf(), config);
         ws.target_dir = config.target_dir()?;
-        ws.root_manifest = ws.find_root(manifest_path)?;
+
+        if manifest_path.is_relative() {
+            bail!(
+                "manifest_path:{:?} is not an absolute path. Please provide an absolute path.",
+                manifest_path
+            )
+        } else {
+            ws.root_manifest = ws.find_root(manifest_path)?;
+        }
+
+        ws.custom_metadata = ws
+            .load_workspace_config()?
+            .and_then(|cfg| cfg.custom_metadata);
         ws.find_members()?;
+        ws.set_resolve_behavior();
         ws.validate()?;
         Ok(ws)
     }
@@ -162,6 +181,8 @@ impl<'cfg> Workspace<'cfg> {
             require_optional_deps: true,
             loaded_packages: RefCell::new(HashMap::new()),
             ignore_lock: false,
+            resolve_behavior: ResolveBehavior::V1,
+            custom_metadata: None,
         }
     }
 
@@ -178,6 +199,7 @@ impl<'cfg> Workspace<'cfg> {
             .packages
             .insert(root_path, MaybePackage::Virtual(manifest));
         ws.find_members()?;
+        ws.set_resolve_behavior();
         // TODO: validation does not work because it walks up the directory
         // tree looking for the root which is a fake file that doesn't exist.
         Ok(ws)
@@ -213,7 +235,26 @@ impl<'cfg> Workspace<'cfg> {
         ws.members.push(ws.current_manifest.clone());
         ws.member_ids.insert(id);
         ws.default_members.push(ws.current_manifest.clone());
+        ws.set_resolve_behavior();
         Ok(ws)
+    }
+
+    fn set_resolve_behavior(&mut self) {
+        // - If resolver is specified in the workspace definition, use that.
+        // - If the root package specifies the resolver, use that.
+        // - If the root package specifies edition 2021, use v2.
+        // - Otherwise, use the default v1.
+        self.resolve_behavior = match self.root_maybe() {
+            MaybePackage::Package(p) => p.manifest().resolve_behavior().or_else(|| {
+                if p.manifest().edition() >= Edition::Edition2021 {
+                    Some(ResolveBehavior::V2)
+                } else {
+                    None
+                }
+            }),
+            MaybePackage::Virtual(vm) => vm.resolve_behavior(),
+        }
+        .unwrap_or(ResolveBehavior::V1);
     }
 
     /// Returns the current package of this workspace.
@@ -284,21 +325,20 @@ impl<'cfg> Workspace<'cfg> {
     /// That is, this returns the path of the directory containing the
     /// `Cargo.toml` which is the root of this workspace.
     pub fn root(&self) -> &Path {
-        match self.root_manifest {
-            Some(ref p) => p,
-            None => &self.current_manifest,
-        }
-        .parent()
-        .unwrap()
+        self.root_manifest().parent().unwrap()
+    }
+
+    /// Returns the path of the `Cargo.toml` which is the root of this
+    /// workspace.
+    pub fn root_manifest(&self) -> &Path {
+        self.root_manifest
+            .as_ref()
+            .unwrap_or(&self.current_manifest)
     }
 
     /// Returns the root Package or VirtualManifest.
-    fn root_maybe(&self) -> &MaybePackage {
-        let root = self
-            .root_manifest
-            .as_ref()
-            .unwrap_or(&self.current_manifest);
-        self.packages.get(root)
+    pub fn root_maybe(&self) -> &MaybePackage {
+        self.packages.get(self.root_manifest())
     }
 
     pub fn target_dir(&self) -> Filesystem {
@@ -317,30 +357,166 @@ impl<'cfg> Workspace<'cfg> {
         }
     }
 
+    fn config_patch(&self) -> CargoResult<HashMap<Url, Vec<Dependency>>> {
+        let config_patch: Option<
+            BTreeMap<String, BTreeMap<String, TomlDependency<ConfigRelativePath>>>,
+        > = self.config.get("patch")?;
+
+        if config_patch.is_some() && !self.config.cli_unstable().patch_in_config {
+            self.config.shell().warn("`[patch]` in cargo config was ignored, the -Zpatch-in-config command-line flag is required".to_owned())?;
+            return Ok(HashMap::new());
+        }
+
+        let source = SourceId::for_path(self.root())?;
+
+        let mut warnings = Vec::new();
+        let mut nested_paths = Vec::new();
+
+        let mut patch = HashMap::new();
+        for (url, deps) in config_patch.into_iter().flatten() {
+            let url = match &url[..] {
+                CRATES_IO_REGISTRY => CRATES_IO_INDEX.parse().unwrap(),
+                url => self
+                    .config
+                    .get_registry_index(url)
+                    .or_else(|_| url.into_url())
+                    .with_context(|| {
+                        format!("[patch] entry `{}` should be a URL or registry name", url)
+                    })?,
+            };
+            patch.insert(
+                url,
+                deps.iter()
+                    .map(|(name, dep)| {
+                        dep.to_dependency_split(
+                            name,
+                            source,
+                            &mut nested_paths,
+                            self.config,
+                            &mut warnings,
+                            /* platform */ None,
+                            // NOTE: Since we use ConfigRelativePath, this root isn't used as
+                            // any relative paths are resolved before they'd be joined with root.
+                            Path::new("unused-relative-path"),
+                            self.unstable_features(),
+                            /* kind */ None,
+                        )
+                    })
+                    .collect::<CargoResult<Vec<_>>>()?,
+            );
+        }
+
+        for message in warnings {
+            self.config
+                .shell()
+                .warn(format!("[patch] in cargo config: {}", message))?
+        }
+
+        Ok(patch)
+    }
+
     /// Returns the root `[patch]` section of this workspace.
     ///
     /// This may be from a virtual crate or an actual crate.
-    pub fn root_patch(&self) -> &HashMap<Url, Vec<Dependency>> {
-        match self.root_maybe() {
+    pub fn root_patch(&self) -> CargoResult<HashMap<Url, Vec<Dependency>>> {
+        let from_manifest = match self.root_maybe() {
             MaybePackage::Package(p) => p.manifest().patch(),
             MaybePackage::Virtual(vm) => vm.patch(),
+        };
+
+        let from_config = self.config_patch()?;
+        if from_config.is_empty() {
+            return Ok(from_manifest.clone());
         }
+        if from_manifest.is_empty() {
+            return Ok(from_config);
+        }
+
+        // We could just chain from_manifest and from_config,
+        // but that's not quite right as it won't deal with overlaps.
+        let mut combined = from_manifest.clone();
+        for (url, cdeps) in from_config {
+            if let Some(deps) = combined.get_mut(&url) {
+                // We want from_manifest to take precedence for each patched name.
+                // NOTE: This is inefficient if the number of patches is large!
+                let mut left = cdeps.clone();
+                for dep in &mut *deps {
+                    if let Some(i) = left.iter().position(|cdep| {
+                        // XXX: should this also take into account version numbers?
+                        dep.name_in_toml() == cdep.name_in_toml()
+                    }) {
+                        left.swap_remove(i);
+                    }
+                }
+                // Whatever is left does not exist in manifest dependencies.
+                deps.extend(left);
+            } else {
+                combined.insert(url.clone(), cdeps.clone());
+            }
+        }
+        Ok(combined)
     }
 
     /// Returns an iterator over all packages in this workspace
-    pub fn members<'a>(&'a self) -> Members<'a, 'cfg> {
-        Members {
-            ws: self,
-            iter: self.members.iter(),
-        }
+    pub fn members(&self) -> impl Iterator<Item = &Package> {
+        let packages = &self.packages;
+        self.members
+            .iter()
+            .filter_map(move |path| match packages.get(path) {
+                &MaybePackage::Package(ref p) => Some(p),
+                _ => None,
+            })
+    }
+
+    /// Returns a mutable iterator over all packages in this workspace
+    pub fn members_mut(&mut self) -> impl Iterator<Item = &mut Package> {
+        let packages = &mut self.packages.packages;
+        let members: HashSet<_> = self
+            .members
+            .iter()
+            .map(|path| path.parent().unwrap().to_owned())
+            .collect();
+
+        packages.iter_mut().filter_map(move |(path, package)| {
+            if members.contains(path) {
+                if let MaybePackage::Package(ref mut p) = package {
+                    return Some(p);
+                }
+            }
+
+            None
+        })
     }
 
     /// Returns an iterator over default packages in this workspace
-    pub fn default_members<'a>(&'a self) -> Members<'a, 'cfg> {
-        Members {
-            ws: self,
-            iter: self.default_members.iter(),
-        }
+    pub fn default_members<'a>(&'a self) -> impl Iterator<Item = &Package> {
+        let packages = &self.packages;
+        self.default_members
+            .iter()
+            .filter_map(move |path| match packages.get(path) {
+                &MaybePackage::Package(ref p) => Some(p),
+                _ => None,
+            })
+    }
+
+    /// Returns an iterator over default packages in this workspace
+    pub fn default_members_mut(&mut self) -> impl Iterator<Item = &mut Package> {
+        let packages = &mut self.packages.packages;
+        let members: HashSet<_> = self
+            .default_members
+            .iter()
+            .map(|path| path.parent().unwrap().to_owned())
+            .collect();
+
+        packages.iter_mut().filter_map(move |(path, package)| {
+            if members.contains(path) {
+                if let MaybePackage::Package(ref mut p) = package {
+                    return Some(p);
+                }
+            }
+
+            None
+        })
     }
 
     /// Returns true if the package is a member of the workspace.
@@ -373,6 +549,30 @@ impl<'cfg> Workspace<'cfg> {
         self
     }
 
+    pub fn custom_metadata(&self) -> Option<&toml::Value> {
+        self.custom_metadata.as_ref()
+    }
+
+    pub fn load_workspace_config(&mut self) -> CargoResult<Option<WorkspaceRootConfig>> {
+        // If we didn't find a root, it must mean there is no [workspace] section, and thus no
+        // metadata.
+        if let Some(root_path) = &self.root_manifest {
+            let root_package = self.packages.load(root_path)?;
+            match root_package.workspace_config() {
+                WorkspaceConfig::Root(ref root_config) => {
+                    return Ok(Some(root_config.clone()));
+                }
+
+                _ => bail!(
+                    "root of a workspace inferred but wasn't a root: {}",
+                    root_path.display()
+                ),
+            }
+        }
+
+        Ok(None)
+    }
+
     /// Finds the root of a workspace for the crate whose manifest is located
     /// at `manifest_path`.
     ///
@@ -383,15 +583,15 @@ impl<'cfg> Workspace<'cfg> {
     /// Returns an error if `manifest_path` isn't actually a valid manifest or
     /// if some other transient error happens.
     fn find_root(&mut self, manifest_path: &Path) -> CargoResult<Option<PathBuf>> {
-        fn read_root_pointer(member_manifest: &Path, root_link: &str) -> CargoResult<PathBuf> {
+        fn read_root_pointer(member_manifest: &Path, root_link: &str) -> PathBuf {
             let path = member_manifest
                 .parent()
                 .unwrap()
                 .join(root_link)
                 .join("Cargo.toml");
             debug!("find_root - pointer {}", path.display());
-            Ok(paths::normalize_path(&path))
-        };
+            paths::normalize_path(&path)
+        }
 
         {
             let current = self.packages.load(manifest_path)?;
@@ -402,12 +602,12 @@ impl<'cfg> Workspace<'cfg> {
                 }
                 WorkspaceConfig::Member {
                     root: Some(ref path_to_root),
-                } => return Ok(Some(read_root_pointer(manifest_path, path_to_root)?)),
+                } => return Ok(Some(read_root_pointer(manifest_path, path_to_root))),
                 WorkspaceConfig::Member { root: None } => {}
             }
         }
 
-        for path in paths::ancestors(manifest_path).skip(2) {
+        for path in paths::ancestors(manifest_path, None).skip(2) {
             if path.ends_with("target/package") {
                 break;
             }
@@ -427,7 +627,7 @@ impl<'cfg> Workspace<'cfg> {
                         root: Some(ref path_to_root),
                     } => {
                         debug!("find_root - found pointer");
-                        return Ok(Some(read_root_pointer(&ances_manifest_path, path_to_root)?));
+                        return Ok(Some(read_root_pointer(&ances_manifest_path, path_to_root)));
                     }
                     WorkspaceConfig::Member { .. } => {}
                 }
@@ -454,8 +654,8 @@ impl<'cfg> Workspace<'cfg> {
     /// will transitively follow all `path` dependencies looking for members of
     /// the workspace.
     fn find_members(&mut self) -> CargoResult<()> {
-        let root_manifest_path = match self.root_manifest {
-            Some(ref path) => path.clone(),
+        let workspace_config = match self.load_workspace_config()? {
+            Some(workspace_config) => workspace_config,
             None => {
                 debug!("find_members - only me as a member");
                 self.members.push(self.current_manifest.clone());
@@ -468,40 +668,48 @@ impl<'cfg> Workspace<'cfg> {
             }
         };
 
-        let members_paths;
-        let default_members_paths;
-        {
-            let root_package = self.packages.load(&root_manifest_path)?;
-            match *root_package.workspace_config() {
-                WorkspaceConfig::Root(ref root_config) => {
-                    members_paths = root_config
-                        .members_paths(root_config.members.as_ref().unwrap_or(&vec![]))?;
-                    default_members_paths = if root_manifest_path == self.current_manifest {
-                        if let Some(ref default) = root_config.default_members {
-                            Some(root_config.members_paths(default)?)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-                }
-                _ => anyhow::bail!(
-                    "root of a workspace inferred but wasn't a root: {}",
-                    root_manifest_path.display()
-                ),
-            }
-        }
+        // self.root_manifest must be Some to have retrieved workspace_config
+        let root_manifest_path = self.root_manifest.clone().unwrap();
 
-        for path in members_paths {
-            self.find_path_deps(&path.join("Cargo.toml"), &root_manifest_path, false)?;
+        let members_paths =
+            workspace_config.members_paths(workspace_config.members.as_ref().unwrap_or(&vec![]))?;
+        let default_members_paths = if root_manifest_path == self.current_manifest {
+            if let Some(ref default) = workspace_config.default_members {
+                Some(workspace_config.members_paths(default)?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        for path in &members_paths {
+            self.find_path_deps(&path.join("Cargo.toml"), &root_manifest_path, false)
+                .with_context(|| {
+                    format!(
+                        "failed to load manifest for workspace member `{}`",
+                        path.display()
+                    )
+                })?;
         }
 
         if let Some(default) = default_members_paths {
             for path in default {
-                let manifest_path = paths::normalize_path(&path.join("Cargo.toml"));
+                let normalized_path = paths::normalize_path(&path);
+                let manifest_path = normalized_path.join("Cargo.toml");
                 if !self.members.contains(&manifest_path) {
-                    anyhow::bail!(
+                    // default-members are allowed to be excluded, but they
+                    // still must be referred to by the original (unfiltered)
+                    // members list. Note that we aren't testing against the
+                    // manifest path, both because `members_paths` doesn't
+                    // include `/Cargo.toml`, and because excluded paths may not
+                    // be crates.
+                    let exclude = members_paths.contains(&normalized_path)
+                        && workspace_config.is_excluded(&normalized_path);
+                    if exclude {
+                        continue;
+                    }
+                    bail!(
                         "package `{}` is listed in workspace’s default-members \
                          but is not a member.",
                         path.display()
@@ -556,24 +764,45 @@ impl<'cfg> Workspace<'cfg> {
             self.member_ids.insert(pkg.package_id());
             pkg.dependencies()
                 .iter()
-                .map(|d| d.source_id())
-                .filter(|d| d.is_path())
-                .filter_map(|d| d.url().to_file_path().ok())
-                .map(|p| p.join("Cargo.toml"))
+                .map(|d| (d.source_id(), d.package_name()))
+                .filter(|(s, _)| s.is_path())
+                .filter_map(|(s, n)| s.url().to_file_path().ok().map(|p| (p, n)))
+                .map(|(p, n)| (p.join("Cargo.toml"), n))
                 .collect::<Vec<_>>()
         };
-        for candidate in candidates {
-            self.find_path_deps(&candidate, root_manifest, true)
+        for (path, name) in candidates {
+            self.find_path_deps(&path, root_manifest, true)
+                .with_context(|| format!("failed to load manifest for dependency `{}`", name))
                 .map_err(|err| ManifestError::new(err, manifest_path.clone()))?;
         }
         Ok(())
     }
 
-    pub fn features(&self) -> &Features {
+    /// Returns the unstable nightly-only features enabled via `cargo-features` in the manifest.
+    pub fn unstable_features(&self) -> &Features {
         match self.root_maybe() {
-            MaybePackage::Package(p) => p.manifest().features(),
-            MaybePackage::Virtual(vm) => vm.features(),
+            MaybePackage::Package(p) => p.manifest().unstable_features(),
+            MaybePackage::Virtual(vm) => vm.unstable_features(),
         }
+    }
+
+    pub fn resolve_behavior(&self) -> ResolveBehavior {
+        self.resolve_behavior
+    }
+
+    /// Returns `true` if this workspace uses the new CLI features behavior.
+    ///
+    /// The old behavior only allowed choosing the features from the package
+    /// in the current directory, regardless of which packages were chosen
+    /// with the -p flags. The new behavior allows selecting features from the
+    /// packages chosen on the command line (with -p or --workspace flags),
+    /// ignoring whatever is in the current directory.
+    pub fn allows_new_cli_feature_behavior(&self) -> bool {
+        self.is_virtual()
+            || match self.resolve_behavior() {
+                ResolveBehavior::V1 => false,
+                ResolveBehavior::V2 => true,
+            }
     }
 
     /// Validates a workspace, ensuring that a number of invariants are upheld:
@@ -587,36 +816,48 @@ impl<'cfg> Workspace<'cfg> {
             return Ok(());
         }
 
-        let mut roots = Vec::new();
-        {
-            let mut names = BTreeMap::new();
-            for member in self.members.iter() {
-                let package = self.packages.get(member);
-                match *package.workspace_config() {
-                    WorkspaceConfig::Root(_) => {
-                        roots.push(member.parent().unwrap().to_path_buf());
-                    }
-                    WorkspaceConfig::Member { .. } => {}
-                }
-                let name = match *package {
-                    MaybePackage::Package(ref p) => p.name(),
-                    MaybePackage::Virtual(_) => continue,
-                };
-                if let Some(prev) = names.insert(name, member) {
-                    anyhow::bail!(
-                        "two packages named `{}` in this workspace:\n\
+        self.validate_unique_names()?;
+        self.validate_workspace_roots()?;
+        self.validate_members()?;
+        self.error_if_manifest_not_in_members()?;
+        self.validate_manifest()
+    }
+
+    fn validate_unique_names(&self) -> CargoResult<()> {
+        let mut names = BTreeMap::new();
+        for member in self.members.iter() {
+            let package = self.packages.get(member);
+            let name = match *package {
+                MaybePackage::Package(ref p) => p.name(),
+                MaybePackage::Virtual(_) => continue,
+            };
+            if let Some(prev) = names.insert(name, member) {
+                bail!(
+                    "two packages named `{}` in this workspace:\n\
                          - {}\n\
                          - {}",
-                        name,
-                        prev.display(),
-                        member.display()
-                    );
-                }
+                    name,
+                    prev.display(),
+                    member.display()
+                );
             }
         }
+        Ok(())
+    }
 
+    fn validate_workspace_roots(&self) -> CargoResult<()> {
+        let roots: Vec<PathBuf> = self
+            .members
+            .iter()
+            .filter(|&member| {
+                let config = self.packages.get(member).workspace_config();
+                matches!(config, WorkspaceConfig::Root(_))
+            })
+            .map(|member| member.parent().unwrap().to_path_buf())
+            .collect();
         match roots.len() {
-            0 => anyhow::bail!(
+            1 => Ok(()),
+            0 => bail!(
                 "`package.workspace` configuration points to a crate \
                  which is not configured with [workspace]: \n\
                  configuration at: {}\n\
@@ -624,9 +865,8 @@ impl<'cfg> Workspace<'cfg> {
                 self.current_manifest.display(),
                 self.root_manifest.as_ref().unwrap().display()
             ),
-            1 => {}
             _ => {
-                anyhow::bail!(
+                bail!(
                     "multiple workspace roots found in the same workspace:\n{}",
                     roots
                         .iter()
@@ -636,7 +876,9 @@ impl<'cfg> Workspace<'cfg> {
                 );
             }
         }
+    }
 
+    fn validate_members(&mut self) -> CargoResult<()> {
         for member in self.members.clone() {
             let root = self.find_root(&member)?;
             if root == self.root_manifest {
@@ -645,7 +887,7 @@ impl<'cfg> Workspace<'cfg> {
 
             match root {
                 Some(root) => {
-                    anyhow::bail!(
+                    bail!(
                         "package `{}` is a member of the wrong workspace\n\
                          expected: {}\n\
                          actual:   {}",
@@ -655,7 +897,7 @@ impl<'cfg> Workspace<'cfg> {
                     );
                 }
                 None => {
-                    anyhow::bail!(
+                    bail!(
                         "workspace member `{}` is not hierarchically below \
                          the workspace root `{}`",
                         member.display(),
@@ -664,62 +906,68 @@ impl<'cfg> Workspace<'cfg> {
                 }
             }
         }
+        Ok(())
+    }
 
-        if !self.members.contains(&self.current_manifest) {
-            let root = self.root_manifest.as_ref().unwrap();
-            let root_dir = root.parent().unwrap();
-            let current_dir = self.current_manifest.parent().unwrap();
-            let root_pkg = self.packages.get(root);
+    fn error_if_manifest_not_in_members(&mut self) -> CargoResult<()> {
+        if self.members.contains(&self.current_manifest) {
+            return Ok(());
+        }
 
-            // FIXME: Make this more generic by using a relative path resolver between member and
-            // root.
-            let members_msg = match current_dir.strip_prefix(root_dir) {
-                Ok(rel) => format!(
-                    "this may be fixable by adding `{}` to the \
+        let root = self.root_manifest.as_ref().unwrap();
+        let root_dir = root.parent().unwrap();
+        let current_dir = self.current_manifest.parent().unwrap();
+        let root_pkg = self.packages.get(root);
+
+        // FIXME: Make this more generic by using a relative path resolver between member and root.
+        let members_msg = match current_dir.strip_prefix(root_dir) {
+            Ok(rel) => format!(
+                "this may be fixable by adding `{}` to the \
                      `workspace.members` array of the manifest \
                      located at: {}",
-                    rel.display(),
-                    root.display()
-                ),
-                Err(_) => format!(
-                    "this may be fixable by adding a member to \
+                rel.display(),
+                root.display()
+            ),
+            Err(_) => format!(
+                "this may be fixable by adding a member to \
                      the `workspace.members` array of the \
                      manifest located at: {}",
-                    root.display()
-                ),
-            };
-            let extra = match *root_pkg {
-                MaybePackage::Virtual(_) => members_msg,
-                MaybePackage::Package(ref p) => {
-                    let has_members_list = match *p.manifest().workspace_config() {
-                        WorkspaceConfig::Root(ref root_config) => root_config.has_members_list(),
-                        WorkspaceConfig::Member { .. } => unreachable!(),
-                    };
-                    if !has_members_list {
-                        format!(
-                            "this may be fixable by ensuring that this \
+                root.display()
+            ),
+        };
+        let extra = match *root_pkg {
+            MaybePackage::Virtual(_) => members_msg,
+            MaybePackage::Package(ref p) => {
+                let has_members_list = match *p.manifest().workspace_config() {
+                    WorkspaceConfig::Root(ref root_config) => root_config.has_members_list(),
+                    WorkspaceConfig::Member { .. } => unreachable!(),
+                };
+                if !has_members_list {
+                    format!(
+                        "this may be fixable by ensuring that this \
                              crate is depended on by the workspace \
                              root: {}",
-                            root.display()
-                        )
-                    } else {
-                        members_msg
-                    }
+                        root.display()
+                    )
+                } else {
+                    members_msg
                 }
-            };
-            anyhow::bail!(
-                "current package believes it's in a workspace when it's not:\n\
+            }
+        };
+        bail!(
+            "current package believes it's in a workspace when it's not:\n\
                  current:   {}\n\
                  workspace: {}\n\n{}\n\
                  Alternatively, to keep it out of the workspace, add the package \
                  to the `workspace.exclude` array, or add an empty `[workspace]` \
                  table to the package's manifest.",
-                self.current_manifest.display(),
-                root.display(),
-                extra
-            );
-        }
+            self.current_manifest.display(),
+            root.display(),
+            extra
+        );
+    }
 
+    fn validate_manifest(&mut self) -> CargoResult<()> {
         if let Some(ref root_manifest) = self.root_manifest {
             for pkg in self
                 .members()
@@ -748,16 +996,21 @@ impl<'cfg> Workspace<'cfg> {
                 if !manifest.patch().is_empty() {
                     emit_warning("patch")?;
                 }
+                if let Some(behavior) = manifest.resolve_behavior() {
+                    if behavior != self.resolve_behavior {
+                        // Only warn if they don't match.
+                        emit_warning("resolver")?;
+                    }
+                }
             }
         }
-
         Ok(())
     }
 
     pub fn load(&self, manifest_path: &Path) -> CargoResult<Package> {
         match self.packages.maybe_get(manifest_path) {
             Some(&MaybePackage::Package(ref p)) => return Ok(p.clone()),
-            Some(&MaybePackage::Virtual(_)) => anyhow::bail!("cannot load workspace root"),
+            Some(&MaybePackage::Virtual(_)) => bail!("cannot load workspace root"),
             None => {}
         }
 
@@ -792,11 +1045,7 @@ impl<'cfg> Workspace<'cfg> {
                 MaybePackage::Package(ref p) => p.clone(),
                 MaybePackage::Virtual(_) => continue,
             };
-            let mut src = PathSource::new(
-                pkg.manifest_path(),
-                pkg.package_id().source_id(),
-                self.config,
-            );
+            let mut src = PathSource::new(pkg.root(), pkg.package_id().source_id(), self.config);
             src.preload_with(pkg);
             registry.add_preloaded(Box::new(src));
         }
@@ -814,7 +1063,7 @@ impl<'cfg> Workspace<'cfg> {
                     let err = anyhow::format_err!("{}", warning.message);
                     let cx =
                         anyhow::format_err!("failed to parse manifest at `{}`", path.display());
-                    return Err(err.context(cx).into());
+                    return Err(err.context(cx));
                 } else {
                     let msg = if self.root_manifest.is_none() {
                         warning.message.to_string()
@@ -828,6 +1077,445 @@ impl<'cfg> Workspace<'cfg> {
             }
         }
         Ok(())
+    }
+
+    pub fn set_target_dir(&mut self, target_dir: Filesystem) {
+        self.target_dir = Some(target_dir);
+    }
+
+    /// Returns a Vec of `(&Package, RequestedFeatures)` tuples that
+    /// represent the workspace members that were requested on the command-line.
+    ///
+    /// `specs` may be empty, which indicates it should return all workspace
+    /// members. In this case, `requested_features.all_features` must be
+    /// `true`. This is used for generating `Cargo.lock`, which must include
+    /// all members with all features enabled.
+    pub fn members_with_features(
+        &self,
+        specs: &[PackageIdSpec],
+        cli_features: &CliFeatures,
+    ) -> CargoResult<Vec<(&Package, CliFeatures)>> {
+        assert!(
+            !specs.is_empty() || cli_features.all_features,
+            "no specs requires all_features"
+        );
+        if specs.is_empty() {
+            // When resolving the entire workspace, resolve each member with
+            // all features enabled.
+            return Ok(self
+                .members()
+                .map(|m| (m, CliFeatures::new_all(true)))
+                .collect());
+        }
+        if self.allows_new_cli_feature_behavior() {
+            self.members_with_features_new(specs, cli_features)
+        } else {
+            Ok(self.members_with_features_old(specs, cli_features))
+        }
+    }
+
+    /// Returns the requested features for the given member.
+    /// This filters out any named features that the member does not have.
+    fn collect_matching_features(
+        member: &Package,
+        cli_features: &CliFeatures,
+        found_features: &mut BTreeSet<FeatureValue>,
+    ) -> CliFeatures {
+        if cli_features.features.is_empty() || cli_features.all_features {
+            return cli_features.clone();
+        }
+
+        // Only include features this member defines.
+        let summary = member.summary();
+
+        // Features defined in the manifest
+        let summary_features = summary.features();
+
+        // Dependency name -> dependency
+        let dependencies: BTreeMap<InternedString, &Dependency> = summary
+            .dependencies()
+            .iter()
+            .map(|dep| (dep.name_in_toml(), dep))
+            .collect();
+
+        // Features that enable optional dependencies
+        let optional_dependency_names: BTreeSet<_> = dependencies
+            .iter()
+            .filter(|(_, dep)| dep.is_optional())
+            .map(|(name, _)| name)
+            .copied()
+            .collect();
+
+        let mut features = BTreeSet::new();
+
+        // Checks if a member contains the given feature.
+        let summary_or_opt_dependency_feature = |feature: &InternedString| -> bool {
+            summary_features.contains_key(feature) || optional_dependency_names.contains(feature)
+        };
+
+        for feature in cli_features.features.iter() {
+            match feature {
+                FeatureValue::Feature(f) => {
+                    if summary_or_opt_dependency_feature(f) {
+                        // feature exists in this member.
+                        features.insert(feature.clone());
+                        found_features.insert(feature.clone());
+                    }
+                }
+                // This should be enforced by CliFeatures.
+                FeatureValue::Dep { .. } => panic!("unexpected dep: syntax {}", feature),
+                FeatureValue::DepFeature {
+                    dep_name,
+                    dep_feature,
+                    weak: _,
+                } => {
+                    if dependencies.contains_key(dep_name) {
+                        // pkg/feat for a dependency.
+                        // Will rely on the dependency resolver to validate `dep_feature`.
+                        features.insert(feature.clone());
+                        found_features.insert(feature.clone());
+                    } else if *dep_name == member.name()
+                        && summary_or_opt_dependency_feature(dep_feature)
+                    {
+                        // member/feat where "feat" is a feature in member.
+                        //
+                        // `weak` can be ignored here, because the member
+                        // either is or isn't being built.
+                        features.insert(FeatureValue::Feature(*dep_feature));
+                        found_features.insert(feature.clone());
+                    }
+                }
+            }
+        }
+        CliFeatures {
+            features: Rc::new(features),
+            all_features: false,
+            uses_default_features: cli_features.uses_default_features,
+        }
+    }
+
+    fn report_unknown_features_error(
+        &self,
+        specs: &[PackageIdSpec],
+        cli_features: &CliFeatures,
+        found_features: &BTreeSet<FeatureValue>,
+    ) -> CargoResult<()> {
+        // Keeps track of which features were contained in summary of `member` to suggest similar features in errors
+        let mut summary_features: Vec<InternedString> = Default::default();
+
+        // Keeps track of `member` dependencies (`dep/feature`) and their features names to suggest similar features in error
+        let mut dependencies_features: BTreeMap<InternedString, &[InternedString]> =
+            Default::default();
+
+        // Keeps track of `member` optional dependencies names (which can be enabled with feature) to suggest similar features in error
+        let mut optional_dependency_names: Vec<InternedString> = Default::default();
+
+        // Keeps track of which features were contained in summary of `member` to suggest similar features in errors
+        let mut summary_features_per_member: BTreeMap<&Package, BTreeSet<InternedString>> =
+            Default::default();
+
+        // Keeps track of `member` optional dependencies (which can be enabled with feature) to suggest similar features in error
+        let mut optional_dependency_names_per_member: BTreeMap<&Package, BTreeSet<InternedString>> =
+            Default::default();
+
+        for member in self
+            .members()
+            .filter(|m| specs.iter().any(|spec| spec.matches(m.package_id())))
+        {
+            // Only include features this member defines.
+            let summary = member.summary();
+
+            // Features defined in the manifest
+            summary_features.extend(summary.features().keys());
+            summary_features_per_member
+                .insert(member, summary.features().keys().copied().collect());
+
+            // Dependency name -> dependency
+            let dependencies: BTreeMap<InternedString, &Dependency> = summary
+                .dependencies()
+                .iter()
+                .map(|dep| (dep.name_in_toml(), dep))
+                .collect();
+
+            dependencies_features.extend(
+                dependencies
+                    .iter()
+                    .map(|(name, dep)| (*name, dep.features())),
+            );
+
+            // Features that enable optional dependencies
+            let optional_dependency_names_raw: BTreeSet<_> = dependencies
+                .iter()
+                .filter(|(_, dep)| dep.is_optional())
+                .map(|(name, _)| name)
+                .copied()
+                .collect();
+
+            optional_dependency_names.extend(optional_dependency_names_raw.iter());
+            optional_dependency_names_per_member.insert(member, optional_dependency_names_raw);
+        }
+
+        let levenshtein_test =
+            |a: InternedString, b: InternedString| lev_distance(a.as_str(), b.as_str()) < 4;
+
+        let suggestions: Vec<_> = cli_features
+            .features
+            .difference(found_features)
+            .map(|feature| match feature {
+                // Simple feature, check if any of the optional dependency features or member features are close enough
+                FeatureValue::Feature(typo) => {
+                    // Finds member features which are similar to the requested feature.
+                    let summary_features = summary_features
+                        .iter()
+                        .filter(move |feature| levenshtein_test(**feature, *typo));
+
+                    // Finds optional dependencies which name is similar to the feature
+                    let optional_dependency_features = optional_dependency_names
+                        .iter()
+                        .filter(move |feature| levenshtein_test(**feature, *typo));
+
+                    summary_features
+                        .chain(optional_dependency_features)
+                        .map(|s| s.to_string())
+                        .collect::<Vec<_>>()
+                }
+                FeatureValue::Dep { .. } => panic!("unexpected dep: syntax {}", feature),
+                FeatureValue::DepFeature {
+                    dep_name,
+                    dep_feature,
+                    weak: _,
+                } => {
+                    // Finds set of `pkg/feat` that are very similar to current `pkg/feat`.
+                    let pkg_feat_similar = dependencies_features
+                        .iter()
+                        .filter(|(name, _)| levenshtein_test(**name, *dep_name))
+                        .map(|(name, features)| {
+                            (
+                                name,
+                                features
+                                    .iter()
+                                    .filter(|feature| levenshtein_test(**feature, *dep_feature))
+                                    .collect::<Vec<_>>(),
+                            )
+                        })
+                        .map(|(name, features)| {
+                            features
+                                .into_iter()
+                                .map(move |feature| format!("{}/{}", name, feature))
+                        })
+                        .flatten();
+
+                    // Finds set of `member/optional_dep` features which name is similar to current `pkg/feat`.
+                    let optional_dependency_features = optional_dependency_names_per_member
+                        .iter()
+                        .filter(|(package, _)| levenshtein_test(package.name(), *dep_name))
+                        .map(|(package, optional_dependencies)| {
+                            optional_dependencies
+                                .into_iter()
+                                .filter(|optional_dependency| {
+                                    levenshtein_test(**optional_dependency, *dep_name)
+                                })
+                                .map(move |optional_dependency| {
+                                    format!("{}/{}", package.name(), optional_dependency)
+                                })
+                        })
+                        .flatten();
+
+                    // Finds set of `member/feat` features which name is similar to current `pkg/feat`.
+                    let summary_features = summary_features_per_member
+                        .iter()
+                        .filter(|(package, _)| levenshtein_test(package.name(), *dep_name))
+                        .map(|(package, summary_features)| {
+                            summary_features
+                                .into_iter()
+                                .filter(|summary_feature| {
+                                    levenshtein_test(**summary_feature, *dep_feature)
+                                })
+                                .map(move |summary_feature| {
+                                    format!("{}/{}", package.name(), summary_feature)
+                                })
+                        })
+                        .flatten();
+
+                    pkg_feat_similar
+                        .chain(optional_dependency_features)
+                        .chain(summary_features)
+                        .collect::<Vec<_>>()
+                }
+            })
+            .map(|v| v.into_iter())
+            .flatten()
+            .unique()
+            .filter(|element| {
+                let feature = FeatureValue::new(InternedString::new(element));
+                !cli_features.features.contains(&feature) && !found_features.contains(&feature)
+            })
+            .sorted()
+            .take(5)
+            .collect();
+
+        let unknown: Vec<_> = cli_features
+            .features
+            .difference(found_features)
+            .map(|feature| feature.to_string())
+            .sorted()
+            .collect();
+
+        if suggestions.is_empty() {
+            bail!(
+                "none of the selected packages contains these features: {}",
+                unknown.join(", ")
+            );
+        } else {
+            bail!(
+                "none of the selected packages contains these features: {}, did you mean: {}?",
+                unknown.join(", "),
+                suggestions.join(", ")
+            );
+        }
+    }
+
+    /// New command-line feature selection behavior with resolver = "2" or the
+    /// root of a virtual workspace. See `allows_new_cli_feature_behavior`.
+    fn members_with_features_new(
+        &self,
+        specs: &[PackageIdSpec],
+        cli_features: &CliFeatures,
+    ) -> CargoResult<Vec<(&Package, CliFeatures)>> {
+        // Keeps track of which features matched `member` to produce an error
+        // if any of them did not match anywhere.
+        let mut found_features = Default::default();
+
+        let members: Vec<(&Package, CliFeatures)> = self
+            .members()
+            .filter(|m| specs.iter().any(|spec| spec.matches(m.package_id())))
+            .map(|m| {
+                (
+                    m,
+                    Workspace::collect_matching_features(m, cli_features, &mut found_features),
+                )
+            })
+            .collect();
+
+        if members.is_empty() {
+            // `cargo build -p foo`, where `foo` is not a member.
+            // Do not allow any command-line flags (defaults only).
+            if !(cli_features.features.is_empty()
+                && !cli_features.all_features
+                && cli_features.uses_default_features)
+            {
+                bail!("cannot specify features for packages outside of workspace");
+            }
+            // Add all members from the workspace so we can ensure `-p nonmember`
+            // is in the resolve graph.
+            return Ok(self
+                .members()
+                .map(|m| (m, CliFeatures::new_all(false)))
+                .collect());
+        }
+        if *cli_features.features != found_features {
+            self.report_unknown_features_error(specs, cli_features, &found_features)?;
+        }
+        Ok(members)
+    }
+
+    /// This is the "old" behavior for command-line feature selection.
+    /// See `allows_new_cli_feature_behavior`.
+    fn members_with_features_old(
+        &self,
+        specs: &[PackageIdSpec],
+        cli_features: &CliFeatures,
+    ) -> Vec<(&Package, CliFeatures)> {
+        // Split off any features with the syntax `member-name/feature-name` into a map
+        // so that those features can be applied directly to those workspace-members.
+        let mut member_specific_features: HashMap<InternedString, BTreeSet<FeatureValue>> =
+            HashMap::new();
+        // Features for the member in the current directory.
+        let mut cwd_features = BTreeSet::new();
+        for feature in cli_features.features.iter() {
+            match feature {
+                FeatureValue::Feature(_) => {
+                    cwd_features.insert(feature.clone());
+                }
+                // This should be enforced by CliFeatures.
+                FeatureValue::Dep { .. } => panic!("unexpected dep: syntax {}", feature),
+                FeatureValue::DepFeature {
+                    dep_name,
+                    dep_feature,
+                    weak: _,
+                } => {
+                    // I think weak can be ignored here.
+                    // * With `--features member?/feat -p member`, the ? doesn't
+                    //   really mean anything (either the member is built or it isn't).
+                    // * With `--features nonmember?/feat`, cwd_features will
+                    //   handle processing it correctly.
+                    let is_member = self.members().any(|member| {
+                        // Check if `dep_name` is member of the workspace, but isn't associated with current package.
+                        self.current_opt() != Some(member) && member.name() == *dep_name
+                    });
+                    if is_member && specs.iter().any(|spec| spec.name() == *dep_name) {
+                        member_specific_features
+                            .entry(*dep_name)
+                            .or_default()
+                            .insert(FeatureValue::Feature(*dep_feature));
+                    } else {
+                        cwd_features.insert(feature.clone());
+                    }
+                }
+            }
+        }
+
+        let ms: Vec<_> = self
+            .members()
+            .filter_map(|member| {
+                let member_id = member.package_id();
+                match self.current_opt() {
+                    // The features passed on the command-line only apply to
+                    // the "current" package (determined by the cwd).
+                    Some(current) if member_id == current.package_id() => {
+                        let feats = CliFeatures {
+                            features: Rc::new(cwd_features.clone()),
+                            all_features: cli_features.all_features,
+                            uses_default_features: cli_features.uses_default_features,
+                        };
+                        Some((member, feats))
+                    }
+                    _ => {
+                        // Ignore members that are not enabled on the command-line.
+                        if specs.iter().any(|spec| spec.matches(member_id)) {
+                            // -p for a workspace member that is not the "current"
+                            // one.
+                            //
+                            // The odd behavior here is due to backwards
+                            // compatibility. `--features` and
+                            // `--no-default-features` used to only apply to the
+                            // "current" package. As an extension, this allows
+                            // member-name/feature-name to set member-specific
+                            // features, which should be backwards-compatible.
+                            let feats = CliFeatures {
+                                features: Rc::new(
+                                    member_specific_features
+                                        .remove(member.name().as_str())
+                                        .unwrap_or_default(),
+                                ),
+                                uses_default_features: true,
+                                all_features: cli_features.all_features,
+                            };
+                            Some((member, feats))
+                        } else {
+                            // This member was not requested on the command-line, skip.
+                            None
+                        }
+                    }
+                }
+            })
+            .collect();
+
+        // If any member specific features were not removed while iterating over members
+        // some features will be ignored.
+        assert!(member_specific_features.is_empty());
+
+        ms
     }
 }
 
@@ -867,26 +1555,6 @@ impl<'cfg> Packages<'cfg> {
     }
 }
 
-impl<'a, 'cfg> Iterator for Members<'a, 'cfg> {
-    type Item = &'a Package;
-
-    fn next(&mut self) -> Option<&'a Package> {
-        loop {
-            let next = self.iter.next().map(|path| self.ws.packages.get(path));
-            match next {
-                Some(&MaybePackage::Package(ref p)) => return Some(p),
-                Some(&MaybePackage::Virtual(_)) => {}
-                None => return None,
-            }
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let (_, upper) = self.iter.size_hint();
-        (0, upper)
-    }
-}
-
 impl MaybePackage {
     fn workspace_config(&self) -> &WorkspaceConfig {
         match *self {
@@ -903,12 +1571,14 @@ impl WorkspaceRootConfig {
         members: &Option<Vec<String>>,
         default_members: &Option<Vec<String>>,
         exclude: &Option<Vec<String>>,
+        custom_metadata: &Option<toml::Value>,
     ) -> WorkspaceRootConfig {
         WorkspaceRootConfig {
             root_dir: root_dir.to_path_buf(),
             members: members.clone(),
             default_members: default_members.clone(),
             exclude: exclude.clone().unwrap_or_default(),
+            custom_metadata: custom_metadata.clone(),
         }
     }
 
@@ -947,7 +1617,16 @@ impl WorkspaceRootConfig {
             if expanded_paths.is_empty() {
                 expanded_list.push(pathbuf);
             } else {
-                expanded_list.extend(expanded_paths);
+                // Some OS can create system support files anywhere.
+                // (e.g. macOS creates `.DS_Store` file if you visit a directory using Finder.)
+                // Such files can be reported as a member path unexpectedly.
+                // Check and filter out non-directory paths to prevent pushing such accidental unwanted path
+                // as a member.
+                for expanded_path in expanded_paths {
+                    if expanded_path.is_dir() {
+                        expanded_list.push(expanded_path);
+                    }
+                }
             }
         }
 
@@ -959,12 +1638,9 @@ impl WorkspaceRootConfig {
             Some(p) => p,
             None => return Ok(Vec::new()),
         };
-        let res =
-            glob(path).chain_err(|| anyhow::format_err!("could not parse pattern `{}`", &path))?;
+        let res = glob(path).with_context(|| format!("could not parse pattern `{}`", &path))?;
         let res = res
-            .map(|p| {
-                p.chain_err(|| anyhow::format_err!("unable to match path to pattern `{}`", &path))
-            })
+            .map(|p| p.with_context(|| format!("unable to match path to pattern `{}`", &path)))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(res)
     }

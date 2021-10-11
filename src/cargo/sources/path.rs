@@ -1,16 +1,18 @@
+use std::collections::HashSet;
 use std::fmt::{self, Debug, Formatter};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::core::source::MaybePackage;
+use crate::core::{Dependency, Package, PackageId, Source, SourceId, Summary};
+use crate::ops;
+use crate::util::{internal, CargoResult, Config};
+use anyhow::Context as _;
+use cargo_util::paths;
 use filetime::FileTime;
 use ignore::gitignore::GitignoreBuilder;
 use ignore::Match;
 use log::{trace, warn};
-
-use crate::core::source::MaybePackage;
-use crate::core::{Dependency, Package, PackageId, Source, SourceId, Summary};
-use crate::ops;
-use crate::util::{internal, paths, CargoResult, CargoResultExt, Config};
 
 pub struct PathSource<'cfg> {
     source_id: SourceId,
@@ -67,7 +69,10 @@ impl<'cfg> PathSource<'cfg> {
 
         match self.packages.iter().find(|p| p.root() == &*self.path) {
             Some(pkg) => Ok(pkg.clone()),
-            None => Err(internal("no package found in source")),
+            None => Err(internal(format!(
+                "no package found in source {:?}",
+                self.path
+            ))),
         }
     }
 
@@ -93,10 +98,28 @@ impl<'cfg> PathSource<'cfg> {
     /// are relevant for building this package, but it also contains logic to
     /// use other methods like .gitignore to filter the list of files.
     pub fn list_files(&self, pkg: &Package) -> CargoResult<Vec<PathBuf>> {
+        self._list_files(pkg).with_context(|| {
+            format!(
+                "failed to determine list of files in {}",
+                pkg.root().display()
+            )
+        })
+    }
+
+    fn _list_files(&self, pkg: &Package) -> CargoResult<Vec<PathBuf>> {
         let root = pkg.root();
         let no_include_option = pkg.manifest().include().is_empty();
+        let git_repo = if no_include_option {
+            self.discover_git_repo(root)?
+        } else {
+            None
+        };
 
         let mut exclude_builder = GitignoreBuilder::new(root);
+        if no_include_option && git_repo.is_none() {
+            // no include option and not git repo discovered (see rust-lang/cargo#7183).
+            exclude_builder.add_line(None, ".*")?;
+        }
         for rule in pkg.manifest().exclude() {
             exclude_builder.add_line(None, rule)?;
         }
@@ -108,17 +131,21 @@ impl<'cfg> PathSource<'cfg> {
         }
         let ignore_include = include_builder.build()?;
 
-        let ignore_should_package = |relative_path: &Path| -> CargoResult<bool> {
+        let ignore_should_package = |relative_path: &Path, is_dir: bool| -> CargoResult<bool> {
             // "Include" and "exclude" options are mutually exclusive.
             if no_include_option {
-                match ignore_exclude
-                    .matched_path_or_any_parents(relative_path, /* is_dir */ false)
-                {
+                match ignore_exclude.matched_path_or_any_parents(relative_path, is_dir) {
                     Match::None => Ok(true),
                     Match::Ignore(_) => Ok(false),
                     Match::Whitelist(_) => Ok(true),
                 }
             } else {
+                if is_dir {
+                    // Generally, include directives don't list every
+                    // directory (nor should they!). Just skip all directory
+                    // checks, and only check files.
+                    return Ok(true);
+                }
                 match ignore_include
                     .matched_path_or_any_parents(relative_path, /* is_dir */ false)
                 {
@@ -129,7 +156,7 @@ impl<'cfg> PathSource<'cfg> {
             }
         };
 
-        let mut filter = |path: &Path| -> CargoResult<bool> {
+        let mut filter = |path: &Path, is_dir: bool| -> CargoResult<bool> {
             let relative_path = path.strip_prefix(root)?;
 
             let rel = relative_path.as_os_str();
@@ -139,76 +166,72 @@ impl<'cfg> PathSource<'cfg> {
                 return Ok(true);
             }
 
-            ignore_should_package(relative_path)
+            ignore_should_package(relative_path, is_dir)
         };
 
         // Attempt Git-prepopulate only if no `include` (see rust-lang/cargo#4135).
         if no_include_option {
-            if let Some(result) = self.discover_git_and_list_files(pkg, root, &mut filter) {
-                return result;
+            if let Some(repo) = git_repo {
+                return self.list_files_git(pkg, &repo, &mut filter);
             }
-            // no include option and not git repo discovered (see rust-lang/cargo#7183).
-            return self.list_files_walk_except_dot_files_and_dirs(pkg, &mut filter);
         }
         self.list_files_walk(pkg, &mut filter)
     }
 
-    // Returns `Some(_)` if found sibling `Cargo.toml` and `.git` directory;
-    // otherwise, caller should fall back on full file list.
-    fn discover_git_and_list_files(
-        &self,
-        pkg: &Package,
-        root: &Path,
-        filter: &mut dyn FnMut(&Path) -> CargoResult<bool>,
-    ) -> Option<CargoResult<Vec<PathBuf>>> {
-        // If this package is in a Git repository, then we really do want to
-        // query the Git repository as it takes into account items such as
-        // `.gitignore`. We're not quite sure where the Git repository is,
-        // however, so we do a bit of a probe.
-        //
-        // We walk this package's path upwards and look for a sibling
-        // `Cargo.toml` and `.git` directory. If we find one then we assume that
-        // we're part of that repository.
-        let mut cur = root;
-        loop {
-            if cur.join("Cargo.toml").is_file() {
-                // If we find a Git repository next to this `Cargo.toml`, we still
-                // check to see if we are indeed part of the index. If not, then
-                // this is likely an unrelated Git repo, so keep going.
-                if let Ok(repo) = git2::Repository::open(cur) {
-                    let index = match repo.index() {
-                        Ok(index) => index,
-                        Err(err) => return Some(Err(err.into())),
-                    };
-                    let path = root.strip_prefix(cur).unwrap().join("Cargo.toml");
-                    if index.get_path(&path, 0).is_some() {
-                        return Some(self.list_files_git(pkg, &repo, filter));
-                    }
-                }
+    /// Returns `Some(git2::Repository)` if found sibling `Cargo.toml` and `.git`
+    /// directory; otherwise, caller should fall back on full file list.
+    fn discover_git_repo(&self, root: &Path) -> CargoResult<Option<git2::Repository>> {
+        let repo = match git2::Repository::discover(root) {
+            Ok(repo) => repo,
+            Err(e) => {
+                log::debug!(
+                    "could not discover git repo at or above {}: {}",
+                    root.display(),
+                    e
+                );
+                return Ok(None);
             }
-            // Don't cross submodule boundaries.
-            if cur.join(".git").is_dir() {
-                break;
+        };
+        let index = repo
+            .index()
+            .with_context(|| format!("failed to open git index at {}", repo.path().display()))?;
+        let repo_root = repo.workdir().ok_or_else(|| {
+            anyhow::format_err!(
+                "did not expect repo at {} to be bare",
+                repo.path().display()
+            )
+        })?;
+        let repo_relative_path = match paths::strip_prefix_canonical(root, repo_root) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!(
+                    "cannot determine if path `{:?}` is in git repo `{:?}`: {:?}",
+                    root,
+                    repo_root,
+                    e
+                );
+                return Ok(None);
             }
-            match cur.parent() {
-                Some(parent) => cur = parent,
-                None => break,
-            }
+        };
+        let manifest_path = repo_relative_path.join("Cargo.toml");
+        if index.get_path(&manifest_path, 0).is_some() {
+            return Ok(Some(repo));
         }
-        None
+        // Package Cargo.toml is not in git, don't use git to guide our selection.
+        Ok(None)
     }
 
     fn list_files_git(
         &self,
         pkg: &Package,
         repo: &git2::Repository,
-        filter: &mut dyn FnMut(&Path) -> CargoResult<bool>,
+        filter: &mut dyn FnMut(&Path, bool) -> CargoResult<bool>,
     ) -> CargoResult<Vec<PathBuf>> {
         warn!("list_files_git {}", pkg.package_id());
         let index = repo.index()?;
         let root = repo
             .workdir()
-            .ok_or_else(|| internal("Can't list files on a bare repository."))?;
+            .ok_or_else(|| anyhow::format_err!("can't list files on a bare repository"))?;
         let pkg_path = pkg.root();
 
         let mut ret = Vec::<PathBuf>::new();
@@ -239,19 +262,36 @@ impl<'cfg> PathSource<'cfg> {
             opts.pathspec(suffix);
         }
         let statuses = repo.statuses(Some(&mut opts))?;
-        let untracked = statuses.iter().filter_map(|entry| match entry.status() {
-            // Don't include Cargo.lock if it is untracked. Packaging will
-            // generate a new one as needed.
-            git2::Status::WT_NEW if entry.path() != Some("Cargo.lock") => {
-                Some((join(root, entry.path_bytes()), None))
-            }
-            _ => None,
-        });
+        let mut skip_paths = HashSet::new();
+        let untracked: Vec<_> = statuses
+            .iter()
+            .filter_map(|entry| {
+                match entry.status() {
+                    // Don't include Cargo.lock if it is untracked. Packaging will
+                    // generate a new one as needed.
+                    git2::Status::WT_NEW if entry.path() != Some("Cargo.lock") => {
+                        Some(Ok((join(root, entry.path_bytes()), None)))
+                    }
+                    git2::Status::WT_DELETED => {
+                        let path = match join(root, entry.path_bytes()) {
+                            Ok(p) => p,
+                            Err(e) => return Some(Err(e)),
+                        };
+                        skip_paths.insert(path);
+                        None
+                    }
+                    _ => None,
+                }
+            })
+            .collect::<CargoResult<_>>()?;
 
         let mut subpackages_found = Vec::new();
 
         for (file_path, is_dir) in index_files.chain(untracked) {
             let file_path = file_path?;
+            if skip_paths.contains(&file_path) {
+                continue;
+            }
 
             // Filter out files blatantly outside this package. This is helped a
             // bit above via the `pathspec` function call, but we need to filter
@@ -286,7 +326,10 @@ impl<'cfg> PathSource<'cfg> {
                 continue;
             }
 
-            if is_dir.unwrap_or_else(|| file_path.is_dir()) {
+            // `is_dir` is None for symlinks. The `unwrap` checks if the
+            // symlink points to a directory.
+            let is_dir = is_dir.unwrap_or_else(|| file_path.is_dir());
+            if is_dir {
                 warn!("  found submodule {}", file_path.display());
                 let rel = file_path.strip_prefix(root)?;
                 let rel = rel.to_str().ok_or_else(|| {
@@ -304,7 +347,8 @@ impl<'cfg> PathSource<'cfg> {
                         PathSource::walk(&file_path, &mut ret, false, filter)?;
                     }
                 }
-            } else if (*filter)(&file_path)? {
+            } else if (*filter)(&file_path, is_dir)? {
+                assert!(!is_dir);
                 // We found a file!
                 warn!("  found {}", file_path.display());
                 ret.push(file_path);
@@ -323,40 +367,19 @@ impl<'cfg> PathSource<'cfg> {
             use std::str;
             match str::from_utf8(data) {
                 Ok(s) => Ok(path.join(s)),
-                Err(..) => Err(internal(
-                    "cannot process path in git with a non \
-                     unicode filename",
+                Err(e) => Err(anyhow::format_err!(
+                    "cannot process path in git with a non utf8 filename: {}\n{:?}",
+                    e,
+                    data
                 )),
             }
         }
     }
 
-    fn list_files_walk_except_dot_files_and_dirs(
-        &self,
-        pkg: &Package,
-        filter: &mut dyn FnMut(&Path) -> CargoResult<bool>,
-    ) -> CargoResult<Vec<PathBuf>> {
-        let root = pkg.root();
-        let mut exclude_dot_files_dir_builder = GitignoreBuilder::new(root);
-        exclude_dot_files_dir_builder.add_line(None, ".*")?;
-        let ignore_dot_files_and_dirs = exclude_dot_files_dir_builder.build()?;
-
-        let mut filter_ignore_dot_files_and_dirs = |path: &Path| -> CargoResult<bool> {
-            let relative_path = path.strip_prefix(root)?;
-            match ignore_dot_files_and_dirs
-                .matched_path_or_any_parents(relative_path, /* is_dir */ false)
-            {
-                Match::Ignore(_) => Ok(false),
-                _ => filter(path),
-            }
-        };
-        self.list_files_walk(pkg, &mut filter_ignore_dot_files_and_dirs)
-    }
-
     fn list_files_walk(
         &self,
         pkg: &Package,
-        filter: &mut dyn FnMut(&Path) -> CargoResult<bool>,
+        filter: &mut dyn FnMut(&Path, bool) -> CargoResult<bool>,
     ) -> CargoResult<Vec<PathBuf>> {
         let mut ret = Vec::new();
         PathSource::walk(pkg.root(), &mut ret, true, filter)?;
@@ -367,16 +390,18 @@ impl<'cfg> PathSource<'cfg> {
         path: &Path,
         ret: &mut Vec<PathBuf>,
         is_root: bool,
-        filter: &mut dyn FnMut(&Path) -> CargoResult<bool>,
+        filter: &mut dyn FnMut(&Path, bool) -> CargoResult<bool>,
     ) -> CargoResult<()> {
-        if !fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false) {
-            if (*filter)(path)? {
-                ret.push(path.to_path_buf());
-            }
+        let is_dir = path.is_dir();
+        if !is_root && !(*filter)(path, is_dir)? {
+            return Ok(());
+        }
+        if !is_dir {
+            ret.push(path.to_path_buf());
             return Ok(());
         }
         // Don't recurse into any sub-packages that we have.
-        if !is_root && fs::metadata(&path.join("Cargo.toml")).is_ok() {
+        if !is_root && path.join("Cargo.toml").exists() {
             return Ok(());
         }
 
@@ -386,7 +411,7 @@ impl<'cfg> PathSource<'cfg> {
         // TODO: drop `collect` and sort after transition period and dropping warning tests.
         // See rust-lang/cargo#4268 and rust-lang/cargo#4270.
         let mut entries: Vec<PathBuf> = fs::read_dir(path)
-            .chain_err(|| format!("cannot read {:?}", path))?
+            .with_context(|| format!("cannot read {:?}", path))?
             .map(|e| e.unwrap().path())
             .collect();
         entries.sort_unstable_by(|a, b| a.as_os_str().cmp(b.as_os_str()));
@@ -403,12 +428,20 @@ impl<'cfg> PathSource<'cfg> {
 
     pub fn last_modified_file(&self, pkg: &Package) -> CargoResult<(FileTime, PathBuf)> {
         if !self.updated {
-            return Err(internal("BUG: source was not updated"));
+            return Err(internal(format!(
+                "BUG: source `{:?}` was not updated",
+                self.path
+            )));
         }
 
         let mut max = FileTime::zero();
         let mut max_path = PathBuf::new();
-        for file in self.list_files(pkg)? {
+        for file in self.list_files(pkg).with_context(|| {
+            format!(
+                "failed to determine the most recently modified file in {}",
+                pkg.root().display()
+            )
+        })? {
             // An `fs::stat` error here is either because path is a
             // broken symlink, a permissions error, or a race
             // condition where this path was `rm`-ed -- either way,
@@ -489,6 +522,10 @@ impl<'cfg> Source for PathSource<'cfg> {
 
     fn fingerprint(&self, pkg: &Package) -> CargoResult<String> {
         let (max, max_path) = self.last_modified_file(pkg)?;
+        // Note that we try to strip the prefix of this package to get a
+        // relative path to ensure that the fingerprint remains consistent
+        // across entire project directory renames.
+        let max_path = max_path.strip_prefix(&self.path).unwrap_or(&max_path);
         Ok(format!("{} ({})", max, max_path.display()))
     }
 

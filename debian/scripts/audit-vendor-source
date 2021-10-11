@@ -2,6 +2,9 @@
 # Audit Rust crate source for suspicious files in the current directory, that
 # shouldn't or can't be part of a Debian source package.
 #
+# NOTE: this overwrites & deletes files in the current directory!!! Make a
+# backup before running this script.
+#
 # Usage: $0 <whitelist> <filter_description> [<extra args to suspicious-source>]
 
 set -e
@@ -11,13 +14,17 @@ filter_description="$2"
 shift 2 # everything else is args to suspicious-source
 
 # Remove tiny files 4 bytes or less
-find . -size -4c -delete
+find .  -type f -size -4c -delete
+
 # Remove non-suspicious files, warning on patterns that match nothing
 echo "Excluding (i.e. removing) whitelisted files..."
 grep -v '^#' "$whitelist" | xargs  -I% sh -c 'rm -r ./% || true'
 echo "Checking for suspicious files..."
 # Remove cargo metadata files
 find . '(' -name '.cargo-checksum.json' -or -name '.cargo_vcs_info.json' ')' -delete
+# Strip comments & blank lines before testing rust source code -
+# some authors like to write really long comments
+find . -name '*.rs' -execdir sed -i -e '\,^\s*//,d' -e '/^\s*$/d' '{}' \;
 
 # TODO: merge the -m stuff into suspicious-source(1).
 suspicious-source -v "$@"

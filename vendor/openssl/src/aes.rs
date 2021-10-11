@@ -55,11 +55,11 @@
 //! assert_eq!(&orig_key[..], &key_to_wrap[..]);
 //! ```
 //!
-use ffi;
 use libc::{c_int, c_uint};
-use std::{mem, ptr};
+use std::mem::MaybeUninit;
+use std::ptr;
 
-use symm::Mode;
+use crate::symm::Mode;
 
 /// Provides Error handling for parsing keys.
 #[derive(Debug)]
@@ -74,19 +74,18 @@ impl AesKey {
     /// # Failure
     ///
     /// Returns an error if the key is not 128, 192, or 256 bits.
-    #[allow(deprecated)] // https://github.com/rust-lang/rust/issues/63566
     pub fn new_encrypt(key: &[u8]) -> Result<AesKey, KeyError> {
         unsafe {
             assert!(key.len() <= c_int::max_value() as usize / 8);
 
-            let mut aes_key = mem::uninitialized();
+            let mut aes_key = MaybeUninit::uninit();
             let r = ffi::AES_set_encrypt_key(
                 key.as_ptr() as *const _,
                 key.len() as c_int * 8,
-                &mut aes_key,
+                aes_key.as_mut_ptr(),
             );
             if r == 0 {
-                Ok(AesKey(aes_key))
+                Ok(AesKey(aes_key.assume_init()))
             } else {
                 Err(KeyError(()))
             }
@@ -98,20 +97,19 @@ impl AesKey {
     /// # Failure
     ///
     /// Returns an error if the key is not 128, 192, or 256 bits.
-    #[allow(deprecated)] // https://github.com/rust-lang/rust/issues/63566
     pub fn new_decrypt(key: &[u8]) -> Result<AesKey, KeyError> {
         unsafe {
             assert!(key.len() <= c_int::max_value() as usize / 8);
 
-            let mut aes_key = mem::uninitialized();
+            let mut aes_key = MaybeUninit::uninit();
             let r = ffi::AES_set_decrypt_key(
                 key.as_ptr() as *const _,
                 key.len() as c_int * 8,
-                &mut aes_key,
+                aes_key.as_mut_ptr(),
             );
 
             if r == 0 {
-                Ok(AesKey(aes_key))
+                Ok(AesKey(aes_key.assume_init()))
             } else {
                 Err(KeyError(()))
             }
@@ -122,14 +120,14 @@ impl AesKey {
 /// Performs AES IGE encryption or decryption
 ///
 /// AES IGE (Infinite Garble Extension) is a form of AES block cipher utilized in
-/// OpenSSL.  Infinite Garble referes to propogating forward errors.  IGE, like other
-/// block ciphers implemented for AES requires an initalization vector.  The IGE mode
+/// OpenSSL.  Infinite Garble refers to propagating forward errors.  IGE, like other
+/// block ciphers implemented for AES requires an initialization vector.  The IGE mode
 /// allows a stream of blocks to be encrypted or decrypted without having the entire
 /// plaintext available.  For more information, visit [AES IGE Encryption].
 ///
-/// This block cipher uses 16 byte blocks.  The rust implmentation will panic
-/// if the input or output does not meet this 16-byte boundry.  Attention must
-/// be made in this low level implementation to pad the value to the 128-bit boundry.
+/// This block cipher uses 16 byte blocks.  The rust implementation will panic
+/// if the input or output does not meet this 16-byte boundary.  Attention must
+/// be made in this low level implementation to pad the value to the 128-bit boundary.
 ///
 /// [AES IGE Encryption]: http://www.links.org/files/openssl-ige.pdf
 ///
@@ -208,7 +206,7 @@ pub fn wrap_key(
 /// # Panics
 ///
 /// Panics if either `out` or `in_` do not have sizes that are a multiple of 8, or
-/// if `in` is not 8 bytes longer than `in_`
+/// if `in_` is not 8 bytes longer than `out`
 pub fn unwrap_key(
     key: &AesKey,
     iv: Option<[u8; 8]>,
@@ -240,7 +238,7 @@ mod test {
     use hex::FromHex;
 
     use super::*;
-    use symm::Mode;
+    use crate::symm::Mode;
 
     // From https://www.mgp25.com/AESIGE/
     #[test]

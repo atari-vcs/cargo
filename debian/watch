@@ -1,2 +1,2 @@
 version=3
-https://github.com/rust-lang/cargo/releases /rust-lang/cargo/archive/(\d+\.\d+\.\d+)\.tar\.gz
+https://github.com/rust-lang/cargo/releases /rust-lang/cargo/archive/refs/tags/(\d+\.\d+\.\d+)\.tar\.gz

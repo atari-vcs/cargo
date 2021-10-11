@@ -1,6 +1,6 @@
 use internals::ast::{Container, Data, Field, Style};
 use internals::attr::{Identifier, TagType};
-use internals::{Ctxt, Derive};
+use internals::{ungroup, Ctxt, Derive};
 use syn::{Member, Type};
 
 /// Cross-cutting checks that require looking at more than a single attrs
@@ -260,7 +260,7 @@ fn check_internal_tag_field_name_conflict(cx: &Ctxt, cont: &Container) {
         cx.error_spanned_by(
             cont.original,
             format!("variant field name `{}` conflicts with internal tag", tag),
-        )
+        );
     };
 
     for variant in variants {
@@ -396,7 +396,7 @@ fn member_message(member: &Member) -> String {
 }
 
 fn allow_transparent(field: &Field, derive: Derive) -> bool {
-    if let Type::Path(ty) = field.ty {
+    if let Type::Path(ty) = ungroup(field.ty) {
         if let Some(seg) = ty.path.segments.last() {
             if seg.ident == "PhantomData" {
                 return false;

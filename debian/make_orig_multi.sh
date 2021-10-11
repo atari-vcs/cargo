@@ -54,10 +54,11 @@ cp -R vendor vendor-scan
 rm -rf vendor-scan
 
 # Pack it up, reproducibly
-GZIP=-9n tar --sort=name \
+tar --sort=name \
+    --use-compress-program='gzip -9n' \
     --mtime="./Cargo.lock" \
     --owner=root --group=root \
-    -czf "${TMPDIR}/cargo_${CARGO_VER}.orig-vendor.tar.gz" vendor
+    -cf "${TMPDIR}/cargo_${CARGO_VER}.orig-vendor.tar.gz" vendor
 
 # All is good, we are done!
 echo "Your files are available at:"

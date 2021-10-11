@@ -7,9 +7,9 @@
 use crate::core::{GitReference, PackageId, Source, SourceId};
 use crate::sources::{ReplacedSource, CRATES_IO_REGISTRY};
 use crate::util::config::{self, ConfigRelativePath, OptValue};
-use crate::util::errors::{CargoResult, CargoResultExt};
+use crate::util::errors::CargoResult;
 use crate::util::{Config, IntoUrl};
-use anyhow::bail;
+use anyhow::{bail, Context as _};
 use log::debug;
 use std::collections::{HashMap, HashSet};
 use url::Url;
@@ -108,7 +108,7 @@ impl<'cfg> SourceConfigMap<'cfg> {
 
         let mut name = match self.id2name.get(&id) {
             Some(name) => name,
-            None => return Ok(id.load(self.config, yanked_whitelist)?),
+            None => return id.load(self.config, yanked_whitelist),
         };
         let mut cfg_loc = "";
         let orig_name = name;
@@ -130,7 +130,7 @@ impl<'cfg> SourceConfigMap<'cfg> {
                     name = s;
                     cfg_loc = c;
                 }
-                None if id == cfg.id => return Ok(id.load(self.config, yanked_whitelist)?),
+                None if id == cfg.id => return id.load(self.config, yanked_whitelist),
                 None => {
                     new_id = cfg.id.with_precise(id.precise().map(|s| s.to_string()));
                     break;
@@ -207,7 +207,7 @@ restore the source replacement configuration to continue the build
         let mut srcs = Vec::new();
         if let Some(registry) = def.registry {
             let url = url(&registry, &format!("source.{}.registry", name))?;
-            srcs.push(SourceId::for_registry(&url)?);
+            srcs.push(SourceId::for_alt_registry(&url, &name)?);
         }
         if let Some(local_registry) = def.local_registry {
             let path = local_registry.resolve_path(self.config);
@@ -225,7 +225,7 @@ restore the source replacement configuration to continue the build
                     Some(b) => GitReference::Tag(b.val),
                     None => match def.rev {
                         Some(b) => GitReference::Rev(b.val),
-                        None => GitReference::Branch("master".to_string()),
+                        None => GitReference::DefaultBranch,
                     },
                 },
             };
@@ -247,7 +247,7 @@ restore the source replacement configuration to continue the build
             check_not_set("tag", def.tag)?;
             check_not_set("rev", def.rev)?;
         }
-        if name == "crates-io" && srcs.is_empty() {
+        if name == CRATES_IO_REGISTRY && srcs.is_empty() {
             srcs.push(SourceId::crates_io(self.config)?);
         }
 
@@ -280,7 +280,7 @@ restore the source replacement configuration to continue the build
         return Ok(());
 
         fn url(val: &config::Value<String>, key: &str) -> CargoResult<Url> {
-            let url = val.val.into_url().chain_err(|| {
+            let url = val.val.into_url().with_context(|| {
                 format!(
                     "configuration key `{}` specified an invalid \
                      URL (in {})",

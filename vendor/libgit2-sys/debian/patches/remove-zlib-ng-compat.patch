@@ -1,0 +1,10 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -48,7 +48,6 @@
+ ssh = ["libssh2-sys"]
+ ssh_key_from_memory = []
+ vendored-openssl = ["openssl-sys/vendored"]
+-zlib-ng-compat = ["libz-sys/zlib-ng", "libssh2-sys/zlib-ng-compat"]
+ [target."cfg(unix)".dependencies.openssl-sys]
+ version = "0.9"
+ optional = true

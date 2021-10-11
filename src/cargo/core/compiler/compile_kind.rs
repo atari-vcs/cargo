@@ -1,7 +1,12 @@
-use crate::core::compiler::BuildContext;
-use crate::core::{InternedString, Target};
-use crate::util::errors::{CargoResult, CargoResultExt};
+use crate::core::Target;
+use crate::util::errors::CargoResult;
+use crate::util::interning::InternedString;
+use crate::util::{Config, StableHasher};
+use anyhow::{bail, Context as _};
 use serde::Serialize;
+use std::collections::BTreeSet;
+use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 
 /// Indicator for how a unit is being compiled.
@@ -10,7 +15,7 @@ use std::path::Path;
 /// compilations, where cross compilations happen at the request of `--target`
 /// and host compilations happen for things like build scripts and procedural
 /// macros.
-#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, PartialOrd, Ord, Serialize)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, PartialOrd, Ord)]
 pub enum CompileKind {
     /// Attached to a unit that is compiled for the "host" system or otherwise
     /// is compiled without a `--target` flag. This is used for procedural
@@ -24,10 +29,7 @@ pub enum CompileKind {
 
 impl CompileKind {
     pub fn is_host(&self) -> bool {
-        match self {
-            CompileKind::Host => true,
-            _ => false,
-        }
+        matches!(self, CompileKind::Host)
     }
 
     pub fn for_target(self, target: &Target) -> CompileKind {
@@ -41,12 +43,65 @@ impl CompileKind {
         }
     }
 
-    /// Returns a "short" name for this kind, suitable for keying off
-    /// configuration in Cargo or presenting to users.
-    pub fn short_name(&self, bcx: &BuildContext<'_, '_>) -> &str {
+    /// Creates a new list of `CompileKind` based on the requested list of
+    /// targets.
+    ///
+    /// If no targets are given then this returns a single-element vector with
+    /// `CompileKind::Host`.
+    pub fn from_requested_targets(
+        config: &Config,
+        targets: &[String],
+    ) -> CargoResult<Vec<CompileKind>> {
+        if targets.len() > 1 && !config.cli_unstable().multitarget {
+            bail!("specifying multiple `--target` flags requires `-Zmultitarget`")
+        }
+        if !targets.is_empty() {
+            return Ok(targets
+                .iter()
+                .map(|value| Ok(CompileKind::Target(CompileTarget::new(value)?)))
+                // First collect into a set to deduplicate any `--target` passed
+                // more than once...
+                .collect::<CargoResult<BTreeSet<_>>>()?
+                // ... then generate a flat list for everything else to use.
+                .into_iter()
+                .collect());
+        }
+        let kind = match &config.build_config()?.target {
+            Some(val) => {
+                let value = if val.raw_value().ends_with(".json") {
+                    let path = val.clone().resolve_path(config);
+                    path.to_str().expect("must be utf-8 in toml").to_string()
+                } else {
+                    val.raw_value().to_string()
+                };
+                CompileKind::Target(CompileTarget::new(&value)?)
+            }
+            None => CompileKind::Host,
+        };
+        Ok(vec![kind])
+    }
+
+    /// Hash used for fingerprinting.
+    ///
+    /// Metadata hashing uses the normal Hash trait, which does not
+    /// differentiate on `.json` file contents. The fingerprint hash does
+    /// check the contents.
+    pub fn fingerprint_hash(&self) -> u64 {
         match self {
-            CompileKind::Host => bcx.host_triple().as_str(),
-            CompileKind::Target(target) => target.short_name(),
+            CompileKind::Host => 0,
+            CompileKind::Target(target) => target.fingerprint_hash(),
+        }
+    }
+}
+
+impl serde::ser::Serialize for CompileKind {
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::ser::Serializer,
+    {
+        match self {
+            CompileKind::Host => None::<&str>.serialize(s),
+            CompileKind::Target(t) => Some(t.name).serialize(s),
         }
     }
 }
@@ -88,7 +143,7 @@ impl CompileTarget {
         // with different paths always produce the same result.
         let path = Path::new(name)
             .canonicalize()
-            .chain_err(|| anyhow::format_err!("target path {:?} is not a valid file", name))?;
+            .with_context(|| format!("target path {:?} is not a valid file", name))?;
 
         let name = path
             .into_os_string()
@@ -124,5 +179,20 @@ impl CompileTarget {
         } else {
             &self.name
         }
+    }
+
+    /// See [`CompileKind::fingerprint_hash`].
+    pub fn fingerprint_hash(&self) -> u64 {
+        let mut hasher = StableHasher::new();
+        self.name.hash(&mut hasher);
+        if self.name.ends_with(".json") {
+            // This may have some performance concerns, since it is called
+            // fairly often. If that ever seems worth fixing, consider
+            // embedding this in `CompileTarget`.
+            if let Ok(contents) = fs::read_to_string(self.name) {
+                contents.hash(&mut hasher);
+            }
+        }
+        hasher.finish()
     }
 }

@@ -9,26 +9,26 @@ fn probe_cfg_before_crate_type_discovery() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [target.'cfg(not(stage300))'.dependencies.noop]
-            path = "../noop"
-        "#,
+                [target.'cfg(not(stage300))'.dependencies.noop]
+                path = "../noop"
+            "#,
         )
         .file(
             "src/main.rs",
             r#"
-            #[macro_use]
-            extern crate noop;
+                #[macro_use]
+                extern crate noop;
 
-            #[derive(Noop)]
-            struct X;
+                #[derive(Noop)]
+                struct X;
 
-            fn main() {}
-        "#,
+                fn main() {}
+            "#,
         )
         .build();
     let _noop = project()
@@ -36,26 +36,26 @@ fn probe_cfg_before_crate_type_discovery() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "noop"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "noop"
+                version = "0.0.1"
+                authors = []
 
-            [lib]
-            proc-macro = true
-        "#,
+                [lib]
+                proc-macro = true
+            "#,
         )
         .file(
             "src/lib.rs",
             r#"
-            extern crate proc_macro;
-            use proc_macro::TokenStream;
+                extern crate proc_macro;
+                use proc_macro::TokenStream;
 
-            #[proc_macro_derive(Noop)]
-            pub fn noop(_input: TokenStream) -> TokenStream {
-                "".parse().unwrap()
-            }
-        "#,
+                #[proc_macro_derive(Noop)]
+                pub fn noop(_input: TokenStream) -> TokenStream {
+                    "".parse().unwrap()
+                }
+            "#,
         )
         .build();
 
@@ -68,26 +68,26 @@ fn noop() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies.noop]
-            path = "../noop"
-        "#,
+                [dependencies.noop]
+                path = "../noop"
+            "#,
         )
         .file(
             "src/main.rs",
             r#"
-            #[macro_use]
-            extern crate noop;
+                #[macro_use]
+                extern crate noop;
 
-            #[derive(Noop)]
-            struct X;
+                #[derive(Noop)]
+                struct X;
 
-            fn main() {}
-        "#,
+                fn main() {}
+            "#,
         )
         .build();
     let _noop = project()
@@ -95,26 +95,26 @@ fn noop() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "noop"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "noop"
+                version = "0.0.1"
+                authors = []
 
-            [lib]
-            proc-macro = true
-        "#,
+                [lib]
+                proc-macro = true
+            "#,
         )
         .file(
             "src/lib.rs",
             r#"
-            extern crate proc_macro;
-            use proc_macro::TokenStream;
+                extern crate proc_macro;
+                use proc_macro::TokenStream;
 
-            #[proc_macro_derive(Noop)]
-            pub fn noop(_input: TokenStream) -> TokenStream {
-                "".parse().unwrap()
-            }
-        "#,
+                #[proc_macro_derive(Noop)]
+                pub fn noop(_input: TokenStream) -> TokenStream {
+                    "".parse().unwrap()
+                }
+            "#,
         )
         .build();
 
@@ -128,34 +128,34 @@ fn impl_and_derive() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies.transmogrify]
-            path = "../transmogrify"
-        "#,
+                [dependencies.transmogrify]
+                path = "../transmogrify"
+            "#,
         )
         .file(
             "src/main.rs",
             r#"
-            #[macro_use]
-            extern crate transmogrify;
+                #[macro_use]
+                extern crate transmogrify;
 
-            trait ImplByTransmogrify {
-                fn impl_by_transmogrify(&self) -> bool;
-            }
+                trait ImplByTransmogrify {
+                    fn impl_by_transmogrify(&self) -> bool;
+                }
 
-            #[derive(Transmogrify, Debug)]
-            struct X { success: bool }
+                #[derive(Transmogrify, Debug)]
+                struct X { success: bool }
 
-            fn main() {
-                let x = X::new();
-                assert!(x.impl_by_transmogrify());
-                println!("{:?}", x);
-            }
-        "#,
+                fn main() {
+                    let x = X::new();
+                    assert!(x.impl_by_transmogrify());
+                    println!("{:?}", x);
+                }
+            "#,
         )
         .build();
     let _transmogrify = project()
@@ -163,39 +163,39 @@ fn impl_and_derive() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "transmogrify"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "transmogrify"
+                version = "0.0.1"
+                authors = []
 
-            [lib]
-            proc-macro = true
-        "#,
+                [lib]
+                proc-macro = true
+            "#,
         )
         .file(
             "src/lib.rs",
             r#"
-            extern crate proc_macro;
-            use proc_macro::TokenStream;
+                extern crate proc_macro;
+                use proc_macro::TokenStream;
 
-            #[proc_macro_derive(Transmogrify)]
-            #[doc(hidden)]
-            pub fn transmogrify(input: TokenStream) -> TokenStream {
-                "
-                    impl X {
-                        fn new() -> Self {
-                            X { success: true }
+                #[proc_macro_derive(Transmogrify)]
+                #[doc(hidden)]
+                pub fn transmogrify(input: TokenStream) -> TokenStream {
+                    "
+                        impl X {
+                            fn new() -> Self {
+                                X { success: true }
+                            }
                         }
-                    }
 
-                    impl ImplByTransmogrify for X {
-                        fn impl_by_transmogrify(&self) -> bool {
-                            true
+                        impl ImplByTransmogrify for X {
+                            fn impl_by_transmogrify(&self) -> bool {
+                                true
+                            }
                         }
-                    }
-                ".parse().unwrap()
-            }
-        "#,
+                    ".parse().unwrap()
+                }
+            "#,
         )
         .build();
 
@@ -214,36 +214,36 @@ fn plugin_and_proc_macro() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [lib]
-            plugin = true
-            proc-macro = true
-        "#,
+                [lib]
+                plugin = true
+                proc-macro = true
+            "#,
         )
         .file(
             "src/lib.rs",
             r#"
-            #![feature(plugin_registrar, rustc_private)]
-            #![feature(proc_macro, proc_macro_lib)]
+                #![feature(rustc_private)]
+                #![feature(proc_macro, proc_macro_lib)]
 
-            extern crate rustc_driver;
-            use rustc_driver::plugin::Registry;
+                extern crate rustc_driver;
+                use rustc_driver::plugin::Registry;
 
-            extern crate proc_macro;
-            use proc_macro::TokenStream;
+                extern crate proc_macro;
+                use proc_macro::TokenStream;
 
-            #[plugin_registrar]
-            pub fn plugin_registrar(reg: &mut Registry) {}
+                #[no_mangle]
+                pub fn __rustc_plugin_registrar(reg: &mut Registry) {}
 
-            #[proc_macro_derive(Questionable)]
-            pub fn questionable(input: TokenStream) -> TokenStream {
-                input
-            }
-        "#,
+                #[proc_macro_derive(Questionable)]
+                pub fn questionable(input: TokenStream) -> TokenStream {
+                    input
+                }
+            "#,
         )
         .build();
 
@@ -260,36 +260,36 @@ fn proc_macro_doctest() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.1.0"
-            authors = []
-            [lib]
-            proc-macro = true
-        "#,
+                [package]
+                name = "foo"
+                version = "0.1.0"
+                authors = []
+                [lib]
+                proc-macro = true
+            "#,
         )
         .file(
             "src/lib.rs",
             r#"
-#![crate_type = "proc-macro"]
+            #![crate_type = "proc-macro"]
 
-extern crate proc_macro;
+            extern crate proc_macro;
 
-use proc_macro::TokenStream;
+            use proc_macro::TokenStream;
 
-/// ```
-/// assert!(true);
-/// ```
-#[proc_macro_derive(Bar)]
-pub fn derive(_input: TokenStream) -> TokenStream {
-    "".parse().unwrap()
-}
+            /// ```
+            /// assert!(true);
+            /// ```
+            #[proc_macro_derive(Bar)]
+            pub fn derive(_input: TokenStream) -> TokenStream {
+                "".parse().unwrap()
+            }
 
-#[test]
-fn a() {
-  assert!(true);
-}
-"#,
+            #[test]
+            fn a() {
+              assert!(true);
+            }
+            "#,
         )
         .build();
 
@@ -307,55 +307,55 @@ fn proc_macro_crate_type() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.1.0"
-            [dependencies]
-            pm = { path = "pm" }
-        "#,
+                [package]
+                name = "foo"
+                version = "0.1.0"
+                [dependencies]
+                pm = { path = "pm" }
+            "#,
         )
         .file(
             "src/lib.rs",
             r#"
-            //! ```
-            //! use foo::THING;
-            //! assert_eq!(THING, 123);
-            //! ```
-            #[macro_use]
-            extern crate pm;
-            #[derive(MkItem)]
-            pub struct S;
-            #[cfg(test)]
-            mod tests {
-                use super::THING;
-                #[test]
-                fn it_works() {
-                    assert_eq!(THING, 123);
+                //! ```
+                //! use foo::THING;
+                //! assert_eq!(THING, 123);
+                //! ```
+                #[macro_use]
+                extern crate pm;
+                #[derive(MkItem)]
+                pub struct S;
+                #[cfg(test)]
+                mod tests {
+                    use super::THING;
+                    #[test]
+                    fn it_works() {
+                        assert_eq!(THING, 123);
+                    }
                 }
-            }
-        "#,
+            "#,
         )
         .file(
             "pm/Cargo.toml",
             r#"
-            [package]
-            name = "pm"
-            version = "0.1.0"
-            [lib]
-            crate-type = ["proc-macro"]
-        "#,
+                [package]
+                name = "pm"
+                version = "0.1.0"
+                [lib]
+                crate-type = ["proc-macro"]
+            "#,
         )
         .file(
             "pm/src/lib.rs",
             r#"
-            extern crate proc_macro;
-            use proc_macro::TokenStream;
+                extern crate proc_macro;
+                use proc_macro::TokenStream;
 
-            #[proc_macro_derive(MkItem)]
-            pub fn mk_item(_input: TokenStream) -> TokenStream {
-                "pub const THING: i32 = 123;".parse().unwrap()
-            }
-        "#,
+                #[proc_macro_derive(MkItem)]
+                pub fn mk_item(_input: TokenStream) -> TokenStream {
+                    "pub const THING: i32 = 123;".parse().unwrap()
+                }
+            "#,
         )
         .build();
 
@@ -371,12 +371,12 @@ fn proc_macro_crate_type_warning() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.1.0"
-            [lib]
-            crate-type = ["proc-macro"]
-        "#,
+                [package]
+                name = "foo"
+                version = "0.1.0"
+                [lib]
+                crate-type = ["proc-macro"]
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -393,13 +393,13 @@ fn proc_macro_crate_type_warning_plugin() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.1.0"
-            [lib]
-            crate-type = ["proc-macro"]
-            plugin = true
-        "#,
+                [package]
+                name = "foo"
+                version = "0.1.0"
+                [lib]
+                crate-type = ["proc-macro"]
+                plugin = true
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -418,12 +418,12 @@ fn proc_macro_crate_type_multiple() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.1.0"
-            [lib]
-            crate-type = ["proc-macro", "rlib"]
-        "#,
+                [package]
+                name = "foo"
+                version = "0.1.0"
+                [lib]
+                crate-type = ["proc-macro", "rlib"]
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -443,10 +443,6 @@ Caused by:
 
 #[cargo_test]
 fn proc_macro_extern_prelude() {
-    if !is_nightly() {
-        // remove once pathless `--extern` hits stable (1.41)
-        return;
-    }
     // Check that proc_macro is in the extern prelude.
     let p = project()
         .file(
@@ -473,4 +469,73 @@ fn proc_macro_extern_prelude() {
         .build();
     p.cargo("test").run();
     p.cargo("doc").run();
+}
+
+#[cargo_test]
+fn proc_macro_built_once() {
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [workspace]
+                members = ['a', 'b']
+                resolver = "2"
+            "#,
+        )
+        .file(
+            "a/Cargo.toml",
+            r#"
+                [package]
+                name = "a"
+                version = "0.1.0"
+
+                [build-dependencies]
+                the-macro = { path = '../the-macro' }
+            "#,
+        )
+        .file("a/build.rs", "fn main() {}")
+        .file("a/src/main.rs", "fn main() {}")
+        .file(
+            "b/Cargo.toml",
+            r#"
+                [package]
+                name = "b"
+                version = "0.1.0"
+
+                [dependencies]
+                the-macro = { path = '../the-macro', features = ['a'] }
+            "#,
+        )
+        .file("b/src/main.rs", "fn main() {}")
+        .file(
+            "the-macro/Cargo.toml",
+            r#"
+                [package]
+                name = "the-macro"
+                version = "0.1.0"
+
+                [lib]
+                proc_macro = true
+
+                [features]
+                a = []
+            "#,
+        )
+        .file("the-macro/src/lib.rs", "")
+        .build();
+    p.cargo("build --verbose")
+        .with_stderr_unordered(
+            "\
+[COMPILING] the-macro [..]
+[RUNNING] `rustc --crate-name the_macro [..]`
+[COMPILING] b [..]
+[RUNNING] `rustc --crate-name b [..]`
+[COMPILING] a [..]
+[RUNNING] `rustc --crate-name build_script_build [..]`
+[RUNNING] `[..]build[..]script[..]build[..]`
+[RUNNING] `rustc --crate-name a [..]`
+[FINISHED] [..]
+",
+        )
+        .run();
 }

@@ -1,0 +1,42 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -38,7 +38,7 @@ required-features = ["full", "parsing"]
+ name = "file"
+ required-features = ["full", "parsing"]
+ [dependencies.proc-macro2]
+-version = "1.0.26"
++version = "1.0"
+ default-features = false
+ 
+ [dependencies.quote]
+@@ -67,11 +67,7 @@ version = "1.0"
+ version = "1.0"
+ 
+ [dev-dependencies.reqwest]
+-version = "0.11"
+-features = ["blocking"]
+-
+-[dev-dependencies.syn-test-suite]
+-version = "0"
++version = "0.9"
+ 
+ [dev-dependencies.tar]
+ version = "0.4.16"
+@@ -92,6 +88,5 @@ full = []
+ parsing = []
+ printing = ["quote"]
+ proc-macro = ["proc-macro2/proc-macro", "quote/proc-macro"]
+-test = ["syn-test-suite/all-features"]
+ visit = []
+ visit-mut = []
+--- a/tests/repo/mod.rs
++++ b/tests/repo/mod.rs
+@@ -135,7 +135,7 @@ fn download_and_unpack() -> Result<()> {
+         "https://github.com/rust-lang/rust/archive/{}.tar.gz",
+         REVISION
+     );
+-    let response = reqwest::blocking::get(&url)?.error_for_status()?;
++    let response = reqwest::get(&url)?.error_for_status()?;
+     let progress = Progress::new(response);
+     let decoder = GzDecoder::new(progress);
+     let mut archive = Archive::new(decoder);

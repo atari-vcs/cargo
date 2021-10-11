@@ -2,11 +2,11 @@
 
 use std::env;
 use std::fs::{self, File};
-use std::io::prelude::*;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::str;
 
-use cargo;
 use cargo_test_support::cargo_process;
 use cargo_test_support::paths::{self, CargoPathExt};
 use cargo_test_support::registry::Package;
@@ -75,6 +75,17 @@ fn list_commands_with_descriptions() {
         .with_stdout_contains(
             "    read-manifest        Print a JSON representation of a Cargo.toml manifest.",
         )
+        .run();
+}
+
+#[cargo_test]
+fn list_aliases_with_descriptions() {
+    let p = project().build();
+    p.cargo("--list")
+        .with_stdout_contains("    b                    alias: build")
+        .with_stdout_contains("    c                    alias: check")
+        .with_stdout_contains("    r                    alias: run")
+        .with_stdout_contains("    t                    alias: test")
         .run();
 }
 
@@ -151,10 +162,10 @@ error: no such subcommand: `biuld`
         .file(
             "src/main.rs",
             r#"
-            fn main() {
-                println!("Similar, but not identical to, build");
-            }
-        "#,
+                fn main() {
+                    println!("Similar, but not identical to, build");
+                }
+            "#,
         )
         .publish();
 
@@ -175,15 +186,14 @@ fn find_closest_alias() {
     let root = paths::root();
     let my_home = root.join("my_home");
     fs::create_dir(&my_home).unwrap();
-    File::create(&my_home.join("config"))
-        .unwrap()
-        .write_all(
-            br#"
-        [alias]
-        myalias = "build"
-    "#,
-        )
-        .unwrap();
+    fs::write(
+        &my_home.join("config"),
+        r#"
+            [alias]
+            myalias = "build"
+        "#,
+    )
+    .unwrap();
 
     cargo_process("myalais")
         .env("CARGO_HOME", &my_home)
@@ -240,30 +250,22 @@ fn override_cargo_home() {
     let root = paths::root();
     let my_home = root.join("my_home");
     fs::create_dir(&my_home).unwrap();
-    File::create(&my_home.join("config"))
-        .unwrap()
-        .write_all(
-            br#"
-        [cargo-new]
-        name = "foo"
-        email = "bar"
-        git = false
-    "#,
-        )
-        .unwrap();
+    fs::write(
+        &my_home.join("config"),
+        r#"
+            [cargo-new]
+            vcs = "none"
+        "#,
+    )
+    .unwrap();
 
-    cargo_process("new foo")
-        .env("USER", "foo")
-        .env("CARGO_HOME", &my_home)
-        .run();
+    cargo_process("new foo").env("CARGO_HOME", &my_home).run();
 
-    let toml = paths::root().join("foo/Cargo.toml");
-    let mut contents = String::new();
-    File::open(&toml)
-        .unwrap()
-        .read_to_string(&mut contents)
-        .unwrap();
-    assert!(contents.contains(r#"authors = ["foo <bar>"]"#));
+    assert!(!paths::root().join("foo/.git").is_dir());
+
+    cargo_process("new foo2").run();
+
+    assert!(paths::root().join("foo2/.git").is_dir());
 }
 
 #[cargo_test]
@@ -309,11 +311,11 @@ fn cargo_subcommand_args() {
         .file(
             "src/main.rs",
             r#"
-            fn main() {
-                let args: Vec<_> = ::std::env::args().collect();
-                println!("{:?}", args);
-            }
-        "#,
+                fn main() {
+                    let args: Vec<_> = ::std::env::args().collect();
+                    println!("{}", args.join(" "));
+                }
+            "#,
         )
         .build();
 
@@ -327,38 +329,7 @@ fn cargo_subcommand_args() {
 
     cargo_process("foo bar -v --help")
         .env("PATH", &path)
-        .with_stdout(
-            r#"["[CWD]/cargo-foo/target/debug/cargo-foo[EXE]", "foo", "bar", "-v", "--help"]"#,
-        )
-        .run();
-}
-
-#[cargo_test]
-fn cargo_help() {
-    cargo_process("").run();
-    cargo_process("help").run();
-    cargo_process("-h").run();
-    cargo_process("help build").run();
-    cargo_process("build -h").run();
-    cargo_process("help help").run();
-}
-
-#[cargo_test]
-fn cargo_help_external_subcommand() {
-    Package::new("cargo-fake-help", "1.0.0")
-        .file(
-            "src/main.rs",
-            r#"
-            fn main() {
-                if ::std::env::args().nth(2) == Some(String::from("--help")) {
-                    println!("fancy help output");
-                }
-            }"#,
-        )
-        .publish();
-    cargo_process("install cargo-fake-help").run();
-    cargo_process("help fake-help")
-        .with_stdout("fancy help output\n")
+        .with_stdout("[CWD]/cargo-foo/target/debug/cargo-foo[EXE] foo bar -v --help")
         .run();
 }
 
@@ -371,11 +342,23 @@ fn explain() {
         .run();
 }
 
-// Test that the output of `cargo -Z help` shows a different help screen with
-// all the `-Z` flags.
 #[cargo_test]
-fn z_flags_help() {
-    cargo_process("-Z help")
-        .with_stdout_contains("    -Z unstable-options -- Allow the usage of unstable options")
-        .run();
+fn closed_output_ok() {
+    // Checks that closed output doesn't cause an error.
+    let mut p = cargo_process("--list").build_command();
+    p.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = p.spawn().unwrap();
+    // Close stdout
+    drop(child.stdout.take());
+    // Read stderr
+    let mut s = String::new();
+    child
+        .stderr
+        .as_mut()
+        .unwrap()
+        .read_to_string(&mut s)
+        .unwrap();
+    let status = child.wait().unwrap();
+    assert!(status.success());
+    assert!(s.is_empty(), "{}", s);
 }

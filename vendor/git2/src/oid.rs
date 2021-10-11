@@ -49,7 +49,9 @@ impl Oid {
         if bytes.len() != raw::GIT_OID_RAWSZ {
             Err(Error::from_str("raw byte array must be 20 bytes"))
         } else {
-            unsafe { raw::git_oid_fromraw(&mut raw, bytes.as_ptr()) }
+            unsafe {
+                try_call!(raw::git_oid_fromraw(&mut raw, bytes.as_ptr()));
+            }
             Ok(Oid { raw: raw })
         }
     }
@@ -89,6 +91,7 @@ impl Oid {
     pub fn hash_file<P: AsRef<Path>>(kind: ObjectType, path: P) -> Result<Oid, Error> {
         crate::init();
 
+        // Normal file path OK (does not need Windows conversion).
         let rpath = path.as_ref().into_c_string()?;
 
         let mut out = raw::git_oid {

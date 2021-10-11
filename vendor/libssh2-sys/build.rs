@@ -10,14 +10,20 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
-    if try_vcpkg() {
+    let zlib_ng_compat = env::var("CARGO_FEATURE_ZLIB_NG_COMPAT").is_ok();
+
+    if !zlib_ng_compat && try_vcpkg() {
         return;
     }
 
     // The system copy of libssh2 is not used by default because it
     // can lead to having two copies of libssl loaded at once.
     // See https://github.com/alexcrichton/ssh2-rs/pull/88
+    println!("cargo:rerun-if-env-changed=LIBSSH2_SYS_USE_PKG_CONFIG");
     if true {
+        if zlib_ng_compat {
+            panic!("LIBSSH2_SYS_USE_PKG_CONFIG set, but cannot use zlib-ng-compat with system libssh2");
+        }
         if let Ok(lib) = pkg_config::find_library("libssh2") {
             for path in &lib.include_paths {
                 println!("cargo:include={}", path.display());
@@ -33,6 +39,7 @@ fn main() {
     }
 
     let target = env::var("TARGET").unwrap();
+    let profile = env::var("PROFILE").unwrap();
     let dst = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     let mut cfg = cc::Build::new();
 
@@ -85,6 +92,7 @@ fn main() {
     if target.contains("windows") {
         cfg.include("libssh2/win32");
         cfg.define("LIBSSH2_WINCNG", None);
+        cfg.define("LIBSSH2_WIN32", None);
         cfg.file("libssh2/src/wincng.c");
     } else {
         cfg.flag("-fvisibility=hidden");
@@ -102,6 +110,7 @@ fn main() {
         cfg.define("HAVE_LIBCRYPT32", None);
         cfg.define("HAVE_EVP_AES_128_CTR", None);
         cfg.define("HAVE_POLL", None);
+        cfg.define("HAVE_GETTIMEOFDAY", None);
 
         cfg.file("libssh2/src/openssl.c");
 
@@ -120,14 +129,17 @@ fn main() {
     cfg.define("LIBSSH2_DH_GEX_NEW", None);
 
     cfg.define("LIBSSH2_HAVE_ZLIB", None);
+
+    if profile.contains("debug") {
+        cfg.define("LIBSSH2DEBUG", None);
+    }
+    
+    println!("cargo:rerun-if-env-changed=DEP_Z_INCLUDE");
     if let Some(path) = env::var_os("DEP_Z_INCLUDE") {
         cfg.include(path);
-    } else if let Ok(lib) = pkg_config::find_library("zlib") {
-        for path in &lib.include_paths {
-            cfg.include(path);
-        }
     }
 
+    println!("cargo:rerun-if-env-changed=DEP_OPENSSL_INCLUDE");
     if let Some(path) = env::var_os("DEP_OPENSSL_INCLUDE") {
         if let Some(path) = env::split_paths(&path).next() {
             if let Some(path) = path.to_str() {
@@ -135,10 +147,6 @@ fn main() {
                     cfg.include(path);
                 }
             }
-        }
-    } else if let Ok(lib) = pkg_config::find_library("openssl") {
-        for path in &lib.include_paths {
-            cfg.include(path);
         }
     }
 
@@ -189,9 +197,16 @@ fn try_vcpkg() -> bool {
         .map(|_| {
             // found libssh2 which depends on openssl and zlib
             vcpkg::Config::new()
-                .lib_name("libeay32")
-                .lib_name("ssleay32")
+                .lib_name("libssl")
+                .lib_name("libcrypto")
                 .probe("openssl")
+                .or_else(|_| {
+                    // openssl 1.1 was not found, try openssl 1.0
+                    vcpkg::Config::new()
+                        .lib_name("libeay32")
+                        .lib_name("ssleay32")
+                        .probe("openssl")
+                })
                 .expect(
                     "configured libssh2 from vcpkg but could not \
                      find openssl libraries that it depends on",

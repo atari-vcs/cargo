@@ -1,7 +1,5 @@
 use crate::command_prelude::*;
-
 use cargo::ops::{self, OutputMetadataOptions};
-use cargo::print_json;
 
 pub fn cli() -> App {
     subcommand("metadata")
@@ -10,18 +8,16 @@ pub fn cli() -> App {
              the concrete used versions including overrides, \
              in machine-readable format",
         )
-        .arg(opt("quiet", "No output printed to stdout").short("q"))
+        .arg(opt("quiet", "Do not print cargo log messages").short("q"))
         .arg_features()
-        .arg(
-            opt(
-                "filter-platform",
-                "Only include resolve dependencies matching the given target-triple",
-            )
-            .value_name("TRIPLE"),
-        )
+        .arg(multi_opt(
+            "filter-platform",
+            "TRIPLE",
+            "Only include resolve dependencies matching the given target-triple",
+        ))
         .arg(opt(
             "no-deps",
-            "Output information only about the root package \
+            "Output information only about the workspace members \
              and don't fetch dependencies",
         ))
         .arg_manifest_path()
@@ -30,6 +26,7 @@ pub fn cli() -> App {
                 .value_name("VERSION")
                 .possible_value("1"),
         )
+        .after_help("Run `cargo help metadata` for more detailed information.\n")
 }
 
 pub fn exec(config: &mut Config, args: &ArgMatches<'_>) -> CliResult {
@@ -47,15 +44,13 @@ pub fn exec(config: &mut Config, args: &ArgMatches<'_>) -> CliResult {
     };
 
     let options = OutputMetadataOptions {
-        features: values(args, "features"),
-        all_features: args.is_present("all-features"),
-        no_default_features: args.is_present("no-default-features"),
+        cli_features: args.cli_features()?,
         no_deps: args.is_present("no-deps"),
-        filter_platform: args.value_of("filter-platform").map(|s| s.to_string()),
+        filter_platforms: args._values_of("filter-platform"),
         version,
     };
 
     let result = ops::output_metadata(&ws, &options)?;
-    print_json(&result);
+    config.shell().print_json(&result)?;
     Ok(())
 }

@@ -1,15 +1,15 @@
 use std::collections::{HashMap, HashSet};
 
-use anyhow::bail;
-use log::{debug, trace};
-use semver::VersionReq;
-use url::Url;
-
 use crate::core::PackageSet;
 use crate::core::{Dependency, PackageId, Source, SourceId, SourceMap, Summary};
 use crate::sources::config::SourceConfigMap;
-use crate::util::errors::{CargoResult, CargoResultExt};
-use crate::util::{profile, CanonicalUrl, Config};
+use crate::util::errors::CargoResult;
+use crate::util::interning::InternedString;
+use crate::util::{profile, CanonicalUrl, Config, VersionReqExt};
+use anyhow::{bail, Context as _};
+use log::{debug, trace};
+use semver::VersionReq;
+use url::Url;
 
 /// Source of information about a group of packages.
 ///
@@ -91,16 +91,13 @@ pub struct PackageRegistry<'cfg> {
 type LockedMap = HashMap<
     // The first level of key-ing done in this hash map is the source that
     // dependencies come from, identified by a `SourceId`.
-    SourceId,
-    HashMap<
-        // This next level is keyed by the name of the package...
-        String,
-        // ... and the value here is a list of tuples. The first element of each
-        // tuple is a package which has the source/name used to get to this
-        // point. The second element of each tuple is the list of locked
-        // dependencies that the first element has.
-        Vec<(PackageId, Vec<PackageId>)>,
-    >,
+    // The next level is keyed by the name of the package...
+    (SourceId, InternedString),
+    // ... and the value here is a list of tuples. The first element of each
+    // tuple is a package which has the source/name used to get to this
+    // point. The second element of each tuple is the list of locked
+    // dependencies that the first element has.
+    Vec<(PackageId, Vec<PackageId>)>,
 >;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -108,6 +105,21 @@ enum Kind {
     Override,
     Locked,
     Normal,
+}
+
+/// Argument to `PackageRegistry::patch` which is information about a `[patch]`
+/// directive that we found in a lockfile, if present.
+pub struct LockedPatchDependency {
+    /// The original `Dependency` directive, except "locked" so it's version
+    /// requirement is `=foo` and its `SourceId` has a "precise" listed.
+    pub dependency: Dependency,
+    /// The `PackageId` that was previously found in a lock file which
+    /// `dependency` matches.
+    pub package_id: PackageId,
+    /// Something only used for backwards compatibility with the v2 lock file
+    /// format where `branch=master` is considered the same as `DefaultBranch`.
+    /// For more comments on this see the code in `ops/resolve.rs`.
+    pub alt_package_id: Option<PackageId>,
 }
 
 impl<'cfg> PackageRegistry<'cfg> {
@@ -137,14 +149,14 @@ impl<'cfg> PackageRegistry<'cfg> {
             // We've previously loaded this source, and we've already locked it,
             // so we're not allowed to change it even if `namespace` has a
             // slightly different precise version listed.
-            Some(&(_, Kind::Locked)) => {
+            Some((_, Kind::Locked)) => {
                 debug!("load/locked   {}", namespace);
                 return Ok(());
             }
 
             // If the previous source was not a precise source, then we can be
             // sure that it's already been updated if we've already loaded it.
-            Some(&(ref previous, _)) if previous.precise().is_none() => {
+            Some((previous, _)) if previous.precise().is_none() => {
                 debug!("load/precise  {}", namespace);
                 return Ok(());
             }
@@ -152,7 +164,7 @@ impl<'cfg> PackageRegistry<'cfg> {
             // If the previous source has the same precise version as we do,
             // then we're done, otherwise we need to need to move forward
             // updating this source.
-            Some(&(ref previous, _)) => {
+            Some((previous, _)) => {
                 if previous.precise() == namespace.precise() {
                     debug!("load/match    {}", namespace);
                     return Ok(());
@@ -198,17 +210,20 @@ impl<'cfg> PackageRegistry<'cfg> {
         self.yanked_whitelist.extend(pkgs);
     }
 
+    /// remove all residual state from previous lock files.
+    pub fn clear_lock(&mut self) {
+        trace!("clear_lock");
+        self.locked = HashMap::new();
+    }
+
     pub fn register_lock(&mut self, id: PackageId, deps: Vec<PackageId>) {
         trace!("register_lock: {}", id);
         for dep in deps.iter() {
             trace!("\t-> {}", dep);
         }
-        let sub_map = self
+        let sub_vec = self
             .locked
-            .entry(id.source_id())
-            .or_insert_with(HashMap::new);
-        let sub_vec = sub_map
-            .entry(id.name().to_string())
+            .entry((id.source_id(), id.name()))
             .or_insert_with(Vec::new);
         sub_vec.push((id, deps));
     }
@@ -222,15 +237,34 @@ impl<'cfg> PackageRegistry<'cfg> {
     /// the manifest.
     ///
     /// Here the `deps` will be resolved to a precise version and stored
-    /// internally for future calls to `query` below. It's expected that `deps`
-    /// have had `lock_to` call already, if applicable. (e.g., if a lock file was
-    /// already present).
+    /// internally for future calls to `query` below. `deps` should be a tuple
+    /// where the first element is the patch definition straight from the
+    /// manifest, and the second element is an optional variant where the
+    /// patch has been locked. This locked patch is the patch locked to
+    /// a specific version found in Cargo.lock. This will be `None` if
+    /// `Cargo.lock` doesn't exist, or the patch did not match any existing
+    /// entries in `Cargo.lock`.
     ///
     /// Note that the patch list specified here *will not* be available to
     /// `query` until `lock_patches` is called below, which should be called
     /// once all patches have been added.
-    pub fn patch(&mut self, url: &Url, deps: &[Dependency]) -> CargoResult<()> {
+    ///
+    /// The return value is a `Vec` of patches that should *not* be locked.
+    /// This happens when the patch is locked, but the patch has been updated
+    /// so the locked value is no longer correct.
+    pub fn patch(
+        &mut self,
+        url: &Url,
+        deps: &[(&Dependency, Option<LockedPatchDependency>)],
+    ) -> CargoResult<Vec<(Dependency, PackageId)>> {
+        // NOTE: None of this code is aware of required features. If a patch
+        // is missing a required feature, you end up with an "unused patch"
+        // warning, which is very hard to understand. Ideally the warning
+        // would be tailored to indicate *why* it is unused.
         let canonical = CanonicalUrl::new(url)?;
+
+        // Return value of patches that shouldn't be locked.
+        let mut unlock_patches = Vec::new();
 
         // First up we need to actually resolve each `deps` specification to
         // precisely one summary. We're not using the `query` method below as it
@@ -243,49 +277,63 @@ impl<'cfg> PackageRegistry<'cfg> {
         // of summaries which should be the same length as `deps` above.
         let unlocked_summaries = deps
             .iter()
-            .map(|dep| {
+            .map(|(orig_patch, locked)| {
+                // Remove double reference in orig_patch. Is there maybe a
+                // magic pattern that could avoid this?
+                let orig_patch = *orig_patch;
+                // Use the locked patch if it exists, otherwise use the original.
+                let dep = match locked {
+                    Some(lock) => &lock.dependency,
+                    None => orig_patch,
+                };
                 debug!(
                     "registering a patch for `{}` with `{}`",
                     url,
                     dep.package_name()
                 );
 
+                if dep.features().len() != 0 || !dep.uses_default_features() {
+                    self.source_config.config().shell().warn(format!(
+                        "patch for `{}` uses the features mechanism. \
+                        default-features and features will not take effect because the patch dependency does not support this mechanism",
+                        dep.package_name()
+                    ))?;
+                }
+
                 // Go straight to the source for resolving `dep`. Load it as we
                 // normally would and then ask it directly for the list of summaries
                 // corresponding to this `dep`.
                 self.ensure_loaded(dep.source_id(), Kind::Normal)
-                    .chain_err(|| {
-                        anyhow::format_err!(
-                            "failed to load source for a dependency \
-                             on `{}`",
+                    .with_context(|| {
+                        format!(
+                            "failed to load source for dependency `{}`",
                             dep.package_name()
                         )
                     })?;
 
-                let mut summaries = self
+                let source = self
                     .sources
                     .get_mut(dep.source_id())
-                    .expect("loaded source not present")
-                    .query_vec(dep)?
-                    .into_iter();
-
-                let summary = match summaries.next() {
-                    Some(summary) => summary,
-                    None => anyhow::bail!(
-                        "patch for `{}` in `{}` did not resolve to any crates. If this is \
-                         unexpected, you may wish to consult: \
-                         https://github.com/rust-lang/cargo/issues/4678",
-                        dep.package_name(),
-                        url
-                    ),
-                };
-                if summaries.next().is_some() {
-                    anyhow::bail!(
-                        "patch for `{}` in `{}` resolved to more than one candidate",
-                        dep.package_name(),
-                        url
+                    .expect("loaded source not present");
+                let summaries = source.query_vec(dep)?;
+                let (summary, should_unlock) = summary_for_patch(
+                    orig_patch, locked, summaries, source,
+                )
+                .with_context(|| {
+                    format!(
+                        "patch for `{}` in `{}` failed to resolve",
+                        orig_patch.package_name(),
+                        url,
                     )
+                })?;
+                debug!(
+                    "patch summary is {:?} should_unlock={:?}",
+                    summary, should_unlock
+                );
+                if let Some(unlock_id) = should_unlock {
+                    unlock_patches.push((orig_patch.clone(), unlock_id));
                 }
+
                 if *summary.package_id().source_id().canonical_url() == canonical {
                     anyhow::bail!(
                         "patch for `{}` in `{}` points to the same source, but \
@@ -297,7 +345,7 @@ impl<'cfg> PackageRegistry<'cfg> {
                 Ok(summary)
             })
             .collect::<CargoResult<Vec<_>>>()
-            .chain_err(|| anyhow::format_err!("failed to resolve patches for `{}`", url))?;
+            .with_context(|| format!("failed to resolve patches for `{}`", url))?;
 
         let mut name_and_version = HashSet::new();
         for summary in unlocked_summaries.iter() {
@@ -313,16 +361,39 @@ impl<'cfg> PackageRegistry<'cfg> {
             }
         }
 
+        // Calculate a list of all patches available for this source which is
+        // then used later during calls to `lock` to rewrite summaries to point
+        // directly at these patched entries.
+        //
+        // Note that this is somewhat subtle where the list of `ids` for a
+        // canonical URL is extend with possibly two ids per summary. This is done
+        // to handle the transition from the v2->v3 lock file format where in
+        // v2 DefeaultBranch was either DefaultBranch or Branch("master") for
+        // git dependencies. In this case if `summary.package_id()` is
+        // Branch("master") then alt_package_id will be DefaultBranch. This
+        // signifies that there's a patch available for either of those
+        // dependency directives if we see them in the dependency graph.
+        //
+        // This is a bit complicated and hopefully an edge case we can remove
+        // in the future, but for now it hopefully doesn't cause too much
+        // harm...
+        let mut ids = Vec::new();
+        for (summary, (_, lock)) in unlocked_summaries.iter().zip(deps) {
+            ids.push(summary.package_id());
+            if let Some(lock) = lock {
+                ids.extend(lock.alt_package_id);
+            }
+        }
+        self.patches_available.insert(canonical.clone(), ids);
+
         // Note that we do not use `lock` here to lock summaries! That step
         // happens later once `lock_patches` is invoked. In the meantime though
         // we want to fill in the `patches_available` map (later used in the
         // `lock` method) and otherwise store the unlocked summaries in
         // `patches` to get locked in a future call to `lock_patches`.
-        let ids = unlocked_summaries.iter().map(|s| s.package_id()).collect();
-        self.patches_available.insert(canonical.clone(), ids);
         self.patches.insert(canonical, unlocked_summaries);
 
-        Ok(())
+        Ok(unlock_patches)
     }
 
     /// Lock all patch summaries added via `patch`, making them available to
@@ -336,6 +407,7 @@ impl<'cfg> PackageRegistry<'cfg> {
         assert!(!self.patches_locked);
         for summaries in self.patches.values_mut() {
             for summary in summaries {
+                debug!("locking patch {:?}", summary);
                 *summary = lock(&self.locked, &self.patches_available, summary.clone());
             }
         }
@@ -364,7 +436,7 @@ impl<'cfg> PackageRegistry<'cfg> {
             let _p = profile::start(format!("updating: {}", source_id));
             self.sources.get_mut(source_id).unwrap().update()
         })()
-        .chain_err(|| anyhow::format_err!("Unable to update {}", source_id))?;
+        .with_context(|| format!("Unable to update {}", source_id))?;
         Ok(())
     }
 
@@ -416,7 +488,7 @@ never intended to support this feature, so for now this message is just a
 warning. In the future, however, this message will become a hard error.
 
 To change the dependency graph via an override it's recommended to use the
-`[replace]` feature of Cargo instead of the path override feature. This is
+`[patch]` feature of Cargo instead of the path override feature. This is
 documented online at the url below for more information.
 
 https://doc.rust-lang.org/cargo/reference/overriding-dependencies.html
@@ -515,10 +587,9 @@ impl<'cfg> Registry for PackageRegistry<'cfg> {
 
                 // Ensure the requested source_id is loaded
                 self.ensure_loaded(dep.source_id(), Kind::Normal)
-                    .chain_err(|| {
-                        anyhow::format_err!(
-                            "failed to load source for a dependency \
-                             on `{}`",
+                    .with_context(|| {
+                        format!(
+                            "failed to load source for dependency `{}`",
                             dep.package_name()
                         )
                     })?;
@@ -616,15 +687,14 @@ fn lock(
     summary: Summary,
 ) -> Summary {
     let pair = locked
-        .get(&summary.source_id())
-        .and_then(|map| map.get(&*summary.name()))
+        .get(&(summary.source_id(), summary.name()))
         .and_then(|vec| vec.iter().find(|&&(id, _)| id == summary.package_id()));
 
     trace!("locking summary of {}", summary.package_id());
 
     // Lock the summary's ID if possible
     let summary = match pair {
-        Some((precise, _)) => summary.override_id(precise.clone()),
+        Some((precise, _)) => summary.override_id(*precise),
         None => summary,
     };
     summary.map_dependencies(|dep| {
@@ -706,8 +776,7 @@ fn lock(
         // all known locked packages to see if they match this dependency.
         // If anything does then we lock it to that and move on.
         let v = locked
-            .get(&dep.source_id())
-            .and_then(|map| map.get(&*dep.package_name()))
+            .get(&(dep.source_id(), dep.package_name()))
             .and_then(|vec| vec.iter().find(|&&(id, _)| dep.matches_id(id)));
         if let Some(&(id, _)) = v {
             trace!("\tsecond hit on {}", id);
@@ -719,4 +788,98 @@ fn lock(
         trace!("\tnope, unlocked");
         dep
     })
+}
+
+/// This is a helper for selecting the summary, or generating a helpful error message.
+fn summary_for_patch(
+    orig_patch: &Dependency,
+    locked: &Option<LockedPatchDependency>,
+    mut summaries: Vec<Summary>,
+    source: &mut dyn Source,
+) -> CargoResult<(Summary, Option<PackageId>)> {
+    if summaries.len() == 1 {
+        return Ok((summaries.pop().unwrap(), None));
+    }
+    if summaries.len() > 1 {
+        // TODO: In the future, it might be nice to add all of these
+        // candidates so that version selection would just pick the
+        // appropriate one. However, as this is currently structured, if we
+        // added these all as patches, the unselected versions would end up in
+        // the "unused patch" listing, and trigger a warning. It might take a
+        // fair bit of restructuring to make that work cleanly, and there
+        // isn't any demand at this time to support that.
+        let mut vers: Vec<_> = summaries.iter().map(|summary| summary.version()).collect();
+        vers.sort();
+        let versions: Vec<_> = vers.into_iter().map(|v| v.to_string()).collect();
+        anyhow::bail!(
+            "patch for `{}` in `{}` resolved to more than one candidate\n\
+            Found versions: {}\n\
+            Update the patch definition to select only one package.\n\
+            For example, add an `=` version requirement to the patch definition, \
+            such as `version = \"={}\"`.",
+            orig_patch.package_name(),
+            orig_patch.source_id(),
+            versions.join(", "),
+            versions.last().unwrap()
+        );
+    }
+    assert!(summaries.is_empty());
+    // No summaries found, try to help the user figure out what is wrong.
+    if let Some(locked) = locked {
+        // Since the locked patch did not match anything, try the unlocked one.
+        let orig_matches = source.query_vec(orig_patch).unwrap_or_else(|e| {
+            log::warn!(
+                "could not determine unlocked summaries for dep {:?}: {:?}",
+                orig_patch,
+                e
+            );
+            Vec::new()
+        });
+        let (summary, _) = summary_for_patch(orig_patch, &None, orig_matches, source)?;
+        // The unlocked version found a match. This returns a value to
+        // indicate that this entry should be unlocked.
+        return Ok((summary, Some(locked.package_id)));
+    }
+    // Try checking if there are *any* packages that match this by name.
+    let name_only_dep = Dependency::new_override(orig_patch.package_name(), orig_patch.source_id());
+    let name_summaries = source.query_vec(&name_only_dep).unwrap_or_else(|e| {
+        log::warn!(
+            "failed to do name-only summary query for {:?}: {:?}",
+            name_only_dep,
+            e
+        );
+        Vec::new()
+    });
+    let mut vers = name_summaries
+        .iter()
+        .map(|summary| summary.version())
+        .collect::<Vec<_>>();
+    let found = match vers.len() {
+        0 => format!(""),
+        1 => format!("version `{}`", vers[0]),
+        _ => {
+            vers.sort();
+            let strs: Vec<_> = vers.into_iter().map(|v| v.to_string()).collect();
+            format!("versions `{}`", strs.join(", "))
+        }
+    };
+    if found.is_empty() {
+        anyhow::bail!(
+            "The patch location `{}` does not appear to contain any packages \
+            matching the name `{}`.",
+            orig_patch.source_id(),
+            orig_patch.package_name()
+        );
+    } else {
+        anyhow::bail!(
+            "The patch location `{}` contains a `{}` package with {}, but the patch \
+            definition requires `{}`.\n\
+            Check that the version in the patch location is what you expect, \
+            and update the patch definition to match.",
+            orig_patch.source_id(),
+            orig_patch.package_name(),
+            found,
+            orig_patch.version_req()
+        );
+    }
 }

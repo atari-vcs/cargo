@@ -1,18 +1,21 @@
 //! Tests for fingerprinting (rebuild detection).
 
 use filetime::FileTime;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io;
 use std::io::prelude::*;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::thread;
 use std::time::SystemTime;
 
+use super::death;
 use cargo_test_support::paths::{self, CargoPathExt};
 use cargo_test_support::registry::Package;
-use cargo_test_support::sleep_ms;
-use cargo_test_support::{basic_manifest, is_coarse_mtime, project};
+use cargo_test_support::{
+    basic_manifest, is_coarse_mtime, project, rustc_host, rustc_host_env, sleep_ms,
+};
 
 #[cargo_test]
 fn modifying_and_moving() {
@@ -34,10 +37,7 @@ fn modifying_and_moving() {
     p.root().move_into_the_past();
     p.root().join("target").move_into_the_past();
 
-    File::create(&p.root().join("src/a.rs"))
-        .unwrap()
-        .write_all(b"#[allow(unused)]fn main() {}")
-        .unwrap();
+    p.change_file("src/a.rs", "#[allow(unused)]fn main() {}");
     p.cargo("build")
         .with_stderr(
             "\
@@ -78,16 +78,8 @@ fn modify_only_some_files() {
     assert!(p.bin("foo").is_file());
 
     let lib = p.root().join("src/lib.rs");
-    let bin = p.root().join("src/b.rs");
-
-    File::create(&lib)
-        .unwrap()
-        .write_all(b"invalid rust code")
-        .unwrap();
-    File::create(&bin)
-        .unwrap()
-        .write_all(b"#[allow(unused)]fn foo() {}")
-        .unwrap();
+    p.change_file("src/lib.rs", "invalid rust code");
+    p.change_file("src/b.rs", "#[allow(unused)]fn foo() {}");
     lib.move_into_the_past();
 
     // Make sure the binary is rebuilt, not the lib
@@ -108,49 +100,77 @@ fn rebuild_sub_package_then_while_package() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            authors = []
-            version = "0.0.1"
+                [package]
+                name = "foo"
+                authors = []
+                version = "0.0.1"
 
-            [dependencies.a]
-            path = "a"
-            [dependencies.b]
-            path = "b"
-        "#,
+                [dependencies.a]
+                path = "a"
+                [dependencies.b]
+                path = "b"
+            "#,
         )
         .file("src/lib.rs", "extern crate a; extern crate b;")
         .file(
             "a/Cargo.toml",
             r#"
-            [package]
-            name = "a"
-            authors = []
-            version = "0.0.1"
-            [dependencies.b]
-            path = "../b"
-        "#,
+                [package]
+                name = "a"
+                authors = []
+                version = "0.0.1"
+                [dependencies.b]
+                path = "../b"
+            "#,
         )
         .file("a/src/lib.rs", "extern crate b;")
         .file("b/Cargo.toml", &basic_manifest("b", "0.0.1"))
         .file("b/src/lib.rs", "")
         .build();
 
-    p.cargo("build").run();
+    p.cargo("build")
+        .with_stderr(
+            "\
+[COMPILING] b [..]
+[COMPILING] a [..]
+[COMPILING] foo [..]
+[FINISHED] dev [..]
+",
+        )
+        .run();
 
-    File::create(&p.root().join("b/src/lib.rs"))
-        .unwrap()
-        .write_all(br#"pub fn b() {}"#)
-        .unwrap();
+    if is_coarse_mtime() {
+        sleep_ms(1000);
+    }
+    p.change_file("b/src/lib.rs", "pub fn b() {}");
 
-    p.cargo("build -pb").run();
+    p.cargo("build -pb -v")
+        .with_stderr(
+            "\
+[COMPILING] b [..]
+[RUNNING] `rustc --crate-name b [..]
+[FINISHED] dev [..]
+",
+        )
+        .run();
 
-    File::create(&p.root().join("src/lib.rs"))
-        .unwrap()
-        .write_all(br#"extern crate a; extern crate b; pub fn toplevel() {}"#)
-        .unwrap();
+    p.change_file(
+        "src/lib.rs",
+        "extern crate a; extern crate b; pub fn toplevel() {}",
+    );
 
-    p.cargo("build").run();
+    p.cargo("build -v")
+        .with_stderr(
+            "\
+[FRESH] b [..]
+[COMPILING] a [..]
+[RUNNING] `rustc --crate-name a [..]
+[COMPILING] foo [..]
+[RUNNING] `rustc --crate-name foo [..]
+[FINISHED] dev [..]
+",
+        )
+        .run();
 }
 
 #[cargo_test]
@@ -159,14 +179,14 @@ fn changing_lib_features_caches_targets() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            authors = []
-            version = "0.0.1"
+                [package]
+                name = "foo"
+                authors = []
+                version = "0.0.1"
 
-            [features]
-            foo = []
-        "#,
+                [features]
+                foo = []
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -208,14 +228,14 @@ fn changing_profiles_caches_targets() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            authors = []
-            version = "0.0.1"
+                [package]
+                name = "foo"
+                authors = []
+                version = "0.0.1"
 
-            [profile.dev]
-            panic = "abort"
-        "#,
+                [profile.dev]
+                panic = "abort"
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -234,7 +254,7 @@ fn changing_profiles_caches_targets() {
             "\
 [..]Compiling foo v0.0.1 ([..])
 [FINISHED] test [unoptimized + debuginfo] target(s) in [..]
-[RUNNING] target[..]debug[..]deps[..]foo-[..][EXE]
+[RUNNING] [..] (target[..]debug[..]deps[..]foo-[..][EXE])
 [DOCTEST] foo
 ",
         )
@@ -250,7 +270,7 @@ fn changing_profiles_caches_targets() {
         .with_stderr(
             "\
 [FINISHED] test [unoptimized + debuginfo] target(s) in [..]
-[RUNNING] target[..]debug[..]deps[..]foo-[..][EXE]
+[RUNNING] [..] (target[..]debug[..]deps[..]foo-[..][EXE])
 ",
         )
         .run();
@@ -264,80 +284,80 @@ fn changing_bin_paths_common_target_features_caches_targets() {
         .file(
             ".cargo/config",
             r#"
-            [build]
-            target-dir = "./target"
-        "#,
+                [build]
+                target-dir = "./target"
+            "#,
         )
         .file(
             "dep_crate/Cargo.toml",
             r#"
-            [package]
-            name    = "dep_crate"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name    = "dep_crate"
+                version = "0.0.1"
+                authors = []
 
-            [features]
-            ftest  = []
-        "#,
+                [features]
+                ftest  = []
+            "#,
         )
         .file(
             "dep_crate/src/lib.rs",
             r#"
-            #[cfg(feature = "ftest")]
-            pub fn yo() {
-                println!("ftest on")
-            }
-            #[cfg(not(feature = "ftest"))]
-            pub fn yo() {
-                println!("ftest off")
-            }
-        "#,
+                #[cfg(feature = "ftest")]
+                pub fn yo() {
+                    println!("ftest on")
+                }
+                #[cfg(not(feature = "ftest"))]
+                pub fn yo() {
+                    println!("ftest off")
+                }
+            "#,
         )
         .file(
             "a/Cargo.toml",
             r#"
-            [package]
-            name    = "a"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name    = "a"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            dep_crate = {path = "../dep_crate", features = []}
-        "#,
+                [dependencies]
+                dep_crate = {path = "../dep_crate", features = []}
+            "#,
         )
         .file("a/src/lib.rs", "")
         .file(
             "a/src/main.rs",
             r#"
-            extern crate dep_crate;
-            use dep_crate::yo;
-            fn main() {
-                yo();
-            }
-        "#,
+                extern crate dep_crate;
+                use dep_crate::yo;
+                fn main() {
+                    yo();
+                }
+            "#,
         )
         .file(
             "b/Cargo.toml",
             r#"
-            [package]
-            name    = "b"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name    = "b"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            dep_crate = {path = "../dep_crate", features = ["ftest"]}
-        "#,
+                [dependencies]
+                dep_crate = {path = "../dep_crate", features = ["ftest"]}
+            "#,
         )
         .file("b/src/lib.rs", "")
         .file(
             "b/src/main.rs",
             r#"
-            extern crate dep_crate;
-            use dep_crate::yo;
-            fn main() {
-                yo();
-            }
-        "#,
+                extern crate dep_crate;
+                use dep_crate::yo;
+                fn main() {
+                    yo();
+                }
+            "#,
         )
         .build();
 
@@ -430,23 +450,23 @@ fn changing_bin_features_caches_targets() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            authors = []
-            version = "0.0.1"
+                [package]
+                name = "foo"
+                authors = []
+                version = "0.0.1"
 
-            [features]
-            foo = []
-        "#,
+                [features]
+                foo = []
+            "#,
         )
         .file(
             "src/main.rs",
             r#"
-            fn main() {
-                let msg = if cfg!(feature = "foo") { "feature on" } else { "feature off" };
-                println!("{}", msg);
-            }
-        "#,
+                fn main() {
+                    let msg = if cfg!(feature = "foo") { "feature on" } else { "feature off" };
+                    println!("{}", msg);
+                }
+            "#,
         )
         .build();
 
@@ -473,8 +493,8 @@ fn changing_bin_features_caches_targets() {
     /* Targets should be cached from the first build */
 
     let mut e = p.cargo("build");
-    // MSVC does not include hash in binary filename, so it gets recompiled.
-    if cfg!(target_env = "msvc") {
+    // MSVC/apple does not include hash in binary filename, so it gets recompiled.
+    if cfg!(any(target_env = "msvc", target_vendor = "apple")) {
         e.with_stderr("[COMPILING] foo[..]\n[FINISHED] dev[..]");
     } else {
         e.with_stderr("[FINISHED] dev[..]");
@@ -483,7 +503,7 @@ fn changing_bin_features_caches_targets() {
     p.rename_run("foo", "off2").with_stdout("feature off").run();
 
     let mut e = p.cargo("build --features foo");
-    if cfg!(target_env = "msvc") {
+    if cfg!(any(target_env = "msvc", target_vendor = "apple")) {
         e.with_stderr("[COMPILING] foo[..]\n[FINISHED] dev[..]");
     } else {
         e.with_stderr("[FINISHED] dev[..]");
@@ -499,10 +519,10 @@ fn rebuild_tests_if_lib_changes() {
         .file(
             "tests/foo.rs",
             r#"
-            extern crate foo;
-            #[test]
-            fn test() { foo::foo(); }
-        "#,
+                extern crate foo;
+                #[test]
+                fn test() { foo::foo(); }
+            "#,
         )
         .build();
 
@@ -510,7 +530,7 @@ fn rebuild_tests_if_lib_changes() {
     p.cargo("test").run();
 
     sleep_ms(1000);
-    File::create(&p.root().join("src/lib.rs")).unwrap();
+    p.change_file("src/lib.rs", "");
 
     p.cargo("build -v").run();
     p.cargo("test -v")
@@ -525,43 +545,43 @@ fn no_rebuild_transitive_target_deps() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            a = { path = "a" }
-            [dev-dependencies]
-            b = { path = "b" }
-        "#,
+                [dependencies]
+                a = { path = "a" }
+                [dev-dependencies]
+                b = { path = "b" }
+            "#,
         )
         .file("src/lib.rs", "")
         .file("tests/foo.rs", "")
         .file(
             "a/Cargo.toml",
             r#"
-            [package]
-            name = "a"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "a"
+                version = "0.0.1"
+                authors = []
 
-            [target.foo.dependencies]
-            c = { path = "../c" }
-        "#,
+                [target.foo.dependencies]
+                c = { path = "../c" }
+            "#,
         )
         .file("a/src/lib.rs", "")
         .file(
             "b/Cargo.toml",
             r#"
-            [package]
-            name = "b"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "b"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            c = { path = "../c" }
-        "#,
+                [dependencies]
+                c = { path = "../c" }
+            "#,
         )
         .file("b/src/lib.rs", "")
         .file("c/Cargo.toml", &basic_manifest("c", "0.0.1"))
@@ -587,33 +607,33 @@ fn rerun_if_changed_in_dep() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            a = { path = "a" }
-        "#,
+                [dependencies]
+                a = { path = "a" }
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "a/Cargo.toml",
             r#"
-            [package]
-            name = "a"
-            version = "0.0.1"
-            authors = []
-            build = "build.rs"
-        "#,
+                [package]
+                name = "a"
+                version = "0.0.1"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file(
             "a/build.rs",
             r#"
-            fn main() {
-                println!("cargo:rerun-if-changed=build.rs");
-            }
-        "#,
+                fn main() {
+                    println!("cargo:rerun-if-changed=build.rs");
+                }
+            "#,
         )
         .file("a/src/lib.rs", "")
         .build();
@@ -629,49 +649,49 @@ fn same_build_dir_cached_packages() {
         .file(
             "a1/Cargo.toml",
             r#"
-            [package]
-            name = "a1"
-            version = "0.0.1"
-            authors = []
-            [dependencies]
-            b = { path = "../b" }
-        "#,
+                [package]
+                name = "a1"
+                version = "0.0.1"
+                authors = []
+                [dependencies]
+                b = { path = "../b" }
+            "#,
         )
         .file("a1/src/lib.rs", "")
         .file(
             "a2/Cargo.toml",
             r#"
-            [package]
-            name = "a2"
-            version = "0.0.1"
-            authors = []
-            [dependencies]
-            b = { path = "../b" }
-        "#,
+                [package]
+                name = "a2"
+                version = "0.0.1"
+                authors = []
+                [dependencies]
+                b = { path = "../b" }
+            "#,
         )
         .file("a2/src/lib.rs", "")
         .file(
             "b/Cargo.toml",
             r#"
-            [package]
-            name = "b"
-            version = "0.0.1"
-            authors = []
-            [dependencies]
-            c = { path = "../c" }
-        "#,
+                [package]
+                name = "b"
+                version = "0.0.1"
+                authors = []
+                [dependencies]
+                c = { path = "../c" }
+            "#,
         )
         .file("b/src/lib.rs", "")
         .file(
             "c/Cargo.toml",
             r#"
-            [package]
-            name = "c"
-            version = "0.0.1"
-            authors = []
-            [dependencies]
-            d = { path = "../d" }
-        "#,
+                [package]
+                name = "c"
+                version = "0.0.1"
+                authors = []
+                [dependencies]
+                d = { path = "../d" }
+            "#,
         )
         .file("c/src/lib.rs", "")
         .file("d/Cargo.toml", &basic_manifest("d", "0.0.1"))
@@ -679,9 +699,9 @@ fn same_build_dir_cached_packages() {
         .file(
             ".cargo/config",
             r#"
-            [build]
-            target-dir = "./target"
-        "#,
+                [build]
+                target-dir = "./target"
+            "#,
         )
         .build();
 
@@ -715,14 +735,14 @@ fn no_rebuild_if_build_artifacts_move_backwards_in_time() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            a = { path = "a" }
-        "#,
+                [dependencies]
+                a = { path = "a" }
+            "#,
         )
         .file("src/lib.rs", "")
         .file("a/Cargo.toml", &basic_manifest("a", "0.0.1"))
@@ -745,14 +765,14 @@ fn rebuild_if_build_artifacts_move_forward_in_time() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            a = { path = "a" }
-        "#,
+                [dependencies]
+                a = { path = "a" }
+            "#,
         )
         .file("src/lib.rs", "")
         .file("a/Cargo.toml", &basic_manifest("a", "0.0.1"))
@@ -782,20 +802,20 @@ fn rebuild_if_environment_changes() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            description = "old desc"
-            version = "0.0.1"
-            authors = []
-        "#,
+                [package]
+                name = "foo"
+                description = "old desc"
+                version = "0.0.1"
+                authors = []
+            "#,
         )
         .file(
             "src/main.rs",
             r#"
-            fn main() {
-                println!("{}", env!("CARGO_PKG_DESCRIPTION"));
-            }
-        "#,
+                fn main() {
+                    println!("{}", env!("CARGO_PKG_DESCRIPTION"));
+                }
+            "#,
         )
         .build();
 
@@ -810,18 +830,16 @@ fn rebuild_if_environment_changes() {
         )
         .run();
 
-    File::create(&p.root().join("Cargo.toml"))
-        .unwrap()
-        .write_all(
-            br#"
-        [package]
-        name = "foo"
-        description = "new desc"
-        version = "0.0.1"
-        authors = []
-    "#,
-        )
-        .unwrap();
+    p.change_file(
+        "Cargo.toml",
+        r#"
+            [package]
+            name = "foo"
+            description = "new desc"
+            version = "0.0.1"
+            authors = []
+        "#,
+    );
 
     p.cargo("run")
         .with_stdout("new desc")
@@ -841,19 +859,29 @@ fn no_rebuild_when_rename_dir() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "bar"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "bar"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            foo = { path = "foo" }
-        "#,
+                [workspace]
+
+                [dependencies]
+                foo = { path = "foo" }
+            "#,
         )
-        .file("src/lib.rs", "")
+        .file("src/_unused.rs", "")
+        .file("build.rs", "fn main() {}")
         .file("foo/Cargo.toml", &basic_manifest("foo", "0.0.1"))
         .file("foo/src/lib.rs", "")
+        .file("foo/build.rs", "fn main() {}")
         .build();
+
+    // make sure the most recently modified file is `src/lib.rs`, not
+    // `Cargo.toml`, to expose a historical bug where we forgot to strip the
+    // `Cargo.toml` path from looking for the package root.
+    cargo_test_support::sleep_ms(100);
+    fs::write(p.root().join("src/lib.rs"), "").unwrap();
 
     p.cargo("build").run();
     let mut new = p.root();
@@ -1108,16 +1136,16 @@ fn reuse_shared_build_dep() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
+                [package]
+                name = "foo"
+                version = "0.0.1"
 
-            [dependencies]
-            shared = {path = "shared"}
+                [dependencies]
+                shared = {path = "shared"}
 
-            [workspace]
-            members = ["shared", "bar"]
-        "#,
+                [workspace]
+                members = ["shared", "bar"]
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file("shared/Cargo.toml", &basic_manifest("shared", "0.0.1"))
@@ -1125,13 +1153,13 @@ fn reuse_shared_build_dep() {
         .file(
             "bar/Cargo.toml",
             r#"
-            [package]
-            name = "bar"
-            version = "0.0.1"
+                [package]
+                name = "bar"
+                version = "0.0.1"
 
-            [build-dependencies]
-            shared = { path = "../shared" }
-        "#,
+                [build-dependencies]
+                shared = { path = "../shared" }
+            "#,
         )
         .file("bar/src/lib.rs", "")
         .file("bar/build.rs", "fn main() {}")
@@ -1180,13 +1208,13 @@ fn update_dependency_mtime_does_not_rebuild() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
+                [package]
+                name = "foo"
+                version = "0.0.1"
 
-            [dependencies]
-            bar = { path = "bar" }
-        "#,
+                [dependencies]
+                bar = { path = "bar" }
+            "#,
         )
         .file("src/lib.rs", "")
         .file("bar/Cargo.toml", &basic_manifest("bar", "0.0.1"))
@@ -1255,16 +1283,16 @@ fn fingerprint_cleaner_does_not_rebuild() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
+                [package]
+                name = "foo"
+                version = "0.0.1"
 
-            [dependencies]
-            bar = { path = "bar" }
+                [dependencies]
+                bar = { path = "bar" }
 
-            [features]
-            a = []
-        "#,
+                [features]
+                a = []
+            "#,
         )
         .file("src/lib.rs", "")
         .file("bar/Cargo.toml", &basic_manifest("bar", "0.0.1"))
@@ -1317,19 +1345,19 @@ fn reuse_panic_build_dep_test() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
+                [package]
+                name = "foo"
+                version = "0.0.1"
 
-            [build-dependencies]
-            bar = { path = "bar" }
+                [build-dependencies]
+                bar = { path = "bar" }
 
-            [dev-dependencies]
-            bar = { path = "bar" }
+                [dev-dependencies]
+                bar = { path = "bar" }
 
-            [profile.dev]
-            panic = "abort"
-        "#,
+                [profile.dev]
+                panic = "abort"
+            "#,
         )
         .file("src/lib.rs", "")
         .file("build.rs", "fn main() {}")
@@ -1361,17 +1389,17 @@ fn reuse_panic_pm() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
+                [package]
+                name = "foo"
+                version = "0.0.1"
 
-            [dependencies]
-            bar = { path = "bar" }
-            somepm = { path = "somepm" }
+                [dependencies]
+                bar = { path = "bar" }
+                somepm = { path = "somepm" }
 
-            [profile.dev]
-            panic = "abort"
-        "#,
+                [profile.dev]
+                panic = "abort"
+            "#,
         )
         .file("src/lib.rs", "extern crate bar;")
         .file("bar/Cargo.toml", &basic_manifest("bar", "0.0.1"))
@@ -1379,16 +1407,16 @@ fn reuse_panic_pm() {
         .file(
             "somepm/Cargo.toml",
             r#"
-            [package]
-            name = "somepm"
-            version = "0.0.1"
+                [package]
+                name = "somepm"
+                version = "0.0.1"
 
-            [lib]
-            proc-macro = true
+                [lib]
+                proc-macro = true
 
-            [dependencies]
-            bar = { path = "../bar" }
-        "#,
+                [dependencies]
+                bar = { path = "../bar" }
+            "#,
         )
         .file("somepm/src/lib.rs", "extern crate bar;")
         .build();
@@ -1399,8 +1427,8 @@ fn reuse_panic_pm() {
         .with_stderr_unordered(
             "\
 [COMPILING] bar [..]
-[RUNNING] `rustc --crate-name bar bar/src/lib.rs [..]--crate-type lib --emit=[..]link -C debuginfo=2 [..]
-[RUNNING] `rustc --crate-name bar bar/src/lib.rs [..]--crate-type lib --emit=[..]link -C panic=abort -C debuginfo=2 [..]
+[RUNNING] `rustc --crate-name bar bar/src/lib.rs [..]--crate-type lib --emit=[..]link[..]-C debuginfo=2 [..]
+[RUNNING] `rustc --crate-name bar bar/src/lib.rs [..]--crate-type lib --emit=[..]link -C panic=abort[..]-C debuginfo=2 [..]
 [COMPILING] somepm [..]
 [RUNNING] `rustc --crate-name somepm [..]
 [COMPILING] foo [..]
@@ -1422,16 +1450,16 @@ fn bust_patched_dep() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
+                [package]
+                name = "foo"
+                version = "0.0.1"
 
-            [dependencies]
-            registry2 = "0.1.0"
+                [dependencies]
+                registry2 = "0.1.0"
 
-            [patch.crates-io]
-            registry1 = { path = "reg1new" }
-        "#,
+                [patch.crates-io]
+                registry1 = { path = "reg1new" }
+            "#,
         )
         .file("src/lib.rs", "")
         .file("reg1new/Cargo.toml", &basic_manifest("registry1", "0.1.0"))
@@ -1443,7 +1471,7 @@ fn bust_patched_dep() {
         sleep_ms(1000);
     }
 
-    File::create(&p.root().join("reg1new/src/lib.rs")).unwrap();
+    p.change_file("reg1new/src/lib.rs", "");
     if is_coarse_mtime() {
         sleep_ms(1000);
     }
@@ -1480,62 +1508,62 @@ fn rebuild_on_mid_build_file_modification() {
         .file(
             "Cargo.toml",
             r#"
-            [workspace]
-            members = ["root", "proc_macro_dep"]
-        "#,
+                [workspace]
+                members = ["root", "proc_macro_dep"]
+            "#,
         )
         .file(
             "root/Cargo.toml",
             r#"
-            [package]
-            name = "root"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "root"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            proc_macro_dep = { path = "../proc_macro_dep" }
-        "#,
+                [dependencies]
+                proc_macro_dep = { path = "../proc_macro_dep" }
+            "#,
         )
         .file(
             "root/src/lib.rs",
             r#"
-            #[macro_use]
-            extern crate proc_macro_dep;
+                #[macro_use]
+                extern crate proc_macro_dep;
 
-            #[derive(Noop)]
-            pub struct X;
-        "#,
+                #[derive(Noop)]
+                pub struct X;
+            "#,
         )
         .file(
             "proc_macro_dep/Cargo.toml",
             r#"
-            [package]
-            name = "proc_macro_dep"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "proc_macro_dep"
+                version = "0.1.0"
+                authors = []
 
-            [lib]
-            proc-macro = true
-        "#,
+                [lib]
+                proc-macro = true
+            "#,
         )
         .file(
             "proc_macro_dep/src/lib.rs",
             &format!(
                 r#"
-                extern crate proc_macro;
+                    extern crate proc_macro;
 
-                use std::io::Read;
-                use std::net::TcpStream;
-                use proc_macro::TokenStream;
+                    use std::io::Read;
+                    use std::net::TcpStream;
+                    use proc_macro::TokenStream;
 
-                #[proc_macro_derive(Noop)]
-                pub fn noop(_input: TokenStream) -> TokenStream {{
-                    let mut stream = TcpStream::connect("{}").unwrap();
-                    let mut v = Vec::new();
-                    stream.read_to_end(&mut v).unwrap();
-                    "".parse().unwrap()
-                }}
-            "#,
+                    #[proc_macro_derive(Noop)]
+                    pub fn noop(_input: TokenStream) -> TokenStream {{
+                        let mut stream = TcpStream::connect("{}").unwrap();
+                        let mut v = Vec::new();
+                        stream.read_to_end(&mut v).unwrap();
+                        "".parse().unwrap()
+                    }}
+                "#,
                 addr
             ),
         )
@@ -1596,11 +1624,11 @@ fn dirty_both_lib_and_test() {
     let slib = |n| {
         format!(
             r#"
-            #[no_mangle]
-            pub extern "C" fn doit() -> i32 {{
-                return {};
-            }}
-        "#,
+                #[no_mangle]
+                pub extern "C" fn doit() -> i32 {{
+                    return {};
+                }}
+            "#,
             n
         )
     };
@@ -1609,43 +1637,43 @@ fn dirty_both_lib_and_test() {
         .file(
             "src/lib.rs",
             r#"
-            extern "C" {
-                fn doit() -> i32;
-            }
+                extern "C" {
+                    fn doit() -> i32;
+                }
 
-            #[test]
-            fn t1() {
-                assert_eq!(unsafe { doit() }, 1, "doit assert failure");
-            }
-        "#,
+                #[test]
+                fn t1() {
+                    assert_eq!(unsafe { doit() }, 1, "doit assert failure");
+                }
+            "#,
         )
         .file(
             "build.rs",
             r#"
-            use std::env;
-            use std::path::PathBuf;
-            use std::process::Command;
+                use std::env;
+                use std::path::PathBuf;
+                use std::process::Command;
 
-            fn main() {
-                let rustc = env::var_os("RUSTC").unwrap();
-                let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-                assert!(
-                    Command::new(rustc)
-                        .args(&[
-                            "--crate-type=staticlib",
-                            "--out-dir",
-                            out_dir.to_str().unwrap(),
-                            "slib.rs"
-                        ])
-                        .status()
-                        .unwrap()
-                        .success(),
-                    "slib build failed"
-                );
-                println!("cargo:rustc-link-lib=slib");
-                println!("cargo:rustc-link-search={}", out_dir.display());
-            }
-        "#,
+                fn main() {
+                    let rustc = env::var_os("RUSTC").unwrap();
+                    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+                    assert!(
+                        Command::new(rustc)
+                            .args(&[
+                                "--crate-type=staticlib",
+                                "--out-dir",
+                                out_dir.to_str().unwrap(),
+                                "slib.rs"
+                            ])
+                            .status()
+                            .unwrap()
+                            .success(),
+                        "slib build failed"
+                    );
+                    println!("cargo:rustc-link-lib=slib");
+                    println!("cargo:rustc-link-search={}", out_dir.display());
+                }
+            "#,
         )
         .file("slib.rs", &slib(2))
         .build();
@@ -2013,21 +2041,21 @@ fn move_target_directory_with_path_deps() {
         .file(
             "a/build.rs",
             r###"
-            use std::env;
-            use std::fs;
-            use std::path::Path;
+                use std::env;
+                use std::fs;
+                use std::path::Path;
 
-            fn main() {
-                println!("cargo:rerun-if-changed=build.rs");
-                let out_dir = env::var("OUT_DIR").unwrap();
-                let dest_path = Path::new(&out_dir).join("hello.rs");
-                fs::write(&dest_path, r#"
-                    pub fn message() -> &'static str {
-                        "Hello, World!"
-                    }
-                "#).unwrap();
-            }
-        "###,
+                fn main() {
+                    println!("cargo:rerun-if-changed=build.rs");
+                    let out_dir = env::var("OUT_DIR").unwrap();
+                    let dest_path = Path::new(&out_dir).join("hello.rs");
+                    fs::write(&dest_path, r#"
+                        pub fn message() -> &'static str {
+                            "Hello, World!"
+                        }
+                    "#).unwrap();
+                }
+            "###,
         )
         .file(
             "a/src/lib.rs",
@@ -2120,5 +2148,514 @@ fn rerun_if_changes() {
     p.cargo("build")
         .env("BAR", "2")
         .with_stderr("[FINISHED] [..]")
+        .run();
+}
+
+#[cargo_test]
+fn channel_shares_filenames() {
+    // Test that different "nightly" releases use the same output filename.
+
+    // Create separate rustc binaries to emulate running different toolchains.
+    let nightly1 = format!(
+        "\
+rustc 1.44.0-nightly (38114ff16 2020-03-21)
+binary: rustc
+commit-hash: 38114ff16e7856f98b2b4be7ab4cd29b38bed59a
+commit-date: 2020-03-21
+host: {}
+release: 1.44.0-nightly
+LLVM version: 9.0
+",
+        rustc_host()
+    );
+
+    let nightly2 = format!(
+        "\
+rustc 1.44.0-nightly (a5b09d354 2020-03-31)
+binary: rustc
+commit-hash: a5b09d35473615e7142f5570f5c5fad0caf68bd2
+commit-date: 2020-03-31
+host: {}
+release: 1.44.0-nightly
+LLVM version: 9.0
+",
+        rustc_host()
+    );
+
+    let beta1 = format!(
+        "\
+rustc 1.43.0-beta.3 (4c587bbda 2020-03-25)
+binary: rustc
+commit-hash: 4c587bbda04ab55aaf56feab11dfdfe387a85d7a
+commit-date: 2020-03-25
+host: {}
+release: 1.43.0-beta.3
+LLVM version: 9.0
+",
+        rustc_host()
+    );
+
+    let beta2 = format!(
+        "\
+rustc 1.42.0-beta.5 (4e1c5f0e9 2020-02-28)
+binary: rustc
+commit-hash: 4e1c5f0e9769a588b91c977e3d81e140209ef3a2
+commit-date: 2020-02-28
+host: {}
+release: 1.42.0-beta.5
+LLVM version: 9.0
+",
+        rustc_host()
+    );
+
+    let stable1 = format!(
+        "\
+rustc 1.42.0 (b8cedc004 2020-03-09)
+binary: rustc
+commit-hash: b8cedc00407a4c56a3bda1ed605c6fc166655447
+commit-date: 2020-03-09
+host: {}
+release: 1.42.0
+LLVM version: 9.0
+",
+        rustc_host()
+    );
+
+    let stable2 = format!(
+        "\
+rustc 1.41.1 (f3e1a954d 2020-02-24)
+binary: rustc
+commit-hash: f3e1a954d2ead4e2fc197c7da7d71e6c61bad196
+commit-date: 2020-02-24
+host: {}
+release: 1.41.1
+LLVM version: 9.0
+",
+        rustc_host()
+    );
+
+    let compiler = project()
+        .at("compiler")
+        .file("Cargo.toml", &basic_manifest("compiler", "0.1.0"))
+        .file(
+            "src/main.rs",
+            r#"
+            fn main() {
+                if std::env::args_os().any(|a| a == "-vV") {
+                    print!("{}", env!("FUNKY_VERSION_TEST"));
+                    return;
+                }
+                let mut cmd = std::process::Command::new("rustc");
+                cmd.args(std::env::args_os().skip(1));
+                assert!(cmd.status().unwrap().success());
+            }
+            "#,
+        )
+        .build();
+
+    let makeit = |version, vv| {
+        // Force a rebuild.
+        compiler.target_debug_dir().join("deps").rm_rf();
+        compiler.cargo("build").env("FUNKY_VERSION_TEST", vv).run();
+        fs::rename(compiler.bin("compiler"), compiler.bin(version)).unwrap();
+    };
+    makeit("nightly1", nightly1);
+    makeit("nightly2", nightly2);
+    makeit("beta1", beta1);
+    makeit("beta2", beta2);
+    makeit("stable1", stable1);
+    makeit("stable2", stable2);
+
+    // Run `cargo check` with different rustc versions to observe its behavior.
+    let p = project().file("src/lib.rs", "").build();
+
+    // Runs `cargo check` and returns the rmeta filename created.
+    // Checks that the freshness matches the given value.
+    let check = |version, fresh| -> String {
+        let output = p
+            .cargo("check --message-format=json")
+            .env("RUSTC", compiler.bin(version))
+            .exec_with_output()
+            .unwrap();
+        // Collect the filenames generated.
+        let mut artifacts: Vec<_> = std::str::from_utf8(&output.stdout)
+            .unwrap()
+            .lines()
+            .filter_map(|line| {
+                let value: serde_json::Value = serde_json::from_str(line).unwrap();
+                if value["reason"].as_str().unwrap() == "compiler-artifact" {
+                    assert_eq!(value["fresh"].as_bool().unwrap(), fresh);
+                    let filenames = value["filenames"].as_array().unwrap();
+                    assert_eq!(filenames.len(), 1);
+                    Some(filenames[0].to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // Should only generate one rmeta file.
+        assert_eq!(artifacts.len(), 1);
+        artifacts.pop().unwrap()
+    };
+
+    let nightly1_name = check("nightly1", false);
+    assert_eq!(check("nightly1", true), nightly1_name);
+    assert_eq!(check("nightly2", false), nightly1_name); // same as before
+    assert_eq!(check("nightly2", true), nightly1_name);
+    // Should rebuild going back to nightly1.
+    assert_eq!(check("nightly1", false), nightly1_name);
+
+    let beta1_name = check("beta1", false);
+    assert_ne!(beta1_name, nightly1_name);
+    assert_eq!(check("beta1", true), beta1_name);
+    assert_eq!(check("beta2", false), beta1_name); // same as before
+    assert_eq!(check("beta2", true), beta1_name);
+    // Should rebuild going back to beta1.
+    assert_eq!(check("beta1", false), beta1_name);
+
+    let stable1_name = check("stable1", false);
+    assert_ne!(stable1_name, nightly1_name);
+    assert_ne!(stable1_name, beta1_name);
+    let stable2_name = check("stable2", false);
+    assert_ne!(stable1_name, stable2_name);
+    // Check everything is fresh.
+    assert_eq!(check("stable1", true), stable1_name);
+    assert_eq!(check("stable2", true), stable2_name);
+    assert_eq!(check("beta1", true), beta1_name);
+    assert_eq!(check("nightly1", true), nightly1_name);
+}
+
+#[cargo_test]
+fn linking_interrupted() {
+    // Interrupt during the linking phase shouldn't leave test executable as "fresh".
+
+    // This is used to detect when linking starts, then to pause the linker so
+    // that the test can kill cargo.
+    let link_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let link_addr = link_listener.local_addr().unwrap();
+
+    // This is used to detect when rustc exits.
+    let rustc_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let rustc_addr = rustc_listener.local_addr().unwrap();
+
+    // Create a linker that we can interrupt.
+    let linker = project()
+        .at("linker")
+        .file("Cargo.toml", &basic_manifest("linker", "1.0.0"))
+        .file(
+            "src/main.rs",
+            &r#"
+            fn main() {
+                // Figure out the output filename.
+                let output = match std::env::args().find(|a| a.starts_with("/OUT:")) {
+                    Some(s) => s[5..].to_string(),
+                    None => {
+                        let mut args = std::env::args();
+                        loop {
+                            if args.next().unwrap() == "-o" {
+                                break;
+                            }
+                        }
+                        args.next().unwrap()
+                    }
+                };
+                std::fs::remove_file(&output).unwrap();
+                std::fs::write(&output, "").unwrap();
+                // Tell the test that we are ready to be interrupted.
+                let mut socket = std::net::TcpStream::connect("__ADDR__").unwrap();
+                // Wait for the test to kill us.
+                std::thread::sleep(std::time::Duration::new(60, 0));
+            }
+            "#
+            .replace("__ADDR__", &link_addr.to_string()),
+        )
+        .build();
+    linker.cargo("build").run();
+
+    // Create a wrapper around rustc that will tell us when rustc is finished.
+    let rustc = project()
+        .at("rustc-waiter")
+        .file("Cargo.toml", &basic_manifest("rustc-waiter", "1.0.0"))
+        .file(
+            "src/main.rs",
+            &r#"
+            fn main() {
+                let mut conn = None;
+                // Check for a normal build (not -vV or --print).
+                if std::env::args().any(|arg| arg == "t1") {
+                    // Tell the test that rustc has started.
+                    conn = Some(std::net::TcpStream::connect("__ADDR__").unwrap());
+                }
+                let status = std::process::Command::new("rustc")
+                    .args(std::env::args().skip(1))
+                    .status()
+                    .expect("rustc to run");
+                std::process::exit(status.code().unwrap_or(1));
+            }
+            "#
+            .replace("__ADDR__", &rustc_addr.to_string()),
+        )
+        .build();
+    rustc.cargo("build").run();
+
+    // Build it once so that the fingerprint gets saved to disk.
+    let p = project()
+        .file("src/lib.rs", "")
+        .file("tests/t1.rs", "")
+        .build();
+    p.cargo("test --test t1 --no-run").run();
+
+    // Make a change, start a build, then interrupt it.
+    p.change_file("src/lib.rs", "// modified");
+    let linker_env = format!("CARGO_TARGET_{}_LINKER", rustc_host_env());
+    // NOTE: This assumes that the paths to the linker or rustc are not in the
+    // fingerprint. But maybe they should be?
+    let mut cmd = p
+        .cargo("test --test t1 --no-run")
+        .env(&linker_env, linker.bin("linker"))
+        .env("RUSTC", rustc.bin("rustc-waiter"))
+        .build_command();
+    let mut child = cmd
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .env("__CARGO_TEST_SETSID_PLEASE_DONT_USE_ELSEWHERE", "1")
+        .spawn()
+        .unwrap();
+    // Wait for rustc to start.
+    let mut rustc_conn = rustc_listener.accept().unwrap().0;
+    // Wait for linking to start.
+    drop(link_listener.accept().unwrap());
+
+    // Interrupt the child.
+    death::ctrl_c(&mut child);
+    assert!(!child.wait().unwrap().success());
+    // Wait for rustc to exit. If we don't wait, then the command below could
+    // start while rustc is still being torn down.
+    let mut buf = [0];
+    drop(rustc_conn.read_exact(&mut buf));
+
+    // Build again, shouldn't be fresh.
+    p.cargo("test --test t1")
+        .with_stderr(
+            "\
+[COMPILING] foo [..]
+[FINISHED] [..]
+[RUNNING] tests/t1.rs (target/debug/deps/t1[..])
+",
+        )
+        .run();
+}
+
+#[cargo_test]
+#[cfg_attr(
+    not(all(target_arch = "x86_64", target_os = "windows", target_env = "msvc")),
+    ignore
+)]
+fn lld_is_fresh() {
+    // Check for bug when using lld linker that it remains fresh with dylib.
+    let p = project()
+        .file(
+            ".cargo/config",
+            r#"
+                [target.x86_64-pc-windows-msvc]
+                linker = "rust-lld"
+                rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+            "#,
+        )
+        .file(
+            "Cargo.toml",
+            r#"
+                [package]
+                name = "foo"
+                version = "0.1.0"
+
+                [lib]
+                crate-type = ["dylib"]
+            "#,
+        )
+        .file("src/lib.rs", "")
+        .build();
+
+    p.cargo("build").run();
+    p.cargo("build -v")
+        .with_stderr("[FRESH] foo [..]\n[FINISHED] [..]")
+        .run();
+}
+
+#[cargo_test]
+fn env_in_code_causes_rebuild() {
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [package]
+                name = "foo"
+                version = "0.1.0"
+            "#,
+        )
+        .file(
+            "src/main.rs",
+            r#"
+                fn main() {
+                    println!("{:?}", option_env!("FOO"));
+                    println!("{:?}", option_env!("FOO\nBAR"));
+                }
+            "#,
+        )
+        .build();
+
+    p.cargo("build").env_remove("FOO").run();
+    p.cargo("build")
+        .env_remove("FOO")
+        .with_stderr("[FINISHED] [..]")
+        .run();
+    p.cargo("build")
+        .env("FOO", "bar")
+        .with_stderr("[COMPILING][..]\n[FINISHED][..]")
+        .run();
+    p.cargo("build")
+        .env("FOO", "bar")
+        .with_stderr("[FINISHED][..]")
+        .run();
+    p.cargo("build")
+        .env("FOO", "baz")
+        .with_stderr("[COMPILING][..]\n[FINISHED][..]")
+        .run();
+    p.cargo("build")
+        .env("FOO", "baz")
+        .with_stderr("[FINISHED][..]")
+        .run();
+    p.cargo("build")
+        .env_remove("FOO")
+        .with_stderr("[COMPILING][..]\n[FINISHED][..]")
+        .run();
+    p.cargo("build")
+        .env_remove("FOO")
+        .with_stderr("[FINISHED][..]")
+        .run();
+
+    let interesting = " #!$\nabc\r\\\t\u{8}\r\n";
+    p.cargo("build").env("FOO", interesting).run();
+    p.cargo("build")
+        .env("FOO", interesting)
+        .with_stderr("[FINISHED][..]")
+        .run();
+
+    p.cargo("build").env("FOO\nBAR", interesting).run();
+    p.cargo("build")
+        .env("FOO\nBAR", interesting)
+        .with_stderr("[FINISHED][..]")
+        .run();
+}
+
+#[cargo_test]
+fn env_build_script_no_rebuild() {
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [package]
+                name = "foo"
+                version = "0.1.0"
+            "#,
+        )
+        .file(
+            "build.rs",
+            r#"
+                fn main() {
+                    println!("cargo:rustc-env=FOO=bar");
+                }
+            "#,
+        )
+        .file(
+            "src/main.rs",
+            r#"
+                fn main() {
+                    println!("{:?}", env!("FOO"));
+                }
+            "#,
+        )
+        .build();
+
+    p.cargo("build").run();
+    p.cargo("build").with_stderr("[FINISHED] [..]").run();
+}
+
+#[cargo_test]
+fn cargo_env_changes() {
+    // Checks that changes to the env var CARGO in the dep-info file triggers
+    // a rebuild.
+    let p = project()
+        .file("Cargo.toml", &basic_manifest("foo", "1.0.0"))
+        .file(
+            "src/main.rs",
+            r#"
+                fn main() {
+                    println!("{:?}", env!("CARGO"));
+                }
+            "#,
+        )
+        .build();
+
+    let cargo_exe = cargo_test_support::cargo_exe();
+    let other_cargo_path = p.root().join(cargo_exe.file_name().unwrap());
+    std::fs::hard_link(&cargo_exe, &other_cargo_path).unwrap();
+    let other_cargo = || {
+        let mut pb = cargo_test_support::process(&other_cargo_path);
+        pb.cwd(p.root());
+        cargo_test_support::execs().with_process_builder(pb)
+    };
+
+    p.cargo("check").run();
+    other_cargo()
+        .arg("check")
+        .arg("-v")
+        .with_stderr(
+            "\
+[CHECKING] foo [..]
+[RUNNING] `rustc [..]
+[FINISHED] [..]
+",
+        )
+        .run();
+
+    // And just to confirm that without using env! it doesn't rebuild.
+    p.change_file("src/main.rs", "fn main() {}");
+    p.cargo("check")
+        .with_stderr(
+            "\
+[CHECKING] foo [..]
+[FINISHED] [..]
+",
+        )
+        .run();
+    other_cargo()
+        .arg("check")
+        .arg("-v")
+        .with_stderr(
+            "\
+[FRESH] foo [..]
+[FINISHED] [..]
+",
+        )
+        .run();
+}
+
+#[cargo_test]
+fn changing_linker() {
+    // Changing linker should rebuild.
+    let p = project().file("src/main.rs", "fn main() {}").build();
+    p.cargo("build").run();
+    let linker_env = format!("CARGO_TARGET_{}_LINKER", rustc_host_env());
+    p.cargo("build --verbose")
+        .env(&linker_env, "nonexistent-linker")
+        .with_status(101)
+        .with_stderr_contains(
+            "\
+[COMPILING] foo v0.0.1 ([..])
+[RUNNING] `rustc [..] -C linker=nonexistent-linker [..]`
+[ERROR] [..]linker[..]
+",
+        )
         .run();
 }

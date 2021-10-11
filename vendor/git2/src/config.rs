@@ -46,6 +46,7 @@ impl Config {
     pub fn open(path: &Path) -> Result<Config, Error> {
         crate::init();
         let mut raw = ptr::null_mut();
+        // Normal file path OK (does not need Windows conversion).
         let path = path.into_c_string()?;
         unsafe {
             try_call!(raw::git_config_open_ondisk(&mut raw, path));
@@ -122,6 +123,7 @@ impl Config {
     /// file instances in order (instances with a higher priority level will be
     /// accessed first).
     pub fn add_file(&mut self, path: &Path, level: ConfigLevel, force: bool) -> Result<(), Error> {
+        // Normal file path OK (does not need Windows conversion).
         let path = path.into_c_string()?;
         unsafe {
             try_call!(raw::git_config_add_file_ondisk(
@@ -147,6 +149,8 @@ impl Config {
 
     /// Remove multivar config variables in the config file with the highest level (usually the
     /// local one).
+    ///
+    /// The regular expression is applied case-sensitively on the value.
     pub fn remove_multivar(&mut self, name: &str, regexp: &str) -> Result<(), Error> {
         let name = CString::new(name)?;
         let regexp = CString::new(regexp)?;
@@ -202,6 +206,8 @@ impl Config {
     ///
     /// This is the same as `get_bytes` except that it may return `Err` if
     /// the bytes are not valid utf-8.
+    ///
+    /// This method will return an error if this `Config` is not a snapshot.
     pub fn get_str(&self, name: &str) -> Result<&str, Error> {
         str::from_utf8(self.get_bytes(name)?)
             .map_err(|_| Error::from_str("configuration value is not valid utf8"))
@@ -221,6 +227,10 @@ impl Config {
 
     /// Get the value of a string config variable as an owned string.
     ///
+    /// All config files will be looked into, in the order of their
+    /// defined level. A higher level means a higher priority. The
+    /// first occurrence of the variable will be returned here.
+    ///
     /// An error will be returned if the config value is not valid utf-8.
     pub fn get_string(&self, name: &str) -> Result<String, Error> {
         let ret = Buf::new();
@@ -233,7 +243,15 @@ impl Config {
             .map_err(|_| Error::from_str("configuration value is not valid utf8"))
     }
 
-    /// Get the value of a path config variable as an owned .
+    /// Get the value of a path config variable as an owned `PathBuf`.
+    ///
+    /// A leading '~' will be expanded to the global search path (which
+    /// defaults to the user's home directory but can be overridden via
+    /// [`raw::git_libgit2_opts`].
+    ///
+    /// All config files will be looked into, in the order of their
+    /// defined level. A higher level means a higher priority. The
+    /// first occurrence of the variable will be returned here.
     pub fn get_path(&self, name: &str) -> Result<PathBuf, Error> {
         let ret = Buf::new();
         let name = CString::new(name)?;
@@ -257,6 +275,10 @@ impl Config {
     ///
     /// If `glob` is `Some`, then the iterator will only iterate over all
     /// variables whose name matches the pattern.
+    ///
+    /// The regular expression is applied case-sensitively on the normalized form of
+    /// the variable name: the section and variable parts are lower-cased. The
+    /// subsection is left unchanged.
     ///
     /// # Example
     ///
@@ -283,6 +305,26 @@ impl Config {
                     try_call!(raw::git_config_iterator_new(&mut ret, &*self.raw));
                 }
             }
+            Ok(Binding::from_raw(ret))
+        }
+    }
+
+    /// Iterate over the values of a multivar
+    ///
+    /// If `regexp` is `Some`, then the iterator will only iterate over all
+    /// values which match the pattern.
+    ///
+    /// The regular expression is applied case-sensitively on the normalized form of
+    /// the variable name: the section and variable parts are lower-cased. The
+    /// subsection is left unchanged.
+    pub fn multivar(&self, name: &str, regexp: Option<&str>) -> Result<ConfigEntries<'_>, Error> {
+        let mut ret = ptr::null_mut();
+        let name = CString::new(name)?;
+        let regexp = regexp.map(CString::new).transpose()?;
+        unsafe {
+            try_call!(raw::git_config_multivar_iterator_new(
+                &mut ret, &*self.raw, name, regexp
+            ));
             Ok(Binding::from_raw(ret))
         }
     }
@@ -345,6 +387,8 @@ impl Config {
 
     /// Set the value of an multivar config variable in the config file with the
     /// highest level (usually the local one).
+    ///
+    /// The regular expression is applied case-sensitively on the value.
     pub fn set_multivar(&mut self, name: &str, regexp: &str, value: &str) -> Result<(), Error> {
         let name = CString::new(name)?;
         let regexp = CString::new(regexp)?;
@@ -380,6 +424,7 @@ impl Config {
     }
 
     /// Parse a string as a bool.
+    ///
     /// Interprets "true", "yes", "on", 1, or any non-zero number as true.
     /// Interprets "false", "no", "off", 0, or an empty string as false.
     pub fn parse_bool<S: IntoCString>(s: S) -> Result<bool, Error> {
@@ -449,13 +494,28 @@ impl<'cfg> ConfigEntry<'cfg> {
     /// Gets the value of this entry.
     ///
     /// May return `None` if the value is not valid utf-8
+    ///
+    /// # Panics
+    ///
+    /// Panics when no value is defined.
     pub fn value(&self) -> Option<&str> {
         str::from_utf8(self.value_bytes()).ok()
     }
 
     /// Gets the value of this entry as a byte slice.
+    ///
+    /// # Panics
+    ///
+    /// Panics when no value is defined.
     pub fn value_bytes(&self) -> &[u8] {
         unsafe { crate::opt_bytes(self, (*self.raw).value).unwrap() }
+    }
+
+    /// Returns `true` when a value is defined otherwise `false`.
+    ///
+    /// No value defined is a short-hand to represent a Boolean `true`.
+    pub fn has_value(&self) -> bool {
+        unsafe { !(*self.raw).value.is_null() }
     }
 
     /// Gets the configuration level of this entry.
@@ -585,19 +645,43 @@ mod tests {
         let mut cfg = Config::open(&path).unwrap();
         cfg.set_multivar("foo.bar", "^$", "baz").unwrap();
         cfg.set_multivar("foo.bar", "^$", "qux").unwrap();
+        cfg.set_multivar("foo.bar", "^$", "quux").unwrap();
+        cfg.set_multivar("foo.baz", "^$", "oki").unwrap();
 
-        let mut values: Vec<String> = cfg
-            .entries(None)
+        // `entries` filters by name
+        let mut entries: Vec<String> = cfg
+            .entries(Some("foo.bar"))
             .unwrap()
             .into_iter()
             .map(|entry| entry.unwrap().value().unwrap().into())
             .collect();
-        values.sort();
-        assert_eq!(values, ["baz", "qux"]);
+        entries.sort();
+        assert_eq!(entries, ["baz", "quux", "qux"]);
+
+        // which is the same as `multivar` without a regex
+        let mut multivals: Vec<String> = cfg
+            .multivar("foo.bar", None)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.unwrap().value().unwrap().into())
+            .collect();
+        multivals.sort();
+        assert_eq!(multivals, entries);
+
+        // yet _with_ a regex, `multivar` filters by value
+        let mut quxish: Vec<String> = cfg
+            .multivar("foo.bar", Some("qu.*x"))
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.unwrap().value().unwrap().into())
+            .collect();
+        quxish.sort();
+        assert_eq!(quxish, ["quux", "qux"]);
 
         cfg.remove_multivar("foo.bar", ".*").unwrap();
 
-        assert_eq!(cfg.entries(None).unwrap().count(), 0);
+        assert_eq!(cfg.entries(Some("foo.bar")).unwrap().count(), 0);
+        assert_eq!(cfg.multivar("foo.bar", None).unwrap().count(), 0);
     }
 
     #[test]

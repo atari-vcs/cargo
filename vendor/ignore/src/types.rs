@@ -93,9 +93,9 @@ use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use regex::Regex;
 use thread_local::ThreadLocal;
 
-use default_types::DEFAULT_TYPES;
-use pathutil::file_name;
-use {Error, Match};
+use crate::default_types::DEFAULT_TYPES;
+use crate::pathutil::file_name;
+use crate::{Error, Match};
 
 /// Glob represents a single glob in a set of file type definitions.
 ///
@@ -134,7 +134,7 @@ impl<'a> Glob<'a> {
         Glob(GlobInner::UnmatchedIgnore)
     }
 
-    /// Return the file type defintion that matched, if one exists. A file type
+    /// Return the file type definition that matched, if one exists. A file type
     /// definition always exists when a specific definition matches a file
     /// path.
     pub fn file_type_def(&self) -> Option<&FileTypeDef> {
@@ -427,7 +427,7 @@ impl TypesBuilder {
     /// If `name` is `all` or otherwise contains any character that is not a
     /// Unicode letter or number, then an error is returned.
     pub fn add(&mut self, name: &str, glob: &str) -> Result<(), Error> {
-        lazy_static! {
+        lazy_static::lazy_static! {
             static ref RE: Regex = Regex::new(r"^[\pL\pN]+$").unwrap();
         };
         if name == "all" || !RE.is_match(name) {

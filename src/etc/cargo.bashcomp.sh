@@ -56,11 +56,10 @@ _cargo()
 	local opt__fetch="$opt_common $opt_mani $opt_lock --target"
 	local opt__fix="$opt_common $opt_pkg_spec $opt_feat $opt_mani $opt_jobs $opt_targets $opt_lock --release --target --message-format --broken-code --edition --edition-idioms --allow-no-vcs --allow-dirty --allow-staged --profile --target-dir"
 	local opt__generate_lockfile="$opt_common $opt_mani $opt_lock"
-	local opt__git_checkout="$opt_common $opt_lock --reference --url"
 	local opt__help="$opt_help"
 	local opt__init="$opt_common $opt_lock --bin --lib --name --vcs --edition --registry"
 	local opt__install="$opt_common $opt_feat $opt_jobs $opt_lock $opt_force --bin --bins --branch --debug --example --examples --git --list --path --rev --root --tag --version --registry --target --profile --no-track"
-	local opt__locate_project="$opt_common $opt_mani $opt_lock"
+	local opt__locate_project="$opt_common $opt_mani $opt_lock --message-format --workspace"
 	local opt__login="$opt_common $opt_lock --registry"
 	local opt__metadata="$opt_common $opt_feat $opt_mani $opt_lock --format-version=1 --no-deps --filter-platform"
 	local opt__new="$opt_common $opt_lock --vcs --bin --lib --name --edition --registry"
@@ -74,6 +73,7 @@ _cargo()
 	local opt__rustdoc="$opt_common $opt_pkg $opt_feat $opt_mani $opt_lock $opt_jobs $opt_targets --message-format --target --release --open --target-dir --profile"
 	local opt__search="$opt_common $opt_lock --limit --index --registry"
 	local opt__test="$opt_common $opt_pkg_spec $opt_feat $opt_mani $opt_lock $opt_jobs $opt_targets --message-format --doc --target --no-run --release --no-fail-fast --target-dir --profile"
+	local opt__tree="$opt_common $opt_pkg_spec $opt_feat $opt_mani $opt_lock --target -i --invert --prefix --no-dedupe --duplicates -d --charset -f --format -e --edges"
 	local opt__uninstall="$opt_common $opt_lock $opt_pkg --bin --root"
 	local opt__update="$opt_common $opt_mani $opt_lock $opt_pkg --aggressive --precise --dry-run"
 	local opt__vendor="$opt_common $opt_mani $opt_lock $opt_sync --no-delete --respect-source-config --versioned-dirs"
@@ -155,9 +155,7 @@ complete -F _cargo cargo
 __cargo_commands=$(cargo --list 2>/dev/null | awk 'NR>1 {print $1}')
 
 _locate_manifest(){
-	local manifest=`cargo locate-project 2>/dev/null`
-	# regexp-replace manifest '\{"root":"|"\}' ''
-	echo ${manifest:9:${#manifest}-11}
+	cargo locate-project --message-format plain 2>/dev/null
 }
 
 # Extracts the values of "name" from the array given in $1 and shows them as

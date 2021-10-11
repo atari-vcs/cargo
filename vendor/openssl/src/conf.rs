@@ -1,8 +1,7 @@
 //! Interface for processing OpenSSL configuration files.
-use ffi;
 
-use cvt_p;
-use error::ErrorStack;
+use crate::cvt_p;
+use crate::error::ErrorStack;
 
 pub struct ConfMethod(*mut ffi::CONF_METHOD);
 
@@ -18,6 +17,10 @@ impl ConfMethod {
     }
 
     /// Construct from raw pointer.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the pointer is valid.
     pub unsafe fn from_ptr(ptr: *mut ffi::CONF_METHOD) -> ConfMethod {
         ConfMethod(ptr)
     }

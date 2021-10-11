@@ -1,0 +1,13 @@
+Index: once-cell/Cargo.toml
+===================================================================
+--- once-cell.orig/Cargo.toml
++++ once-cell/Cargo.toml
+@@ -54,7 +54,7 @@ required-features = ["std"]
+ name = "test_synchronization"
+ required-features = ["std"]
+ [dependencies.parking_lot]
+-version = "0.11"
++version = "0.10"
+ optional = true
+ default_features = false
+ [dev-dependencies.crossbeam-utils]

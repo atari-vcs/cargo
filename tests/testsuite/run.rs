@@ -1,7 +1,7 @@
 //! Tests for the `cargo run` command.
 
-use cargo::util::paths::dylib_path_envvar;
 use cargo_test_support::{basic_bin_manifest, basic_lib_manifest, project, Project};
+use cargo_util::paths::dylib_path_envvar;
 
 #[cargo_test]
 fn simple() {
@@ -50,9 +50,9 @@ fn quiet_and_verbose_config() {
         .file(
             ".cargo/config",
             r#"
-            [term]
-            verbose = true
-        "#,
+                [term]
+                verbose = true
+            "#,
         )
         .file("src/main.rs", r#"fn main() { println!("hello"); }"#)
         .build();
@@ -66,11 +66,11 @@ fn simple_with_args() {
         .file(
             "src/main.rs",
             r#"
-            fn main() {
-                assert_eq!(std::env::args().nth(1).unwrap(), "hello");
-                assert_eq!(std::env::args().nth(2).unwrap(), "world");
-            }
-        "#,
+                fn main() {
+                    assert_eq!(std::env::args().nth(1).unwrap(), "hello");
+                    assert_eq!(std::env::args().nth(2).unwrap(), "world");
+                }
+            "#,
         )
         .build();
 
@@ -86,14 +86,14 @@ fn simple_with_non_utf8_args() {
         .file(
             "src/main.rs",
             r#"
-            use std::ffi::OsStr;
-            use std::os::unix::ffi::OsStrExt;
+                use std::ffi::OsStr;
+                use std::os::unix::ffi::OsStrExt;
 
-            fn main() {
-                assert_eq!(std::env::args_os().nth(1).unwrap(), OsStr::from_bytes(b"hello"));
-                assert_eq!(std::env::args_os().nth(2).unwrap(), OsStr::from_bytes(b"ab\xffcd"));
-            }
-        "#,
+                fn main() {
+                    assert_eq!(std::env::args_os().nth(1).unwrap(), OsStr::from_bytes(b"hello"));
+                    assert_eq!(std::env::args_os().nth(2).unwrap(), OsStr::from_bytes(b"ab\xffcd"));
+                }
+            "#,
         )
         .build();
 
@@ -118,7 +118,7 @@ fn exit_code() {
     );
     if !cfg!(unix) {
         output.push_str(
-            "[ERROR] process didn't exit successfully: `target[..]foo[..]` (exit code: 2)",
+            "[ERROR] process didn't exit successfully: `target[..]foo[..]` (exit [..]: 2)",
         );
     }
     p.cargo("run").with_status(2).with_stderr(output).run();
@@ -140,7 +140,7 @@ fn exit_code_verbose() {
     );
     if !cfg!(unix) {
         output.push_str(
-            "[ERROR] process didn't exit successfully: `target[..]foo[..]` (exit code: 2)",
+            "[ERROR] process didn't exit successfully: `target[..]foo[..]` (exit [..]: 2)",
         );
     }
 
@@ -187,18 +187,18 @@ fn specify_name() {
         .file(
             "src/bin/a.rs",
             r#"
-            #[allow(unused_extern_crates)]
-            extern crate foo;
-            fn main() { println!("hello a.rs"); }
-        "#,
+                #[allow(unused_extern_crates)]
+                extern crate foo;
+                fn main() { println!("hello a.rs"); }
+            "#,
         )
         .file(
             "src/bin/b.rs",
             r#"
-            #[allow(unused_extern_crates)]
-            extern crate foo;
-            fn main() { println!("hello b.rs"); }
-        "#,
+                #[allow(unused_extern_crates)]
+                extern crate foo;
+                fn main() { println!("hello b.rs"); }
+            "#,
         )
         .build();
 
@@ -232,12 +232,12 @@ fn specify_default_run() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            default-run = "a"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                default-run = "a"
+            "#,
         )
         .file("src/lib.rs", "")
         .file("src/bin/a.rs", r#"fn main() { println!("hello A"); }"#)
@@ -255,12 +255,12 @@ fn bogus_default_run() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            default-run = "b"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                default-run = "b"
+            "#,
         )
         .file("src/lib.rs", "")
         .file("src/bin/a.rs", r#"fn main() { println!("hello A"); }"#)
@@ -275,7 +275,7 @@ fn bogus_default_run() {
 Caused by:
   default-run target `b` not found
 
-<tab>Did you mean `a`?
+  <tab>Did you mean `a`?
 ",
         )
         .run();
@@ -306,14 +306,14 @@ fn run_library_example() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            [[example]]
-            name = "bar"
-            crate_type = ["lib"]
-        "#,
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                [[example]]
+                name = "bar"
+                crate_type = ["lib"]
+            "#,
         )
         .file("src/lib.rs", "")
         .file("examples/bar.rs", "fn foo() {}")
@@ -331,13 +331,13 @@ fn run_bin_example() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            [[example]]
-            name = "bar"
-            crate_type = ["bin"]
-        "#,
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                [[example]]
+                name = "bar"
+                crate_type = ["bin"]
+            "#,
         )
         .file("src/lib.rs", "")
         .file("examples/bar.rs", r#"fn main() { println!("example"); }"#)
@@ -502,9 +502,9 @@ fn run_with_filename() {
         .file(
             "src/bin/a.rs",
             r#"
-            extern crate foo;
-            fn main() { println!("hello a.rs"); }
-        "#,
+                extern crate foo;
+                fn main() { println!("hello a.rs"); }
+            "#,
         )
         .file("examples/a.rs", r#"fn main() { println!("example"); }"#)
         .build();
@@ -586,43 +586,43 @@ fn example_with_release_flag() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies.bar]
-            version = "*"
-            path = "bar"
-        "#,
+                [dependencies.bar]
+                version = "*"
+                path = "bar"
+            "#,
         )
         .file(
             "examples/a.rs",
             r#"
-            extern crate bar;
+                extern crate bar;
 
-            fn main() {
-                if cfg!(debug_assertions) {
-                    println!("slow1")
-                } else {
-                    println!("fast1")
+                fn main() {
+                    if cfg!(debug_assertions) {
+                        println!("slow1")
+                    } else {
+                        println!("fast1")
+                    }
+                    bar::baz();
                 }
-                bar::baz();
-            }
-        "#,
+            "#,
         )
         .file("bar/Cargo.toml", &basic_lib_manifest("bar"))
         .file(
             "bar/src/bar.rs",
             r#"
-            pub fn baz() {
-                if cfg!(debug_assertions) {
-                    println!("slow2")
-                } else {
-                    println!("fast2")
+                pub fn baz() {
+                    if cfg!(debug_assertions) {
+                        println!("slow2")
+                    } else {
+                        println!("fast2")
+                    }
                 }
-            }
-        "#,
+            "#,
         )
         .build();
 
@@ -632,14 +632,14 @@ fn example_with_release_flag() {
 [COMPILING] bar v0.5.0 ([CWD]/bar)
 [RUNNING] `rustc --crate-name bar bar/src/bar.rs [..]--crate-type lib \
         --emit=[..]link \
-        -C opt-level=3 \
+        -C opt-level=3[..]\
         -C metadata=[..] \
         --out-dir [CWD]/target/release/deps \
         -L dependency=[CWD]/target/release/deps`
 [COMPILING] foo v0.0.1 ([CWD])
 [RUNNING] `rustc --crate-name a examples/a.rs [..]--crate-type bin \
         --emit=[..]link \
-        -C opt-level=3 \
+        -C opt-level=3[..]\
         -C metadata=[..] \
         --out-dir [CWD]/target/release/examples \
         -L dependency=[CWD]/target/release/deps \
@@ -660,14 +660,14 @@ fast2",
             "\
 [COMPILING] bar v0.5.0 ([CWD]/bar)
 [RUNNING] `rustc --crate-name bar bar/src/bar.rs [..]--crate-type lib \
-        --emit=[..]link \
+        --emit=[..]link[..]\
         -C debuginfo=2 \
         -C metadata=[..] \
         --out-dir [CWD]/target/debug/deps \
         -L dependency=[CWD]/target/debug/deps`
 [COMPILING] foo v0.0.1 ([CWD])
 [RUNNING] `rustc --crate-name a examples/a.rs [..]--crate-type bin \
-        --emit=[..]link \
+        --emit=[..]link[..]\
         -C debuginfo=2 \
         -C metadata=[..] \
         --out-dir [CWD]/target/debug/examples \
@@ -691,14 +691,14 @@ fn run_dylib_dep() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies.bar]
-            path = "bar"
-        "#,
+                [dependencies.bar]
+                path = "bar"
+            "#,
         )
         .file(
             "src/main.rs",
@@ -707,15 +707,15 @@ fn run_dylib_dep() {
         .file(
             "bar/Cargo.toml",
             r#"
-            [package]
-            name = "bar"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "bar"
+                version = "0.0.1"
+                authors = []
 
-            [lib]
-            name = "bar"
-            crate-type = ["dylib"]
-        "#,
+                [lib]
+                name = "bar"
+                crate-type = ["dylib"]
+            "#,
         )
         .file("bar/src/lib.rs", "pub fn bar() {}")
         .build();
@@ -729,8 +729,8 @@ fn release_works() {
         .file(
             "src/main.rs",
             r#"
-            fn main() { if cfg!(debug_assertions) { panic!() } }
-        "#,
+                fn main() { if cfg!(debug_assertions) { panic!() } }
+            "#,
         )
         .build();
 
@@ -752,14 +752,14 @@ fn run_bin_different_name() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [[bin]]
-            name = "bar"
-        "#,
+                [[bin]]
+                name = "bar"
+            "#,
         )
         .file("src/bar.rs", "fn main() {}")
         .build();
@@ -773,14 +773,14 @@ fn dashes_are_forwarded() {
         .file(
             "src/bin/bar.rs",
             r#"
-            fn main() {
-                let s: Vec<String> = std::env::args().collect();
-                assert_eq!(s[1], "--");
-                assert_eq!(s[2], "a");
-                assert_eq!(s[3], "--");
-                assert_eq!(s[4], "b");
-            }
-        "#,
+                fn main() {
+                    let s: Vec<String> = std::env::args().collect();
+                    assert_eq!(s[1], "--");
+                    assert_eq!(s[2], "a");
+                    assert_eq!(s[3], "--");
+                    assert_eq!(s[4], "b");
+                }
+            "#,
         )
         .build();
 
@@ -822,22 +822,22 @@ fn run_with_library_paths() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            build = "build.rs"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file(
             "build.rs",
             &format!(
                 r##"
-            fn main() {{
-                println!(r#"cargo:rustc-link-search=native={}"#);
-                println!(r#"cargo:rustc-link-search={}"#);
-            }}
-        "##,
+                    fn main() {{
+                        println!(r#"cargo:rustc-link-search=native={}"#);
+                        println!(r#"cargo:rustc-link-search={}"#);
+                    }}
+                "##,
                 dir1.display(),
                 dir2.display()
             ),
@@ -846,13 +846,14 @@ fn run_with_library_paths() {
             "src/main.rs",
             &format!(
                 r##"
-            fn main() {{
-                let search_path = std::env::var_os("{}").unwrap();
-                let paths = std::env::split_paths(&search_path).collect::<Vec<_>>();
-                assert!(paths.contains(&r#"{}"#.into()));
-                assert!(paths.contains(&r#"{}"#.into()));
-            }}
-        "##,
+                    fn main() {{
+                        let search_path = std::env::var_os("{}").unwrap();
+                        let paths = std::env::split_paths(&search_path).collect::<Vec<_>>();
+                        println!("{{:#?}}", paths);
+                        assert!(paths.contains(&r#"{}"#.into()));
+                        assert!(paths.contains(&r#"{}"#.into()));
+                    }}
+                "##,
                 dylib_path_envvar(),
                 dir1.display(),
                 dir2.display()
@@ -880,23 +881,23 @@ fn library_paths_sorted_alphabetically() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            build = "build.rs"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                build = "build.rs"
+            "#,
         )
         .file(
             "build.rs",
             &format!(
                 r##"
-            fn main() {{
-                println!(r#"cargo:rustc-link-search=native={}"#);
-                println!(r#"cargo:rustc-link-search=native={}"#);
-                println!(r#"cargo:rustc-link-search=native={}"#);
-            }}
-        "##,
+                    fn main() {{
+                        println!(r#"cargo:rustc-link-search=native={}"#);
+                        println!(r#"cargo:rustc-link-search=native={}"#);
+                        println!(r#"cargo:rustc-link-search=native={}"#);
+                    }}
+                "##,
                 dir1.display(),
                 dir2.display(),
                 dir3.display()
@@ -906,15 +907,15 @@ fn library_paths_sorted_alphabetically() {
             "src/main.rs",
             &format!(
                 r##"
-            fn main() {{
-                let search_path = std::env::var_os("{}").unwrap();
-                let paths = std::env::split_paths(&search_path).collect::<Vec<_>>();
-                // ASCII case-sensitive sort
-                assert_eq!("BBBBBBB", paths[0].file_name().unwrap().to_string_lossy());
-                assert_eq!("aaaaaaa", paths[1].file_name().unwrap().to_string_lossy());
-                assert_eq!("zzzzzzz", paths[2].file_name().unwrap().to_string_lossy());
-            }}
-        "##,
+                    fn main() {{
+                        let search_path = std::env::var_os("{}").unwrap();
+                        let paths = std::env::split_paths(&search_path).collect::<Vec<_>>();
+                        // ASCII case-sensitive sort
+                        assert_eq!("BBBBBBB", paths[0].file_name().unwrap().to_string_lossy());
+                        assert_eq!("aaaaaaa", paths[1].file_name().unwrap().to_string_lossy());
+                        assert_eq!("zzzzzzz", paths[2].file_name().unwrap().to_string_lossy());
+                    }}
+                "##,
                 dylib_path_envvar()
             ),
         )
@@ -943,21 +944,21 @@ fn run_multiple_packages() {
         .file(
             "foo/Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [workspace]
+                [workspace]
 
-            [dependencies]
-            d1 = { path = "d1" }
-            d2 = { path = "d2" }
-            d3 = { path = "../d3" } # outside of the workspace
+                [dependencies]
+                d1 = { path = "d1" }
+                d2 = { path = "d2" }
+                d3 = { path = "../d3" } # outside of the workspace
 
-            [[bin]]
-            name = "foo"
-        "#,
+                [[bin]]
+                name = "foo"
+            "#,
         )
         .file("foo/src/foo.rs", "fn main() { println!(\"foo\"); }")
         .file("foo/d1/Cargo.toml", &basic_bin_manifest("d1"))
@@ -995,7 +996,16 @@ fn run_multiple_packages() {
         .arg("-p")
         .arg("d3")
         .with_status(101)
-        .with_stderr_contains("[ERROR] package `d3` is not a member of the workspace")
+        .with_stderr_contains("[ERROR] package(s) `d3` not found in workspace [..]")
+        .run();
+
+    cargo()
+        .arg("-p")
+        .arg("d*")
+        .with_status(101)
+        .with_stderr_contains(
+            "[ERROR] `cargo run` does not support glob pattern `d*` on package selection",
+        )
         .run();
 }
 
@@ -1005,11 +1015,11 @@ fn explicit_bin_with_args() {
         .file(
             "src/main.rs",
             r#"
-            fn main() {
-                assert_eq!(std::env::args().nth(1).unwrap(), "hello");
-                assert_eq!(std::env::args().nth(2).unwrap(), "world");
-            }
-        "#,
+                fn main() {
+                    assert_eq!(std::env::args().nth(1).unwrap(), "hello");
+                    assert_eq!(std::env::args().nth(2).unwrap(), "world");
+                }
+            "#,
         )
         .build();
 
@@ -1022,9 +1032,9 @@ fn run_workspace() {
         .file(
             "Cargo.toml",
             r#"
-            [workspace]
-            members = ["a", "b"]
-        "#,
+                [workspace]
+                members = ["a", "b"]
+            "#,
         )
         .file("a/Cargo.toml", &basic_bin_manifest("a"))
         .file("a/src/main.rs", r#"fn main() {println!("run-a");}"#)
@@ -1049,18 +1059,18 @@ fn default_run_workspace() {
         .file(
             "Cargo.toml",
             r#"
-            [workspace]
-            members = ["a", "b"]
-        "#,
+                [workspace]
+                members = ["a", "b"]
+            "#,
         )
         .file(
             "a/Cargo.toml",
             r#"
-            [project]
-            name = "a"
-            version = "0.0.1"
-            default-run = "a"
-        "#,
+                [project]
+                name = "a"
+                version = "0.0.1"
+                default-run = "a"
+            "#,
         )
         .file("a/src/main.rs", r#"fn main() {println!("run-a");}"#)
         .file("b/Cargo.toml", &basic_bin_manifest("b"))
@@ -1131,11 +1141,11 @@ fn run_link_system_path_macos() {
             "build.rs",
             &format!(
                 r#"
-            fn main() {{
-                println!("cargo:rustc-link-lib=foo");
-                println!("cargo:rustc-link-search={}");
-            }}
-            "#,
+                fn main() {{
+                    println!("cargo:rustc-link-lib=foo");
+                    println!("cargo:rustc-link-search={}");
+                }}
+                "#,
                 p.target_debug_dir().display()
             ),
         )
