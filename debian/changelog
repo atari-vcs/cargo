@@ -1,3 +1,9 @@
+cargo (0.56.0-0.1+atari2) atari; urgency=medium
+
+  * Bump minimal rust version
+
+ -- Sjoerd Simons <sjoerd@collabora.com>  Tue, 12 Oct 2021 10:44:58 +0200
+
 cargo (0.56.0-0.1+atari1) atari; urgency=medium
 
   * WIP snapshot of new upstream cargo
