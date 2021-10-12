@@ -1,16 +1,16 @@
 #![warn(rust_2018_idioms)] // while we're getting used to 2018
-#![allow(clippy::redundant_closure)] // there's a false positive
+#![allow(clippy::all)]
 #![warn(clippy::needless_borrow)]
 #![warn(clippy::redundant_clone)]
 
+use cargo::core::shell::Shell;
+use cargo::util::CliError;
+use cargo::util::{self, closest_msg, command_prelude, CargoResult, CliResult, Config};
+use cargo_util::{ProcessBuilder, ProcessError};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-
-use cargo::core::shell::Shell;
-use cargo::util::{self, closest_msg, command_prelude, CargoResult, CliResult, Config};
-use cargo::util::{CliError, ProcessError};
 
 mod cli;
 mod commands;
@@ -22,7 +22,6 @@ fn main() {
     pretty_env_logger::init_custom_env("CARGO_LOG");
     #[cfg(not(feature = "pretty-env-logger"))]
     env_logger::init_from_env("CARGO_LOG");
-    cargo::core::maybe_allow_nightly_features();
 
     let mut config = match Config::default() {
         Ok(cfg) => cfg,
@@ -32,7 +31,7 @@ fn main() {
         }
     };
 
-    let result = match cargo::ops::fix_maybe_exec_rustc() {
+    let result = match cargo::ops::fix_maybe_exec_rustc(&config) {
         Ok(true) => Ok(()),
         Ok(false) => {
             let _token = cargo::util::job::setup();
@@ -45,6 +44,22 @@ fn main() {
         Err(e) => cargo::exit_with_error(e, &mut *config.shell()),
         Ok(()) => {}
     }
+}
+
+/// Table for defining the aliases which come builtin in `Cargo`.
+/// The contents are structured as: `(alias, aliased_command, description)`.
+const BUILTIN_ALIASES: [(&str, &str, &str); 5] = [
+    ("b", "build", "alias: build"),
+    ("c", "check", "alias: check"),
+    ("d", "doc", "alias: doc"),
+    ("r", "run", "alias: run"),
+    ("t", "test", "alias: test"),
+];
+
+/// Function which contains the list of all of the builtin aliases and it's
+/// corresponding execs represented as &str.
+fn builtin_aliases_execs(cmd: &str) -> Option<&(&str, &str, &str)> {
+    BUILTIN_ALIASES.iter().find(|alias| alias.0 == cmd)
 }
 
 fn aliased_command(config: &Config, command: &str) -> CargoResult<Option<Vec<String>>> {
@@ -60,12 +75,9 @@ fn aliased_command(config: &Config, command: &str) -> CargoResult<Option<Vec<Str
         Ok(None) => None,
         Err(_) => config.get::<Option<Vec<String>>>(&alias_name)?,
     };
-    let result = user_alias.or_else(|| match command {
-        "b" => Some(vec!["build".to_string()]),
-        "c" => Some(vec!["check".to_string()]),
-        "r" => Some(vec!["run".to_string()]),
-        "t" => Some(vec!["test".to_string()]),
-        _ => None,
+
+    let result = user_alias.or_else(|| {
+        builtin_aliases_execs(command).map(|command_str| vec![command_str.1.to_string()])
     });
     Ok(result)
 }
@@ -106,6 +118,15 @@ fn list_commands(config: &Config) -> BTreeSet<CommandInfo> {
         });
     }
 
+    // Add the builtin_aliases and them descriptions to the
+    // `commands` `BTreeSet`.
+    for command in &BUILTIN_ALIASES {
+        commands.insert(CommandInfo::BuiltIn {
+            name: command.0.to_string(),
+            about: Some(command.2.to_string()),
+        });
+    }
+
     commands
 }
 
@@ -139,7 +160,7 @@ fn execute_external_subcommand(config: &Config, cmd: &str, args: &[&str]) -> Cli
     };
 
     let cargo_exe = config.cargo_exe()?;
-    let err = match util::process(&command)
+    let err = match ProcessBuilder::new(&command)
         .env(cargo::CARGO_ENV, cargo_exe)
         .args(args)
         .exec_replace()
@@ -149,7 +170,7 @@ fn execute_external_subcommand(config: &Config, cmd: &str, args: &[&str]) -> Cli
     };
 
     if let Some(perr) = err.downcast_ref::<ProcessError>() {
-        if let Some(code) = perr.exit.as_ref().and_then(|c| c.code()) {
+        if let Some(code) = perr.code {
             return Err(CliError::code(code));
         }
     }
@@ -165,9 +186,7 @@ fn is_executable<P: AsRef<Path>>(path: P) -> bool {
 }
 #[cfg(windows)]
 fn is_executable<P: AsRef<Path>>(path: P) -> bool {
-    fs::metadata(path)
-        .map(|metadata| metadata.is_file())
-        .unwrap_or(false)
+    path.as_ref().is_file()
 }
 
 fn search_directories(config: &Config) -> Vec<PathBuf> {

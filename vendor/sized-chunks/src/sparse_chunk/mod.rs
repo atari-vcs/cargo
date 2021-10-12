@@ -6,14 +6,16 @@
 //!
 //! See [`SparseChunk`](struct.SparseChunk.html)
 
+use core::fmt::{Debug, Error, Formatter};
+use core::iter::FromIterator;
+use core::mem::{self, MaybeUninit};
+use core::ops::Index;
+use core::ops::IndexMut;
+use core::ptr;
+use core::slice::{from_raw_parts, from_raw_parts_mut};
+
+#[cfg(feature = "std")]
 use std::collections::{BTreeMap, HashMap};
-use std::fmt::{Debug, Error, Formatter};
-use std::iter::FromIterator;
-use std::mem::{self, MaybeUninit};
-use std::ops::Index;
-use std::ops::IndexMut;
-use std::ptr;
-use std::slice::{from_raw_parts, from_raw_parts_mut};
 
 use typenum::U64;
 
@@ -200,7 +202,7 @@ where
             return None;
         }
         if self.map.get(index) {
-            Some(&self.values()[index])
+            Some(unsafe { self.get_unchecked(index) })
         } else {
             None
         }
@@ -212,10 +214,30 @@ where
             return None;
         }
         if self.map.get(index) {
-            Some(&mut self.values_mut()[index])
+            Some(unsafe { self.get_unchecked_mut(index) })
         } else {
             None
         }
+    }
+
+    /// Get an unchecked reference to the value at a given index.
+    ///
+    /// # Safety
+    ///
+    /// Uninhabited indices contain uninitialised data, so make sure you validate
+    /// the index before using this method.
+    pub unsafe fn get_unchecked(&self, index: usize) -> &A {
+        self.values().get_unchecked(index)
+    }
+
+    /// Get an unchecked mutable reference to the value at a given index.
+    ///
+    /// # Safety
+    ///
+    /// Uninhabited indices contain uninitialised data, so make sure you validate
+    /// the index before using this method.
+    pub unsafe fn get_unchecked_mut(&mut self, index: usize) -> &mut A {
+        self.values_mut().get_unchecked_mut(index)
     }
 
     /// Make an iterator over the indices which contain values.
@@ -355,6 +377,7 @@ where
     }
 }
 
+#[cfg(feature = "std")]
 impl<A, N> PartialEq<BTreeMap<usize, A>> for SparseChunk<A, N>
 where
     A: PartialEq,
@@ -373,6 +396,7 @@ where
     }
 }
 
+#[cfg(feature = "std")]
 impl<A, N> PartialEq<HashMap<usize, A>> for SparseChunk<A, N>
 where
     A: PartialEq,

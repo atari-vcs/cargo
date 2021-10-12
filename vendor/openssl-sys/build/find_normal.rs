@@ -9,46 +9,67 @@ pub fn get_openssl(target: &str) -> (PathBuf, PathBuf) {
     let lib_dir = env("OPENSSL_LIB_DIR").map(PathBuf::from);
     let include_dir = env("OPENSSL_INCLUDE_DIR").map(PathBuf::from);
 
-    if lib_dir.is_none() || include_dir.is_none() {
-        let openssl_dir = env("OPENSSL_DIR").unwrap_or_else(|| find_openssl_dir(&target));
-        let openssl_dir = Path::new(&openssl_dir);
-        let lib_dir = lib_dir.unwrap_or_else(|| openssl_dir.join("lib"));
-        let include_dir = include_dir.unwrap_or_else(|| openssl_dir.join("include"));
-        (lib_dir, include_dir)
+    match (lib_dir, include_dir) {
+        (Some(lib_dir), Some(include_dir)) => (lib_dir, include_dir),
+        (lib_dir, include_dir) => {
+            let openssl_dir = env("OPENSSL_DIR").unwrap_or_else(|| find_openssl_dir(target));
+            let openssl_dir = Path::new(&openssl_dir);
+            let lib_dir = lib_dir.unwrap_or_else(|| openssl_dir.join("lib"));
+            let include_dir = include_dir.unwrap_or_else(|| openssl_dir.join("include"));
+            (lib_dir, include_dir)
+        }
+    }
+}
+
+fn resolve_with_wellknown_homebrew_location(dir: &str) -> Option<PathBuf> {
+    // Check up default aarch 64 Homebrew installation location first
+    // for quick resolution if possible.
+    //  `pkg-config` on brew doesn't necessarily contain settings for openssl apparently.
+    let homebrew = Path::new(dir).join("opt/openssl@1.1");
+    if homebrew.exists() {
+        return Some(homebrew);
+    }
+
+    // Calling `brew --prefix <package>` command usually slow and
+    // takes seconds, and will be used only as a last resort.
+    let output = execute_command_and_get_output("brew", &["--prefix", "openssl@1.1"]);
+    if let Some(ref output) = output {
+        let homebrew = Path::new(&output);
+        if homebrew.exists() {
+            return Some(homebrew.to_path_buf());
+        }
+    }
+
+    None
+}
+
+fn resolve_with_wellknown_location(dir: &str) -> Option<PathBuf> {
+    let root_dir = Path::new(dir);
+    let include_openssl = root_dir.join("include/openssl");
+    if include_openssl.exists() {
+        Some(root_dir.to_path_buf())
     } else {
-        (lib_dir.unwrap(), include_dir.unwrap())
+        None
     }
 }
 
 fn find_openssl_dir(target: &str) -> OsString {
     let host = env::var("HOST").unwrap();
 
-    if host == target && target.contains("apple-darwin") {
-        // Check up default Homebrew installation location first
-        // for quick resolution if possible.
-        let homebrew = Path::new("/usr/local/opt/openssl@1.1");
-        if homebrew.exists() {
-            return homebrew.to_path_buf().into();
-        }
-        let homebrew = Path::new("/usr/local/opt/openssl");
-        if homebrew.exists() {
-            return homebrew.to_path_buf().into();
-        }
-        // Calling `brew --prefix <package>` command usually slow and
-        // takes seconds, and will be used only as a last resort.
-        let output = execute_command_and_get_output("brew", &["--prefix", "openssl@1.1"]);
-        if let Some(ref output) = output {
-            let homebrew = Path::new(&output);
-            if homebrew.exists() {
-                return homebrew.to_path_buf().into();
-            }
-        }
-        let output = execute_command_and_get_output("brew", &["--prefix", "openssl"]);
-        if let Some(ref output) = output {
-            let homebrew = Path::new(&output);
-            if homebrew.exists() {
-                return homebrew.to_path_buf().into();
-            }
+    if host == target && target.ends_with("-apple-darwin") {
+        let homebrew_dir = match target {
+            "aarch64-apple-darwin" => "/opt/homebrew",
+            _ => "/usr/local",
+        };
+
+        if let Some(dir) = resolve_with_wellknown_homebrew_location(homebrew_dir) {
+            return dir.into();
+        } else if let Some(dir) = resolve_with_wellknown_location("/opt/pkg") {
+            // pkgsrc
+            return dir.into();
+        } else if let Some(dir) = resolve_with_wellknown_location("/opt/local") {
+            // MacPorts
+            return dir.into();
         }
     }
 
@@ -93,39 +114,37 @@ openssl-sys = {}
     if host.contains("apple-darwin") && target.contains("apple-darwin") {
         let system = Path::new("/usr/lib/libssl.0.9.8.dylib");
         if system.exists() {
-            msg.push_str(&format!(
+            msg.push_str(
                 "
 
-It looks like you're compiling on macOS, where the system contains a version of
-OpenSSL 0.9.8. This crate no longer supports OpenSSL 0.9.8.
+openssl-sys crate build failed: no supported version of OpenSSL found.
 
-As a consumer of this crate, you can fix this error by using Homebrew to
-install the `openssl` package, or as a maintainer you can use the openssl-sys
-0.7 crate for support with OpenSSL 0.9.8.
+Ways to fix it:
+- Use the `vendored` feature of openssl-sys crate to build OpenSSL from source.
+- Use Homebrew to install the `openssl` package.
 
-Unfortunately though the compile cannot continue, so aborting.
-
-"
-            ));
+",
+            );
         }
     }
 
-    if host.contains("unknown-linux") && target.contains("unknown-linux-gnu") {
-        if Command::new("pkg-config").output().is_err() {
-            msg.push_str(&format!(
-                "
+    if host.contains("unknown-linux")
+        && target.contains("unknown-linux-gnu")
+        && Command::new("pkg-config").output().is_err()
+    {
+        msg.push_str(
+            "
 It looks like you're compiling on Linux and also targeting Linux. Currently this
 requires the `pkg-config` utility to find OpenSSL but unfortunately `pkg-config`
 could not be found. If you have OpenSSL installed you can likely fix this by
 installing `pkg-config`.
 
-"
-            ));
-        }
+",
+        );
     }
 
     if host.contains("windows") && target.contains("windows-gnu") {
-        msg.push_str(&format!(
+        msg.push_str(
             "
 It looks like you're compiling for MinGW but you may not have either OpenSSL or
 pkg-config installed. You can install these two dependencies with:
@@ -134,12 +153,12 @@ pacman -S openssl-devel pkg-config
 
 and try building this crate again.
 
-"
-        ));
+",
+        );
     }
 
     if host.contains("windows") && target.contains("windows-msvc") {
-        msg.push_str(&format!(
+        msg.push_str(
             "
 It looks like you're compiling for MSVC but we couldn't detect an OpenSSL
 installation. If there isn't one installed then you can try the rust-openssl
@@ -148,11 +167,11 @@ OpenSSL:
 
 https://github.com/sfackler/rust-openssl#windows
 
-"
-        ));
+",
+        );
     }
 
-    panic!(msg);
+    panic!("{}", msg);
 }
 
 /// Attempt to find OpenSSL through pkg-config.
@@ -207,10 +226,7 @@ fn try_vcpkg() {
         .find_package("openssl");
 
     if let Err(e) = lib {
-        println!(
-            "note: vcpkg did not find openssl: {}",
-            e
-        );
+        println!("note: vcpkg did not find openssl: {}", e);
         return;
     }
 
@@ -237,5 +253,6 @@ fn execute_command_and_get_output(cmd: &str, args: &[&str]) -> Option<String> {
             }
         }
     }
-    return None;
+
+    None
 }

@@ -1,4 +1,4 @@
-use super::{Config, StringList, Value};
+use super::{Config, UnmergedStringList, Value};
 use serde::{de::Error, Deserialize};
 use std::path::PathBuf;
 
@@ -10,6 +10,11 @@ use std::path::PathBuf;
 pub struct ConfigRelativePath(Value<String>);
 
 impl ConfigRelativePath {
+    /// Returns the underlying value.
+    pub fn value(&self) -> &Value<String> {
+        &self.0
+    }
+
     /// Returns the raw underlying configuration value for this key.
     pub fn raw_value(&self) -> &str {
         &self.0.val
@@ -29,8 +34,8 @@ impl ConfigRelativePath {
     /// Values which don't look like a filesystem path (don't contain `/` or
     /// `\`) will be returned as-is, and everything else will fall through to an
     /// absolute path.
-    pub fn resolve_program(self, config: &Config) -> PathBuf {
-        config.string_to_path(self.0.val, &self.0.definition)
+    pub fn resolve_program(&self, config: &Config) -> PathBuf {
+        config.string_to_path(&self.0.val, &self.0.definition)
     }
 }
 
@@ -55,8 +60,8 @@ impl<'de> serde::Deserialize<'de> for PathAndArgs {
     where
         D: serde::Deserializer<'de>,
     {
-        let vsl = Value::<StringList>::deserialize(deserializer)?;
-        let mut strings = vsl.val.list;
+        let vsl = Value::<UnmergedStringList>::deserialize(deserializer)?;
+        let mut strings = vsl.val.0;
         if strings.is_empty() {
             return Err(D::Error::invalid_length(0, &"at least one element"));
         }

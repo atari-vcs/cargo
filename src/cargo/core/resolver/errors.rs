@@ -2,9 +2,8 @@ use std::fmt;
 
 use crate::core::{Dependency, PackageId, Registry, Summary};
 use crate::util::lev_distance::lev_distance;
-use crate::util::Config;
+use crate::util::{Config, VersionExt};
 use anyhow::Error;
-use semver;
 
 use super::context::Context;
 use super::types::{ConflictMap, ConflictReason};
@@ -109,76 +108,98 @@ pub(super) fn activation_error(
 
         let mut conflicting_activations: Vec<_> = conflicting_activations.iter().collect();
         conflicting_activations.sort_unstable();
-        let (links_errors, mut other_errors): (Vec<_>, Vec<_>) = conflicting_activations
-            .drain(..)
-            .rev()
-            .partition(|&(_, r)| r.is_links());
+        // This is reversed to show the newest versions first. I don't know if there is
+        // a strong reason to do this, but that is how the code previously worked
+        // (see https://github.com/rust-lang/cargo/pull/5037) and I don't feel like changing it.
+        conflicting_activations.reverse();
+        // Flag used for grouping all semver errors together.
+        let mut has_semver = false;
 
-        for &(p, r) in links_errors.iter() {
-            if let ConflictReason::Links(ref link) = *r {
-                msg.push_str("\n\nthe package `");
-                msg.push_str(&*dep.package_name());
-                msg.push_str("` links to the native library `");
-                msg.push_str(link);
-                msg.push_str("`, but it conflicts with a previous package which links to `");
-                msg.push_str(link);
-                msg.push_str("` as well:\n");
+        for (p, r) in &conflicting_activations {
+            match r {
+                ConflictReason::Semver => {
+                    has_semver = true;
+                }
+                ConflictReason::Links(link) => {
+                    msg.push_str("\n\nthe package `");
+                    msg.push_str(&*dep.package_name());
+                    msg.push_str("` links to the native library `");
+                    msg.push_str(link);
+                    msg.push_str("`, but it conflicts with a previous package which links to `");
+                    msg.push_str(link);
+                    msg.push_str("` as well:\n");
+                    msg.push_str(&describe_path(&cx.parents.path_to_bottom(p)));
+                    msg.push_str("\nOnly one package in the dependency graph may specify the same links value. This helps ensure that only one copy of a native library is linked in the final binary. ");
+                    msg.push_str("Try to adjust your dependencies so that only one package uses the links ='");
+                    msg.push_str(&*dep.package_name());
+                    msg.push_str("' value. For more information, see https://doc.rust-lang.org/cargo/reference/resolver.html#links.");
+                }
+                ConflictReason::MissingFeatures(features) => {
+                    msg.push_str("\n\nthe package `");
+                    msg.push_str(&*p.name());
+                    msg.push_str("` depends on `");
+                    msg.push_str(&*dep.package_name());
+                    msg.push_str("`, with features: `");
+                    msg.push_str(features);
+                    msg.push_str("` but `");
+                    msg.push_str(&*dep.package_name());
+                    msg.push_str("` does not have these features.\n");
+                    // p == parent so the full path is redundant.
+                }
+                ConflictReason::RequiredDependencyAsFeature(features) => {
+                    msg.push_str("\n\nthe package `");
+                    msg.push_str(&*p.name());
+                    msg.push_str("` depends on `");
+                    msg.push_str(&*dep.package_name());
+                    msg.push_str("`, with features: `");
+                    msg.push_str(features);
+                    msg.push_str("` but `");
+                    msg.push_str(&*dep.package_name());
+                    msg.push_str("` does not have these features.\n");
+                    msg.push_str(
+                        " It has a required dependency with that name, \
+                         but only optional dependencies can be used as features.\n",
+                    );
+                    // p == parent so the full path is redundant.
+                }
+                ConflictReason::NonImplicitDependencyAsFeature(features) => {
+                    msg.push_str("\n\nthe package `");
+                    msg.push_str(&*p.name());
+                    msg.push_str("` depends on `");
+                    msg.push_str(&*dep.package_name());
+                    msg.push_str("`, with features: `");
+                    msg.push_str(features);
+                    msg.push_str("` but `");
+                    msg.push_str(&*dep.package_name());
+                    msg.push_str("` does not have these features.\n");
+                    msg.push_str(
+                        " It has an optional dependency with that name, \
+                         but but that dependency uses the \"dep:\" \
+                         syntax in the features table, so it does not have an \
+                         implicit feature with that name.\n",
+                    );
+                    // p == parent so the full path is redundant.
+                }
+                ConflictReason::PublicDependency(pkg_id) => {
+                    // TODO: This needs to be implemented.
+                    unimplemented!("pub dep {:?}", pkg_id);
+                }
+                ConflictReason::PubliclyExports(pkg_id) => {
+                    // TODO: This needs to be implemented.
+                    unimplemented!("pub exp {:?}", pkg_id);
+                }
             }
-            msg.push_str(&describe_path(&cx.parents.path_to_bottom(p)));
         }
 
-        let (features_errors, mut other_errors): (Vec<_>, Vec<_>) = other_errors
-            .drain(..)
-            .partition(|&(_, r)| r.is_missing_features());
-
-        for &(p, r) in features_errors.iter() {
-            if let ConflictReason::MissingFeatures(ref features) = *r {
-                msg.push_str("\n\nthe package `");
-                msg.push_str(&*p.name());
-                msg.push_str("` depends on `");
-                msg.push_str(&*dep.package_name());
-                msg.push_str("`, with features: `");
-                msg.push_str(features);
-                msg.push_str("` but `");
-                msg.push_str(&*dep.package_name());
-                msg.push_str("` does not have these features.\n");
+        if has_semver {
+            // Group these errors together.
+            msg.push_str("\n\nall possible versions conflict with previously selected packages.");
+            for (p, r) in &conflicting_activations {
+                if let ConflictReason::Semver = r {
+                    msg.push_str("\n\n  previously selected ");
+                    msg.push_str(&describe_path(&cx.parents.path_to_bottom(p)));
+                }
             }
-            // p == parent so the full path is redundant.
-        }
-
-        let (required_dependency_as_features_errors, other_errors): (Vec<_>, Vec<_>) = other_errors
-            .drain(..)
-            .partition(|&(_, r)| r.is_required_dependency_as_features());
-
-        for &(p, r) in required_dependency_as_features_errors.iter() {
-            if let ConflictReason::RequiredDependencyAsFeatures(ref features) = *r {
-                msg.push_str("\n\nthe package `");
-                msg.push_str(&*p.name());
-                msg.push_str("` depends on `");
-                msg.push_str(&*dep.package_name());
-                msg.push_str("`, with features: `");
-                msg.push_str(features);
-                msg.push_str("` but `");
-                msg.push_str(&*dep.package_name());
-                msg.push_str("` does not have these features.\n");
-                msg.push_str(
-                    " It has a required dependency with that name, \
-                     but only optional dependencies can be used as features.\n",
-                );
-            }
-            // p == parent so the full path is redundant.
-        }
-
-        if !other_errors.is_empty() {
-            msg.push_str(
-                "\n\nall possible versions conflict with \
-                 previously selected packages.",
-            );
-        }
-
-        for &(p, _) in other_errors.iter() {
-            msg.push_str("\n\n  previously selected ");
-            msg.push_str(&describe_path(&cx.parents.path_to_bottom(p)));
         }
 
         msg.push_str("\n\nfailed to select a version for `");
@@ -220,8 +241,8 @@ pub(super) fn activation_error(
             };
 
             let mut msg = format!(
-                "failed to select a version for the requirement `{} = \"{}\"`\n  \
-                 candidate versions found which didn't match: {}\n  \
+                "failed to select a version for the requirement `{} = \"{}\"`\n\
+                 candidate versions found which didn't match: {}\n\
                  location searched: {}\n",
                 dep.package_name(),
                 dep.version_req(),
@@ -255,7 +276,7 @@ pub(super) fn activation_error(
             if let Err(e) = registry.query(&new_dep, &mut |s| candidates.push(s), true) {
                 return to_resolve_err(e);
             };
-            candidates.sort_unstable_by(|a, b| a.name().cmp(&b.name()));
+            candidates.sort_unstable_by_key(|a| a.name());
             candidates.dedup_by(|a, b| a.name() == b.name());
             let mut candidates: Vec<_> = candidates
                 .iter()
@@ -263,13 +284,15 @@ pub(super) fn activation_error(
                 .filter(|&(d, _)| d < 4)
                 .collect();
             candidates.sort_by_key(|o| o.0);
-            let mut msg = format!(
-                "no matching package named `{}` found\n\
-                 location searched: {}\n",
-                dep.package_name(),
-                dep.source_id()
-            );
-            if !candidates.is_empty() {
+            let mut msg: String;
+            if candidates.is_empty() {
+                msg = format!("no matching package named `{}` found\n", dep.package_name());
+            } else {
+                msg = format!(
+                    "no matching package found\nsearched package name: `{}`\n",
+                    dep.package_name()
+                );
+
                 // If dependency package name is equal to the name of the candidate here
                 // it may be a prerelease package which hasn't been specified correctly
                 if dep.package_name() == candidates[0].1.name()
@@ -291,8 +314,9 @@ pub(super) fn activation_error(
                     if candidates.len() > 3 {
                         names.push("...");
                     }
-
-                    msg.push_str("perhaps you meant: ");
+                    // Vertically align first suggestion with missing crate name
+                    // so a typo jumps out at you.
+                    msg.push_str("perhaps you meant:      ");
                     msg.push_str(&names.iter().enumerate().fold(
                         String::default(),
                         |acc, (i, el)| match i {
@@ -302,9 +326,9 @@ pub(super) fn activation_error(
                         },
                     ));
                 }
-
-                msg.push_str("\n");
+                msg.push('\n');
             }
+            msg.push_str(&format!("location searched: {}\n", dep.source_id()));
             msg.push_str("required by ");
             msg.push_str(&describe_path(
                 &cx.parents.path_to_bottom(&parent.package_id()),

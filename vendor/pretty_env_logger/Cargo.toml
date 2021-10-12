@@ -12,7 +12,7 @@
 
 [package]
 name = "pretty_env_logger"
-version = "0.3.1"
+version = "0.4.0"
 authors = ["Sean McArthur <sean@seanmonstar>"]
 include = ["Cargo.toml", "LICENSE-APACHE", "LICENSE-MIT", "src/**/*"]
 description = "a visually pretty env_logger"
@@ -21,11 +21,8 @@ keywords = ["log", "logger", "logging"]
 categories = ["development-tools::debugging"]
 license = "MIT/Apache-2.0"
 repository = "https://github.com/seanmonstar/pretty-env-logger"
-[dependencies.chrono]
-version = "0.4.4"
-
 [dependencies.env_logger]
-version = "0.6.2"
+version = "0.7.0"
 
 [dependencies.log]
 version = "0.4"

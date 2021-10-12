@@ -6,7 +6,7 @@ use std::ptr;
 use std::str;
 
 use crate::util::Binding;
-use crate::{raw, signature, Error, Object, Oid, Signature, Time, Tree};
+use crate::{raw, signature, Buf, Error, IntoCString, Mailmap, Object, Oid, Signature, Time, Tree};
 
 /// A structure to represent a git [commit][1]
 ///
@@ -105,6 +105,20 @@ impl<'repo> Commit<'repo> {
         str::from_utf8(self.raw_header_bytes()).ok()
     }
 
+    /// Get an arbitrary header field.
+    pub fn header_field_bytes<T: IntoCString>(&self, field: T) -> Result<Buf, Error> {
+        let buf = Buf::new();
+        let raw_field = field.into_c_string()?;
+        unsafe {
+            try_call!(raw::git_commit_header_field(
+                buf.raw(),
+                &*self.raw,
+                raw_field
+            ));
+        }
+        Ok(buf)
+    }
+
     /// Get the full raw text of the commit header.
     pub fn raw_header_bytes(&self) -> &[u8] {
         unsafe { crate::opt_bytes(self, raw::git_commit_raw_header(&*self.raw)).unwrap() }
@@ -169,11 +183,39 @@ impl<'repo> Commit<'repo> {
         }
     }
 
+    /// Get the author of this commit, using the mailmap to map names and email
+    /// addresses to canonical real names and email addresses.
+    pub fn author_with_mailmap(&self, mailmap: &Mailmap) -> Result<Signature<'static>, Error> {
+        let mut ret = ptr::null_mut();
+        unsafe {
+            try_call!(raw::git_commit_author_with_mailmap(
+                &mut ret,
+                &*self.raw,
+                &*mailmap.raw()
+            ));
+            Ok(Binding::from_raw(ret))
+        }
+    }
+
     /// Get the committer of this commit.
     pub fn committer(&self) -> Signature<'_> {
         unsafe {
             let ptr = raw::git_commit_committer(&*self.raw);
             signature::from_raw_const(self, ptr)
+        }
+    }
+
+    /// Get the committer of this commit, using the mailmap to map names and email
+    /// addresses to canonical real names and email addresses.
+    pub fn committer_with_mailmap(&self, mailmap: &Mailmap) -> Result<Signature<'static>, Error> {
+        let mut ret = ptr::null_mut();
+        unsafe {
+            try_call!(raw::git_commit_committer_with_mailmap(
+                &mut ret,
+                &*self.raw,
+                &*mailmap.raw()
+            ));
+            Ok(Binding::from_raw(ret))
         }
     }
 
@@ -367,6 +409,11 @@ mod tests {
         commit.tree().unwrap();
         assert_eq!(commit.parents().count(), 0);
 
+        let tree_header_bytes = commit.header_field_bytes("tree").unwrap();
+        assert_eq!(
+            crate::Oid::from_str(tree_header_bytes.as_str().unwrap()).unwrap(),
+            commit.tree_id()
+        );
         assert_eq!(commit.author().name(), Some("name"));
         assert_eq!(commit.author().email(), Some("email"));
         assert_eq!(commit.committer().name(), Some("name"));

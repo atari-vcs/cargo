@@ -49,7 +49,6 @@ try to fix the bug! Originally your manifest will look like:
 [package]
 name = "my-library"
 version = "0.1.0"
-authors = ["..."]
 
 [dependencies]
 uuid = "1.0"
@@ -131,7 +130,6 @@ repository we'll edit our `Cargo.toml` to look like
 [package]
 name = "my-library"
 version = "0.1.0"
-authors = ["..."]
 
 [dependencies]
 uuid = "1.0.1"
@@ -157,7 +155,6 @@ It's also worth noting that `[patch]` applies *transitively*. Let's say you use
 [package]
 name = "my-binary"
 version = "0.1.0"
-authors = ["..."]
 
 [dependencies]
 my-library = { git = 'https://example.com/git/my-library' }
@@ -212,7 +209,6 @@ look at the `my-binary` manifest from above again as well:
 [package]
 name = "my-binary"
 version = "0.1.0"
-authors = ["..."]
 
 [dependencies]
 my-library = { git = 'https://example.com/git/my-library' }
@@ -226,7 +222,7 @@ Note that this will actually resolve to two versions of the `uuid` crate. The
 `my-binary` crate will continue to use the 1.x.y series of the `uuid` crate but
 the `my-library` crate will use the `2.0.0` version of `uuid`. This will allow you
 to gradually roll out breaking changes to a crate through a dependency graph
-without being force to update everything all at once.
+without being forced to update everything all at once.
 
 ### Using `[patch]` with multiple versions
 
@@ -318,8 +314,8 @@ to modify `Cargo.toml` like with the `[patch]` section above. For this use
 case Cargo offers a much more limited version of overrides called **path
 overrides**.
 
-Path overrides are specified through [`.cargo/config`](config.md) instead of
-`Cargo.toml`. Inside of `.cargo/config` you'll specify a key called `paths`:
+Path overrides are specified through [`.cargo/config.toml`](config.md) instead of
+`Cargo.toml`. Inside of `.cargo/config.toml` you'll specify a key called `paths`:
 
 ```toml
 paths = ["/path/to/uuid"]

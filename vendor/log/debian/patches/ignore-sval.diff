@@ -1,32 +1,48 @@
---- a/Cargo.toml	2020-02-21 15:24:20.134369814 -0500
-+++ b/Cargo.toml	2020-02-21 15:24:47.854425168 -0500
+--- a/Cargo.toml
++++ b/Cargo.toml
 @@ -24,7 +24,7 @@
  license = "MIT OR Apache-2.0"
  repository = "https://github.com/rust-lang/log"
  [package.metadata.docs.rs]
--features = ["std", "serde", "kv_unstable_sval"]
-+features = ["std", "serde"]
+-features = ["std", "serde", "kv_unstable_std", "kv_unstable_sval", "kv_unstable_serde"]
++features = ["std", "serde", "kv_unstable_std", "kv_unstable_serde"]
  
  [[test]]
  name = "filters"
-@@ -37,20 +37,11 @@
+@@ -43,10 +43,10 @@
  optional = true
  default-features = false
  
 -[dependencies.sval]
--version = "0.4.2"
+-version = "1.0.0-alpha.5"
 -optional = true
 -default-features = false
++#[dependencies.sval]
++#version = "1.0.0-alpha.5"
++#optional = true
++#default-features = false
+ 
+ [dependencies.value-bag]
+ version = "1.0.0-alpha.6"
+@@ -59,9 +59,9 @@
  [dev-dependencies.serde_test]
  version = "1.0"
  
 -[dev-dependencies.sval]
--version = "0.4.2"
--features = ["test"]
--
- [features]
- kv_unstable = []
--kv_unstable_sval = ["kv_unstable", "sval/fmt"]
+-version = "1.0.0-alpha.5"
+-features = ["derive"]
++#[dev-dependencies.sval]
++#version = "1.0.0-alpha.5"
++#features = ["derive"]
+ 
+ [dev-dependencies.value-bag]
+ version = "1.0.0-alpha.6"
+@@ -71,7 +71,7 @@
+ kv_unstable = ["value-bag"]
+ kv_unstable_serde = ["kv_unstable_std", "value-bag/serde", "serde"]
+ kv_unstable_std = ["std", "kv_unstable", "value-bag/error"]
+-kv_unstable_sval = ["kv_unstable", "value-bag/sval", "sval"]
++kv_unstable_sval = ["kv_unstable"]#, "value-bag/sval", "sval"]
  max_level_debug = []
  max_level_error = []
  max_level_info = []

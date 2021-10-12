@@ -3,8 +3,9 @@ use std::env;
 use std::time::{Duration, Instant};
 
 use crate::core::shell::Verbosity;
-use crate::util::{is_ci, CargoResult, Config};
-
+use crate::util::config::ProgressWhen;
+use crate::util::{CargoResult, Config};
+use cargo_util::is_ci;
 use unicode_width::UnicodeWidthChar;
 
 pub struct Progress<'cfg> {
@@ -28,6 +29,7 @@ struct State<'cfg> {
     done: bool,
     throttle: Throttle,
     last_line: Option<String>,
+    fixed_width: Option<usize>,
 }
 
 struct Format {
@@ -45,22 +47,39 @@ impl<'cfg> Progress<'cfg> {
             Ok(term) => term == "dumb",
             Err(_) => false,
         };
+        let progress_config = cfg.progress_config();
+        match progress_config.when {
+            ProgressWhen::Always => return Progress::new_priv(name, style, cfg),
+            ProgressWhen::Never => return Progress { state: None },
+            ProgressWhen::Auto => {}
+        }
         if cfg.shell().verbosity() == Verbosity::Quiet || dumb || is_ci() {
             return Progress { state: None };
         }
+        Progress::new_priv(name, style, cfg)
+    }
+
+    fn new_priv(name: &str, style: ProgressStyle, cfg: &'cfg Config) -> Progress<'cfg> {
+        let progress_config = cfg.progress_config();
+        let width = progress_config
+            .width
+            .or_else(|| cfg.shell().err_width().progress_max_width());
 
         Progress {
-            state: cfg.shell().err_width().map(|n| State {
+            state: width.map(|n| State {
                 config: cfg,
                 format: Format {
                     style,
                     max_width: n,
-                    max_print: 80,
+                    // 50 gives some space for text after the progress bar,
+                    // even on narrow (e.g. 80 char) terminals.
+                    max_print: 50,
                 },
                 name: name.to_string(),
                 done: false,
                 throttle: Throttle::new(),
                 last_line: None,
+                fixed_width: progress_config.width,
             }),
         }
     }
@@ -77,7 +96,7 @@ impl<'cfg> Progress<'cfg> {
         Self::with_style(name, ProgressStyle::Percentage, cfg)
     }
 
-    pub fn tick(&mut self, cur: usize, max: usize) -> CargoResult<()> {
+    pub fn tick(&mut self, cur: usize, max: usize, msg: &str) -> CargoResult<()> {
         let s = match &mut self.state {
             Some(s) => s,
             None => return Ok(()),
@@ -99,7 +118,7 @@ impl<'cfg> Progress<'cfg> {
             return Ok(());
         }
 
-        s.tick(cur, max, "")
+        s.tick(cur, max, msg)
     }
 
     pub fn tick_now(&mut self, cur: usize, max: usize, msg: &str) -> CargoResult<()> {
@@ -216,14 +235,17 @@ impl<'cfg> State<'cfg> {
     }
 
     fn try_update_max_width(&mut self) {
-        if let Some(n) = self.config.shell().err_width() {
-            self.format.max_width = n;
+        if self.fixed_width.is_none() {
+            if let Some(n) = self.config.shell().err_width().progress_max_width() {
+                self.format.max_width = n;
+            }
         }
     }
 }
 
 impl Format {
     fn progress(&self, cur: usize, max: usize) -> Option<String> {
+        assert!(cur <= max);
         // Render the percentage at the far right and then figure how long the
         // progress bar is
         let pct = (cur as f64) / (max as f64);
@@ -246,20 +268,20 @@ impl Format {
         // Draw the `===>`
         if hashes > 0 {
             for _ in 0..hashes - 1 {
-                string.push_str("=");
+                string.push('=');
             }
             if cur == max {
-                string.push_str("=");
+                string.push('=');
             } else {
-                string.push_str(">");
+                string.push('>');
             }
         }
 
         // Draw the empty space we have left to do
         for _ in 0..(display_width - hashes) {
-            string.push_str(" ");
+            string.push(' ');
         }
-        string.push_str("]");
+        string.push(']');
         string.push_str(&stats);
 
         Some(string)
@@ -370,6 +392,11 @@ fn test_progress_status() {
     assert_eq!(
         format.progress_status(3, 4, "：每個漢字佔據了兩個字元"),
         Some("[=============>     ] 3/4：每個漢字佔據了...".to_string())
+    );
+    assert_eq!(
+        // handle breaking at middle of character
+        format.progress_status(3, 4, "：-每個漢字佔據了兩個字元"),
+        Some("[=============>     ] 3/4：-每個漢字佔據了...".to_string())
     );
 }
 

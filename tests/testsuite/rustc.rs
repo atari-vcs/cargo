@@ -18,7 +18,7 @@ fn build_lib_for_foo() {
             "\
 [COMPILING] foo v0.0.1 ([CWD])
 [RUNNING] `rustc --crate-name foo src/lib.rs [..]--crate-type lib \
-        --emit=[..]link -C debuginfo=2 \
+        --emit=[..]link[..]-C debuginfo=2 \
         -C metadata=[..] \
         --out-dir [..] \
         -L dependency=[CWD]/target/debug/deps`
@@ -40,7 +40,7 @@ fn lib() {
             "\
 [COMPILING] foo v0.0.1 ([CWD])
 [RUNNING] `rustc --crate-name foo src/lib.rs [..]--crate-type lib \
-        --emit=[..]link -C debuginfo=2 \
+        --emit=[..]link[..]-C debuginfo=2 \
         -C debug-assertions=off \
         -C metadata=[..] \
         --out-dir [..] \
@@ -63,12 +63,12 @@ fn build_main_and_allow_unstable_options() {
             "\
 [COMPILING] {name} v{version} ([CWD])
 [RUNNING] `rustc --crate-name {name} src/lib.rs [..]--crate-type lib \
-        --emit=[..]link -C debuginfo=2 \
+        --emit=[..]link[..]-C debuginfo=2 \
         -C metadata=[..] \
         --out-dir [..] \
         -L dependency=[CWD]/target/debug/deps`
 [RUNNING] `rustc --crate-name {name} src/main.rs [..]--crate-type bin \
-        --emit=[..]link -C debuginfo=2 \
+        --emit=[..]link[..]-C debuginfo=2 \
         -C debug-assertions \
         -C metadata=[..] \
         --out-dir [..] \
@@ -108,10 +108,10 @@ fn build_with_args_to_one_of_multiple_binaries() {
         .with_stderr(
             "\
 [COMPILING] foo v0.0.1 ([CWD])
-[RUNNING] `rustc --crate-name foo src/lib.rs [..]--crate-type lib --emit=[..]link \
+[RUNNING] `rustc --crate-name foo src/lib.rs [..]--crate-type lib --emit=[..]link[..]\
         -C debuginfo=2 -C metadata=[..] \
         --out-dir [..]`
-[RUNNING] `rustc --crate-name bar src/bin/bar.rs [..]--crate-type bin --emit=[..]link \
+[RUNNING] `rustc --crate-name bar src/bin/bar.rs [..]--crate-type bin --emit=[..]link[..]\
         -C debuginfo=2 -C debug-assertions [..]`
 [FINISHED] dev [unoptimized + debuginfo] target(s) in [..]
 ",
@@ -147,10 +147,10 @@ fn build_with_args_to_one_of_multiple_tests() {
         .with_stderr(
             "\
 [COMPILING] foo v0.0.1 ([CWD])
-[RUNNING] `rustc --crate-name foo src/lib.rs [..]--crate-type lib --emit=[..]link \
+[RUNNING] `rustc --crate-name foo src/lib.rs [..]--crate-type lib --emit=[..]link[..]\
         -C debuginfo=2 -C metadata=[..] \
         --out-dir [..]`
-[RUNNING] `rustc --crate-name bar tests/bar.rs [..]--emit=[..]link -C debuginfo=2 \
+[RUNNING] `rustc --crate-name bar tests/bar.rs [..]--emit=[..]link[..]-C debuginfo=2 \
         -C debug-assertions [..]--test[..]`
 [FINISHED] dev [unoptimized + debuginfo] target(s) in [..]
 ",
@@ -164,14 +164,14 @@ fn build_foo_with_bar_dependency() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies.bar]
-            path = "../bar"
-        "#,
+                [dependencies.bar]
+                path = "../bar"
+            "#,
         )
         .file("src/main.rs", "extern crate bar; fn main() { bar::baz() }")
         .build();
@@ -200,14 +200,14 @@ fn build_only_bar_dependency() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies.bar]
-            path = "../bar"
-        "#,
+                [dependencies.bar]
+                path = "../bar"
+            "#,
         )
         .file("src/main.rs", "extern crate bar; fn main() { bar::baz() }")
         .build();
@@ -261,7 +261,7 @@ fn targets_selected_all() {
         )
         // unit test
         .with_stderr_contains(
-            "[RUNNING] `rustc --crate-name foo src/main.rs [..]--emit=[..]link \
+            "[RUNNING] `rustc --crate-name foo src/main.rs [..]--emit=[..]link[..]\
              -C debuginfo=2 --test [..]",
         )
         .run();
@@ -273,17 +273,17 @@ fn fail_with_multiple_packages() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies.bar]
-                path = "../bar"
+                [dependencies.bar]
+                    path = "../bar"
 
-            [dependencies.baz]
-                path = "../baz"
-        "#,
+                [dependencies.baz]
+                    path = "../baz"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .build();
@@ -294,10 +294,10 @@ fn fail_with_multiple_packages() {
         .file(
             "src/main.rs",
             r#"
-            fn main() {
-                if cfg!(flag = "1") { println!("Yeah from bar!"); }
-            }
-        "#,
+                fn main() {
+                    if cfg!(flag = "1") { println!("Yeah from bar!"); }
+                }
+            "#,
         )
         .build();
 
@@ -307,10 +307,10 @@ fn fail_with_multiple_packages() {
         .file(
             "src/main.rs",
             r#"
-            fn main() {
-                if cfg!(flag = "1") { println!("Yeah from baz!"); }
-            }
-        "#,
+                fn main() {
+                    if cfg!(flag = "1") { println!("Yeah from baz!"); }
+                }
+            "#,
         )
         .build();
 
@@ -326,28 +326,48 @@ error: The argument '--package <SPEC>' was provided more than once, \
 }
 
 #[cargo_test]
+fn fail_with_glob() {
+    let p = project()
+        .file(
+            "Cargo.toml",
+            r#"
+                [workspace]
+                members = ["bar"]
+            "#,
+        )
+        .file("bar/Cargo.toml", &basic_manifest("bar", "0.1.0"))
+        .file("bar/src/lib.rs", "pub fn bar() {  break_the_build(); }")
+        .build();
+
+    p.cargo("rustc -p '*z'")
+        .with_status(101)
+        .with_stderr("[ERROR] Glob patterns on package selection are not supported.")
+        .run();
+}
+
+#[cargo_test]
 fn rustc_with_other_profile() {
     let p = project()
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dev-dependencies]
-            a = { path = "a" }
-        "#,
+                [dev-dependencies]
+                a = { path = "a" }
+            "#,
         )
         .file(
             "src/main.rs",
             r#"
-            #[cfg(test)] extern crate a;
+                #[cfg(test)] extern crate a;
 
-            #[test]
-            fn foo() {}
-        "#,
+                #[test]
+                fn foo() {}
+            "#,
         )
         .file("a/Cargo.toml", &basic_manifest("a", "0.1.0"))
         .file("a/src/lib.rs", "")
@@ -411,16 +431,17 @@ fn rustc_test_with_implicit_bin() {
         .file(
             "src/main.rs",
             r#"
-            #[cfg(foo)]
-            fn f() { compile_fail!("Foo shouldn't be set."); }
-            fn main() {}
-        "#,
+                #[cfg(foo)]
+                fn f() { compile_fail!("Foo shouldn't be set."); }
+                fn main() {}
+            "#,
         )
         .file(
             "tests/test1.rs",
             r#"
-            #[cfg(not(foo))]
-            fn f() { compile_fail!("Foo should be set."); } "#,
+                #[cfg(not(foo))]
+                fn f() { compile_fail!("Foo should be set."); }
+            "#,
         )
         .build();
 
@@ -435,5 +456,106 @@ fn rustc_test_with_implicit_bin() {
 [RUNNING] `rustc --crate-name foo src/main.rs [..]
 ",
         )
+        .run();
+}
+
+#[cargo_test]
+fn rustc_with_print_cfg_single_target() {
+    let p = project()
+        .file("Cargo.toml", &basic_bin_manifest("foo"))
+        .file("src/main.rs", r#"fn main() {} "#)
+        .build();
+
+    p.cargo("rustc -Z unstable-options --target x86_64-pc-windows-msvc --print cfg")
+        .masquerade_as_nightly_cargo()
+        .with_stdout_contains("debug_assertions")
+        .with_stdout_contains("target_arch=\"x86_64\"")
+        .with_stdout_contains("target_endian=\"little\"")
+        .with_stdout_contains("target_env=\"msvc\"")
+        .with_stdout_contains("target_family=\"windows\"")
+        .with_stdout_contains("target_os=\"windows\"")
+        .with_stdout_contains("target_pointer_width=\"64\"")
+        .with_stdout_contains("target_vendor=\"pc\"")
+        .with_stdout_contains("windows")
+        .run();
+}
+
+#[cargo_test]
+fn rustc_with_print_cfg_multiple_targets() {
+    let p = project()
+        .file("Cargo.toml", &basic_bin_manifest("foo"))
+        .file("src/main.rs", r#"fn main() {} "#)
+        .build();
+
+    p.cargo("rustc -Z unstable-options -Z multitarget --target x86_64-pc-windows-msvc --target i686-unknown-linux-gnu --print cfg")
+        .masquerade_as_nightly_cargo()
+        .with_stdout_contains("debug_assertions")
+        .with_stdout_contains("target_arch=\"x86_64\"")
+        .with_stdout_contains("target_endian=\"little\"")
+        .with_stdout_contains("target_env=\"msvc\"")
+        .with_stdout_contains("target_family=\"windows\"")
+        .with_stdout_contains("target_os=\"windows\"")
+        .with_stdout_contains("target_pointer_width=\"64\"")
+        .with_stdout_contains("target_vendor=\"pc\"")
+        .with_stdout_contains("windows")
+        .with_stdout_contains("target_env=\"gnu\"")
+        .with_stdout_contains("target_family=\"unix\"")
+        .with_stdout_contains("target_pointer_width=\"32\"")
+        .with_stdout_contains("target_vendor=\"unknown\"")
+        .with_stdout_contains("target_os=\"linux\"")
+        .with_stdout_contains("unix")
+        .run();
+}
+
+#[cargo_test]
+fn rustc_with_print_cfg_rustflags_env_var() {
+    let p = project()
+        .file("Cargo.toml", &basic_bin_manifest("foo"))
+        .file("src/main.rs", r#"fn main() {} "#)
+        .build();
+
+    p.cargo("rustc -Z unstable-options --target x86_64-pc-windows-msvc --print cfg")
+        .masquerade_as_nightly_cargo()
+        .env("RUSTFLAGS", "-C target-feature=+crt-static")
+        .with_stdout_contains("debug_assertions")
+        .with_stdout_contains("target_arch=\"x86_64\"")
+        .with_stdout_contains("target_endian=\"little\"")
+        .with_stdout_contains("target_env=\"msvc\"")
+        .with_stdout_contains("target_family=\"windows\"")
+        .with_stdout_contains("target_feature=\"crt-static\"")
+        .with_stdout_contains("target_os=\"windows\"")
+        .with_stdout_contains("target_pointer_width=\"64\"")
+        .with_stdout_contains("target_vendor=\"pc\"")
+        .with_stdout_contains("windows")
+        .run();
+}
+
+#[cargo_test]
+fn rustc_with_print_cfg_config_toml() {
+    let p = project()
+        .file("Cargo.toml", &basic_bin_manifest("foo"))
+        .file(
+            ".cargo/config.toml",
+            r#"
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+"#,
+        )
+        .file("src/main.rs", r#"fn main() {} "#)
+        .build();
+
+    p.cargo("rustc -Z unstable-options --target x86_64-pc-windows-msvc --print cfg")
+        .masquerade_as_nightly_cargo()
+        .env("RUSTFLAGS", "-C target-feature=+crt-static")
+        .with_stdout_contains("debug_assertions")
+        .with_stdout_contains("target_arch=\"x86_64\"")
+        .with_stdout_contains("target_endian=\"little\"")
+        .with_stdout_contains("target_env=\"msvc\"")
+        .with_stdout_contains("target_family=\"windows\"")
+        .with_stdout_contains("target_feature=\"crt-static\"")
+        .with_stdout_contains("target_os=\"windows\"")
+        .with_stdout_contains("target_pointer_width=\"64\"")
+        .with_stdout_contains("target_vendor=\"pc\"")
+        .with_stdout_contains("windows")
         .run();
 }

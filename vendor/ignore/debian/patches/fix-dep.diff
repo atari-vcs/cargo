@@ -1,0 +1,13 @@
+Index: ignore/Cargo.toml
+===================================================================
+--- ignore.orig/Cargo.toml
++++ ignore/Cargo.toml
+@@ -27,7 +27,7 @@ repository = "https://github.com/BurntSu
+ name = "ignore"
+ bench = false
+ [dependencies.crossbeam-utils]
+-version = "0.8.0"
++version = "0.7"
+ 
+ [dependencies.globset]
+ version = "0.4.7"

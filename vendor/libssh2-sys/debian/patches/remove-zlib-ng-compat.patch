@@ -1,0 +1,10 @@
+--- libssh2-sys/Cargo.toml	2020-12-07 00:44:25.527275557 +0000
++++ libssh2-sys/Cargo.toml	2020-12-07 00:41:07.631483621 +0000
+@@ -39,7 +39,6 @@
+ 
+ [features]
+ vendored-openssl = []
+-zlib-ng-compat = ["libz-sys/zlib-ng"]
+ [target."cfg(target_env = \"msvc\")".build-dependencies.vcpkg]
+ version = "0.2"
+ [target."cfg(unix)".dependencies.openssl-sys]

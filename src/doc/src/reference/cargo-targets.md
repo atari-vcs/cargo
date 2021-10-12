@@ -27,7 +27,7 @@ bench = false
 
 ### Binaries
 
-Binary targets are executables programs that can be run after being compiled.
+Binary targets are executable programs that can be run after being compiled.
 The default binary filename is `src/main.rs`, which defaults to the name of
 the package. Additional binaries are stored in the [`src/bin/`
 directory][package layout]. The settings for each binary can be [customized]
@@ -94,11 +94,13 @@ There are two styles of tests within a Cargo project:
   access to its *public* API.
 
 Tests are run with the [`cargo test`] command. By default, Cargo and `rustc`
-use the libtest harness which is responsible for collecting functions
+use the [libtest harness] which is responsible for collecting functions
 annotated with the [`#[test]` attribute][test-attribute] and executing them in
 parallel, reporting the success and failure of each test. See [the `harness`
 field](#the-harness-field) if you want to use a different harness or test
 strategy.
+
+[libtest harness]: ../../rustc/tests/index.html
 
 #### Integration tests
 
@@ -122,6 +124,15 @@ consider creating a single integration test, and split the tests into multiple
 modules. The libtest harness will automatically find all of the `#[test]`
 annotated functions and run them in parallel. You can pass module names to
 [`cargo test`] to only run the tests within that module.
+
+Binary targets are automatically built if there is an integration test. This
+allows an integration test to execute the binary to exercise and test its
+behavior. The `CARGO_BIN_EXE_<name>` [environment variable] is set when the
+integration test is built so that it can use the [`env` macro] to locate the
+executable.
+
+[environment variable]: environment-variables.md#environment-variables-cargo-sets-for-crates
+[`env` macro]: ../../std/macro.env.html
 
 ### Benchmarks
 
@@ -151,7 +162,7 @@ Similarly to tests:
 All of the  `[lib]`, `[[bin]]`, `[[example]]`, `[[test]]`, and `[[bench]]`
 sections in `Cargo.toml` support similar configuration for specifying how a
 target should be built. The double-bracket sections like `[[bin]]` are
-array-of-table of [TOML](https://github.com/toml-lang/toml#array-of-tables),
+[array-of-table of TOML](https://toml.io/en/v1.0.0-rc.3#array-of-tables),
 which means you can write more than one `[[bin]]` section to make several
 executables in your crate. You can only specify one library, so `[lib]` is a
 normal TOML table.
@@ -325,7 +336,7 @@ situations. For example, if you have a library where you want a *module* named
 compile anything in the `bin` directory as an executable. Here is a sample
 layout of this scenario:
 
-```
+```text
 ├── Cargo.toml
 └── src
     ├── lib.rs

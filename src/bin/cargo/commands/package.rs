@@ -30,6 +30,7 @@ pub fn cli() -> App {
         .arg_features()
         .arg_manifest_path()
         .arg_jobs()
+        .after_help("Run `cargo help package` for more detailed information.\n")
 }
 
 pub fn exec(config: &mut Config, args: &ArgMatches<'_>) -> CliResult {
@@ -42,11 +43,9 @@ pub fn exec(config: &mut Config, args: &ArgMatches<'_>) -> CliResult {
             list: args.is_present("list"),
             check_metadata: !args.is_present("no-metadata"),
             allow_dirty: args.is_present("allow-dirty"),
-            target: args.target(),
+            targets: args.targets(),
             jobs: args.jobs()?,
-            features: args._values_of("features"),
-            all_features: args.is_present("all-features"),
-            no_default_features: args.is_present("no-default-features"),
+            cli_features: args.cli_features()?,
         },
     )?;
     Ok(())

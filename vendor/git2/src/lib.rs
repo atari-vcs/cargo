@@ -57,13 +57,15 @@
 //! };
 //! ```
 //!
+//! To clone using SSH, refer to [RepoBuilder](./build/struct.RepoBuilder.html).
+//!
 //! ## Working with a `Repository`
 //!
-//! All deriviative objects, references, etc are attached to the lifetime of the
+//! All derivative objects, references, etc are attached to the lifetime of the
 //! source `Repository`, to ensure that they do not outlive the repository
 //! itself.
 
-#![doc(html_root_url = "https://docs.rs/git2/0.10")]
+#![doc(html_root_url = "https://docs.rs/git2/0.13")]
 #![allow(trivial_numeric_casts, trivial_casts)]
 #![deny(missing_docs)]
 #![warn(rust_2018_idioms)]
@@ -77,6 +79,8 @@ use std::fmt;
 use std::str;
 use std::sync::Once;
 
+pub use crate::apply::{ApplyLocation, ApplyOptions};
+pub use crate::attr::AttrValue;
 pub use crate::blame::{Blame, BlameHunk, BlameIter, BlameOptions};
 pub use crate::blob::{Blob, BlobWriter};
 pub use crate::branch::{Branch, Branches};
@@ -88,16 +92,19 @@ pub use crate::cred::{Cred, CredentialHelper};
 pub use crate::describe::{Describe, DescribeFormatOptions, DescribeOptions};
 pub use crate::diff::{Deltas, Diff, DiffDelta, DiffFile, DiffOptions};
 pub use crate::diff::{DiffBinary, DiffBinaryFile, DiffBinaryKind};
-pub use crate::diff::{DiffFindOptions, DiffHunk, DiffLine, DiffStats};
+pub use crate::diff::{DiffFindOptions, DiffHunk, DiffLine, DiffLineType, DiffStats};
 pub use crate::error::Error;
 pub use crate::index::{
     Index, IndexConflict, IndexConflicts, IndexEntries, IndexEntry, IndexMatchedPath,
 };
+pub use crate::indexer::{IndexerProgress, Progress};
+pub use crate::mailmap::Mailmap;
+pub use crate::mempack::Mempack;
 pub use crate::merge::{AnnotatedCommit, MergeOptions};
 pub use crate::message::{message_prettify, DEFAULT_COMMENT_CHAR};
 pub use crate::note::{Note, Notes};
 pub use crate::object::Object;
-pub use crate::odb::{Odb, OdbObject, OdbReader, OdbWriter};
+pub use crate::odb::{Odb, OdbObject, OdbPackwriter, OdbReader, OdbWriter};
 pub use crate::oid::Oid;
 pub use crate::packbuilder::{PackBuilder, PackBuilderStage};
 pub use crate::patch::Patch;
@@ -111,9 +118,10 @@ pub use crate::refspec::Refspec;
 pub use crate::remote::{
     FetchOptions, PushOptions, Refspecs, Remote, RemoteConnection, RemoteHead,
 };
-pub use crate::remote_callbacks::{Credentials, RemoteCallbacks, TransferProgress};
-pub use crate::remote_callbacks::{Progress, TransportMessage, UpdateTips};
+pub use crate::remote_callbacks::{Credentials, RemoteCallbacks};
+pub use crate::remote_callbacks::{TransportMessage, UpdateTips};
 pub use crate::repo::{Repository, RepositoryInitOptions};
+pub use crate::revert::RevertOptions;
 pub use crate::revspec::Revspec;
 pub use crate::revwalk::Revwalk;
 pub use crate::signature::Signature;
@@ -122,22 +130,30 @@ pub use crate::status::{StatusEntry, StatusIter, StatusOptions, StatusShow, Stat
 pub use crate::submodule::{Submodule, SubmoduleUpdateOptions};
 pub use crate::tag::Tag;
 pub use crate::time::{IndexTime, Time};
+pub use crate::transaction::Transaction;
 pub use crate::tree::{Tree, TreeEntry, TreeIter, TreeWalkMode, TreeWalkResult};
 pub use crate::treebuilder::TreeBuilder;
 pub use crate::util::IntoCString;
+pub use crate::worktree::{Worktree, WorktreeAddOptions, WorktreeLockStatus, WorktreePruneOptions};
 
 // Create a convinience method on bitflag struct which checks the given flag
 macro_rules! is_bit_set {
-    ($name:ident, $flag:expr) => (
+    ($name:ident, $flag:expr) => {
         #[allow(missing_docs)]
         pub fn $name(&self) -> bool {
             self.intersects($flag)
         }
-    )
+    };
 }
 
 /// An enumeration of possible errors that can happen when working with a git
 /// repository.
+// Note: We omit a few native error codes, as they are unlikely to be propagated
+// to the library user. Currently:
+//
+// * GIT_EPASSTHROUGH
+// * GIT_ITEROVER
+// * GIT_RETRY
 #[derive(PartialEq, Eq, Clone, Debug, Copy)]
 pub enum ErrorCode {
     /// Generic error
@@ -182,8 +198,16 @@ pub enum ErrorCode {
     Invalid,
     /// Uncommitted changes in index prevented operation
     Uncommitted,
-    /// Operation was not valid for a directory,
+    /// Operation was not valid for a directory
     Directory,
+    /// A merge conflict exists and cannot continue
+    MergeConflict,
+    /// Hashsum mismatch in object
+    HashsumMismatch,
+    /// Unsaved changes in the index would be overwritten
+    IndexDirty,
+    /// Patch application failed
+    ApplyFail,
 }
 
 /// An enumeration of possible categories of things that can have
@@ -252,6 +276,14 @@ pub enum ErrorClass {
     Rebase,
     /// Filesystem-related error
     Filesystem,
+    /// Invalid patch data
+    Patch,
+    /// Error involving worktrees
+    Worktree,
+    /// Hash library error or SHA-1 collision
+    Sha1,
+    /// HTTP error
+    Http,
 }
 
 /// A listing of the possible states that a repository can be in.
@@ -334,7 +366,7 @@ pub enum BranchType {
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 pub enum ConfigLevel {
     /// System-wide on Windows, for compatibility with portable git
-    ProgramData,
+    ProgramData = 1,
     /// System-wide configuration file, e.g. /etc/gitconfig
     System,
     /// XDG-compatible configuration file, e.g. ~/.config/git/config
@@ -346,7 +378,7 @@ pub enum ConfigLevel {
     /// Application specific configuration file
     App,
     /// Highest level available
-    Highest,
+    Highest = -1,
 }
 
 /// Merge file favor options for `MergeOptions` instruct the file-level
@@ -604,15 +636,18 @@ impl MergePreference {
 mod test;
 #[macro_use]
 mod panic;
+mod attr;
 mod call;
 mod util;
 
 pub mod build;
 pub mod cert;
 pub mod oid_array;
+pub mod opts;
 pub mod string_array;
 pub mod transport;
 
+mod apply;
 mod blame;
 mod blob;
 mod branch;
@@ -625,6 +660,9 @@ mod describe;
 mod diff;
 mod error;
 mod index;
+mod indexer;
+mod mailmap;
+mod mempack;
 mod merge;
 mod message;
 mod note;
@@ -642,6 +680,7 @@ mod refspec;
 mod remote;
 mod remote_callbacks;
 mod repo;
+mod revert;
 mod revspec;
 mod revwalk;
 mod signature;
@@ -649,9 +688,12 @@ mod stash;
 mod status;
 mod submodule;
 mod tag;
+mod tagforeach;
 mod time;
+mod transaction;
 mod tree;
 mod treebuilder;
+mod worktree;
 
 fn init() {
     static INIT: Once = Once::new();
@@ -819,7 +861,7 @@ impl ObjectType {
 
     /// Determine if the given git_object_t is a valid loose object type.
     pub fn is_loose(&self) -> bool {
-        unsafe { (call!(raw::git_object_typeisloose(*self)) == 1) }
+        unsafe { call!(raw::git_object_typeisloose(*self)) == 1 }
     }
 
     /// Convert a raw git_object_t to an ObjectType
@@ -889,6 +931,34 @@ impl ConfigLevel {
             raw::GIT_CONFIG_LEVEL_APP => ConfigLevel::App,
             raw::GIT_CONFIG_HIGHEST_LEVEL => ConfigLevel::Highest,
             n => panic!("unknown config level: {}", n),
+        }
+    }
+}
+
+impl SubmoduleIgnore {
+    /// Converts a [`raw::git_submodule_ignore_t`] to a [`SubmoduleIgnore`]
+    pub fn from_raw(raw: raw::git_submodule_ignore_t) -> Self {
+        match raw {
+            raw::GIT_SUBMODULE_IGNORE_UNSPECIFIED => SubmoduleIgnore::Unspecified,
+            raw::GIT_SUBMODULE_IGNORE_NONE => SubmoduleIgnore::None,
+            raw::GIT_SUBMODULE_IGNORE_UNTRACKED => SubmoduleIgnore::Untracked,
+            raw::GIT_SUBMODULE_IGNORE_DIRTY => SubmoduleIgnore::Dirty,
+            raw::GIT_SUBMODULE_IGNORE_ALL => SubmoduleIgnore::All,
+            n => panic!("unknown submodule ignore rule: {}", n),
+        }
+    }
+}
+
+impl SubmoduleUpdate {
+    /// Converts a [`raw::git_submodule_update_t`] to a [`SubmoduleUpdate`]
+    pub fn from_raw(raw: raw::git_submodule_update_t) -> Self {
+        match raw {
+            raw::GIT_SUBMODULE_UPDATE_CHECKOUT => SubmoduleUpdate::Checkout,
+            raw::GIT_SUBMODULE_UPDATE_REBASE => SubmoduleUpdate::Rebase,
+            raw::GIT_SUBMODULE_UPDATE_MERGE => SubmoduleUpdate::Merge,
+            raw::GIT_SUBMODULE_UPDATE_NONE => SubmoduleUpdate::None,
+            raw::GIT_SUBMODULE_UPDATE_DEFAULT => SubmoduleUpdate::Default,
+            n => panic!("unknown submodule update strategy: {}", n),
         }
     }
 }
@@ -996,6 +1066,49 @@ pub enum Delta {
     Conflicted,
 }
 
+/// Valid modes for index and tree entries.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum FileMode {
+    /// Unreadable
+    Unreadable,
+    /// Tree
+    Tree,
+    /// Blob
+    Blob,
+    /// Blob executable
+    BlobExecutable,
+    /// Link
+    Link,
+    /// Commit
+    Commit,
+}
+
+impl From<FileMode> for i32 {
+    fn from(mode: FileMode) -> i32 {
+        match mode {
+            FileMode::Unreadable => raw::GIT_FILEMODE_UNREADABLE as i32,
+            FileMode::Tree => raw::GIT_FILEMODE_TREE as i32,
+            FileMode::Blob => raw::GIT_FILEMODE_BLOB as i32,
+            FileMode::BlobExecutable => raw::GIT_FILEMODE_BLOB_EXECUTABLE as i32,
+            FileMode::Link => raw::GIT_FILEMODE_LINK as i32,
+            FileMode::Commit => raw::GIT_FILEMODE_COMMIT as i32,
+        }
+    }
+}
+
+impl From<FileMode> for u32 {
+    fn from(mode: FileMode) -> u32 {
+        match mode {
+            FileMode::Unreadable => raw::GIT_FILEMODE_UNREADABLE as u32,
+            FileMode::Tree => raw::GIT_FILEMODE_TREE as u32,
+            FileMode::Blob => raw::GIT_FILEMODE_BLOB as u32,
+            FileMode::BlobExecutable => raw::GIT_FILEMODE_BLOB_EXECUTABLE as u32,
+            FileMode::Link => raw::GIT_FILEMODE_LINK as u32,
+            FileMode::Commit => raw::GIT_FILEMODE_COMMIT as u32,
+        }
+    }
+}
+
 bitflags! {
     /// Return codes for submodule status.
     ///
@@ -1092,6 +1205,7 @@ impl SubmoduleStatus {
 /// These values represent settings for the `submodule.$name.ignore`
 /// configuration value which says how deeply to look at the working
 /// directory when getting the submodule status.
+#[derive(Debug)]
 pub enum SubmoduleIgnore {
     /// Use the submodule's configuration
     Unspecified,
@@ -1103,6 +1217,31 @@ pub enum SubmoduleIgnore {
     Dirty,
     /// Never dirty
     All,
+}
+
+/// Submodule update values
+///
+/// These values represent settings for the `submodule.$name.update`
+/// configuration value which says how to handle `git submodule update`
+/// for this submodule. The value is usually set in the ".gitmodules"
+/// file and copied to ".git/config" when the submodule is initialized.
+#[derive(Debug)]
+pub enum SubmoduleUpdate {
+    /// The default; when a submodule is updated, checkout the new detached
+    /// HEAD to the submodule directory.
+    Checkout,
+    /// Update by rebasing the current checked out branch onto the commit from
+    /// the superproject.
+    Rebase,
+    /// Update by merging the commit in the superproject into the current
+    /// checkout out branch of the submodule.
+    Merge,
+    /// Do not update this submodule even when the commit in the superproject
+    /// is updated.
+    None,
+    /// Not used except as static initializer when we don't want any particular
+    /// update rule to be specified.
+    Default,
 }
 
 bitflags! {
@@ -1331,14 +1470,77 @@ impl Default for AttrCheckFlags {
     }
 }
 
+bitflags! {
+    #[allow(missing_docs)]
+    pub struct DiffFlags: u32 {
+        /// File(s) treated as binary data.
+        const BINARY = raw::GIT_DIFF_FLAG_BINARY as u32;
+        /// File(s) treated as text data.
+        const NOT_BINARY = raw::GIT_DIFF_FLAG_NOT_BINARY as u32;
+        /// `id` value is known correct.
+        const VALID_ID = raw::GIT_DIFF_FLAG_VALID_ID as u32;
+        /// File exists at this side of the delta.
+        const EXISTS = raw::GIT_DIFF_FLAG_EXISTS as u32;
+    }
+}
+
+impl DiffFlags {
+    is_bit_set!(is_binary, DiffFlags::BINARY);
+    is_bit_set!(is_not_binary, DiffFlags::NOT_BINARY);
+    is_bit_set!(has_valid_id, DiffFlags::VALID_ID);
+    is_bit_set!(exists, DiffFlags::EXISTS);
+}
+
+bitflags! {
+    /// Options for [`Reference::normalize_name`].
+    pub struct ReferenceFormat: u32 {
+        /// No particular normalization.
+        const NORMAL = raw::GIT_REFERENCE_FORMAT_NORMAL as u32;
+        /// Constrol whether one-level refname are accepted (i.e., refnames that
+        /// do not contain multiple `/`-separated components). Those are
+        /// expected to be written only using uppercase letters and underscore
+        /// (e.g. `HEAD`, `FETCH_HEAD`).
+        const ALLOW_ONELEVEL = raw::GIT_REFERENCE_FORMAT_ALLOW_ONELEVEL as u32;
+        /// Interpret the provided name as a reference pattern for a refspec (as
+        /// used with remote repositories). If this option is enabled, the name
+        /// is allowed to contain a single `*` in place of a full pathname
+        /// components (e.g., `foo/*/bar` but not `foo/bar*`).
+        const REFSPEC_PATTERN = raw::GIT_REFERENCE_FORMAT_REFSPEC_PATTERN as u32;
+        /// Interpret the name as part of a refspec in shorthand form so the
+        /// `ALLOW_ONELEVEL` naming rules aren't enforced and `main` becomes a
+        /// valid name.
+        const REFSPEC_SHORTHAND = raw::GIT_REFERENCE_FORMAT_REFSPEC_SHORTHAND as u32;
+    }
+}
+
+impl ReferenceFormat {
+    is_bit_set!(is_allow_onelevel, ReferenceFormat::ALLOW_ONELEVEL);
+    is_bit_set!(is_refspec_pattern, ReferenceFormat::REFSPEC_PATTERN);
+    is_bit_set!(is_refspec_shorthand, ReferenceFormat::REFSPEC_SHORTHAND);
+}
+
+impl Default for ReferenceFormat {
+    fn default() -> Self {
+        ReferenceFormat::NORMAL
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ObjectType;
+    use super::{FileMode, ObjectType};
 
     #[test]
     fn convert() {
         assert_eq!(ObjectType::Blob.str(), "blob");
         assert_eq!(ObjectType::from_str("blob"), Some(ObjectType::Blob));
         assert!(ObjectType::Blob.is_loose());
+    }
+
+    #[test]
+    fn convert_filemode() {
+        assert_eq!(i32::from(FileMode::Blob), 0o100644);
+        assert_eq!(i32::from(FileMode::BlobExecutable), 0o100755);
+        assert_eq!(u32::from(FileMode::Blob), 0o100644);
+        assert_eq!(u32::from(FileMode::BlobExecutable), 0o100755);
     }
 }

@@ -1,0 +1,10 @@
+--- Cargo.toml	2020-09-08 17:24:05.000000000 +0000
++++ Cargo.toml	2020-12-07 00:15:20.413037311 +0000
+@@ -47,7 +47,6 @@
+ https = ["openssl-sys"]
+ ssh = ["libssh2-sys"]
+ ssh_key_from_memory = []
+-zlib-ng-compat = ["libz-sys/zlib-ng", "libssh2-sys/zlib-ng-compat"]
+ [target."cfg(unix)".dependencies.openssl-sys]
+ version = "0.9"
+ optional = true

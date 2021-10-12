@@ -1,4 +1,4 @@
-use ffi;
+use cfg_if::cfg_if;
 use foreign_types::ForeignType;
 use foreign_types::ForeignTypeRef;
 #[cfg(any(ossl111, not(osslconf = "OPENSSL_NO_PSK")))]
@@ -15,22 +15,24 @@ use std::slice;
 use std::str;
 use std::sync::Arc;
 
-use dh::Dh;
+use crate::dh::Dh;
 #[cfg(all(ossl101, not(ossl110)))]
-use ec::EcKey;
-use error::ErrorStack;
-use pkey::Params;
+use crate::ec::EcKey;
+use crate::error::ErrorStack;
+use crate::pkey::Params;
 #[cfg(any(ossl102, libressl261))]
-use ssl::AlpnError;
-#[cfg(ossl111)]
-use ssl::{ClientHelloResponse, ExtensionContext};
-use ssl::{
-    SniError, Ssl, SslAlert, SslContext, SslContextRef, SslRef, SslSession, SslSessionRef,
-    SESSION_CTX_INDEX,
+use crate::ssl::AlpnError;
+use crate::ssl::{
+    try_get_session_ctx_index, SniError, Ssl, SslAlert, SslContext, SslContextRef, SslRef,
+    SslSession, SslSessionRef,
 };
 #[cfg(ossl111)]
-use x509::X509Ref;
-use x509::{X509StoreContext, X509StoreContextRef};
+use crate::ssl::{ClientHelloResponse, ExtensionContext};
+#[cfg(ossl111)]
+use crate::util::ForeignTypeRefExt;
+#[cfg(ossl111)]
+use crate::x509::X509Ref;
+use crate::x509::{X509StoreContext, X509StoreContextRef};
 
 pub extern "C" fn raw_verify<F>(preverify_ok: c_int, x509_ctx: *mut ffi::X509_STORE_CTX) -> c_int
 where
@@ -116,10 +118,10 @@ where
             .ssl_context()
             .ex_data(callback_idx)
             .expect("BUG: psk callback missing") as *const F;
-        let identity = if identity != ptr::null() {
-            Some(CStr::from_ptr(identity).to_bytes())
-        } else {
+        let identity = if identity.is_null() {
             None
+        } else {
+            Some(CStr::from_ptr(identity).to_bytes())
         };
         // Give the callback mutable slices into which it can write the psk.
         let psk_sl = slice::from_raw_parts_mut(psk as *mut u8, max_psk_len as usize);
@@ -354,9 +356,11 @@ pub unsafe extern "C" fn raw_new_session<F>(
 where
     F: Fn(&mut SslRef, SslSession) + 'static + Sync + Send,
 {
+    let session_ctx_index =
+        try_get_session_ctx_index().expect("BUG: session context index initialization failed");
     let ssl = SslRef::from_ptr_mut(ssl);
     let callback = ssl
-        .ex_data(*SESSION_CTX_INDEX)
+        .ex_data(*session_ctx_index)
         .expect("BUG: session context missing")
         .ex_data(SslContext::cached_ex_index::<F>())
         .expect("BUG: new session callback missing") as *const F;
@@ -400,9 +404,11 @@ pub unsafe extern "C" fn raw_get_session<F>(
 where
     F: Fn(&mut SslRef, &[u8]) -> Option<SslSession> + 'static + Sync + Send,
 {
+    let session_ctx_index =
+        try_get_session_ctx_index().expect("BUG: session context index initialization failed");
     let ssl = SslRef::from_ptr_mut(ssl);
     let callback = ssl
-        .ex_data(*SESSION_CTX_INDEX)
+        .ex_data(*session_ctx_index)
         .expect("BUG: session context missing")
         .ex_data(SslContext::cached_ex_index::<F>())
         .expect("BUG: get session callback missing") as *const F;
@@ -424,7 +430,7 @@ pub unsafe extern "C" fn raw_keylog<F>(ssl: *const ffi::SSL, line: *const c_char
 where
     F: Fn(&SslRef, &str) + 'static + Sync + Send,
 {
-    let ssl = SslRef::from_ptr(ssl as *mut _);
+    let ssl = SslRef::from_const_ptr(ssl);
     let callback = ssl
         .ssl_context()
         .ex_data(SslContext::cached_ex_index::<F>())

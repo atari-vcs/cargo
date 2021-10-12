@@ -1,4 +1,3 @@
-pub type wchar_t = i32;
 pub type off_t = i64;
 pub type useconds_t = u32;
 pub type blkcnt_t = i64;
@@ -254,6 +253,9 @@ pub const FIOSETOWN: ::c_ulong = 0x8004667c;
 pub const FIOGETOWN: ::c_ulong = 0x4004667b;
 
 pub const PATH_MAX: ::c_int = 1024;
+pub const MAXPATHLEN: ::c_int = PATH_MAX;
+
+pub const IOV_MAX: ::c_int = 1024;
 
 pub const SA_ONSTACK: ::c_int = 0x0001;
 pub const SA_SIGINFO: ::c_int = 0x0040;
@@ -336,7 +338,15 @@ pub const F_RDLCK: ::c_short = 1;
 pub const F_UNLCK: ::c_short = 2;
 pub const F_WRLCK: ::c_short = 3;
 
-pub const MNT_FORCE: ::c_int = 0x80000;
+pub const MNT_RDONLY: ::c_int = 0x00000001;
+pub const MNT_SYNCHRONOUS: ::c_int = 0x00000002;
+pub const MNT_NOEXEC: ::c_int = 0x00000004;
+pub const MNT_NOSUID: ::c_int = 0x00000008;
+pub const MNT_ASYNC: ::c_int = 0x00000040;
+pub const MNT_EXPORTED: ::c_int = 0x00000100;
+pub const MNT_UPDATE: ::c_int = 0x00010000;
+pub const MNT_RELOAD: ::c_int = 0x00040000;
+pub const MNT_FORCE: ::c_int = 0x00080000;
 
 pub const Q_SYNC: ::c_int = 0x600;
 pub const Q_QUOTAON: ::c_int = 0x100;
@@ -438,6 +448,13 @@ pub const TCP_MAXSEG: ::c_int = 2;
 
 pub const PIPE_BUF: usize = 512;
 
+pub const CLD_EXITED: ::c_int = 1;
+pub const CLD_KILLED: ::c_int = 2;
+pub const CLD_DUMPED: ::c_int = 3;
+pub const CLD_TRAPPED: ::c_int = 4;
+pub const CLD_STOPPED: ::c_int = 5;
+pub const CLD_CONTINUED: ::c_int = 6;
+
 pub const POLLIN: ::c_short = 0x1;
 pub const POLLPRI: ::c_short = 0x2;
 pub const POLLOUT: ::c_short = 0x4;
@@ -498,6 +515,17 @@ pub const REG_TRACE: ::c_int = 0o00400;
 pub const REG_LARGE: ::c_int = 0o01000;
 pub const REG_BACKR: ::c_int = 0o02000;
 
+pub const TIOCCBRK: ::c_uint = 0x2000747a;
+pub const TIOCSBRK: ::c_uint = 0x2000747b;
+
+pub const PRIO_PROCESS: ::c_int = 0;
+pub const PRIO_PGRP: ::c_int = 1;
+pub const PRIO_USER: ::c_int = 2;
+
+pub const ITIMER_REAL: ::c_int = 0;
+pub const ITIMER_VIRTUAL: ::c_int = 1;
+pub const ITIMER_PROF: ::c_int = 2;
+
 f! {
     pub fn CMSG_FIRSTHDR(mhdr: *const ::msghdr) -> *mut ::cmsghdr {
         if (*mhdr).msg_controllen as usize >= ::mem::size_of::<::cmsghdr>() {
@@ -514,7 +542,7 @@ f! {
         return
     }
 
-    pub fn FD_ISSET(fd: ::c_int, set: *mut fd_set) -> bool {
+    pub fn FD_ISSET(fd: ::c_int, set: *const fd_set) -> bool {
         let bits = ::mem::size_of_val(&(*set).fds_bits[0]) * 8;
         let fd = fd as usize;
         return ((*set).fds_bits[fd / bits] & (1 << (fd % bits))) != 0
@@ -532,24 +560,26 @@ f! {
             *slot = 0;
         }
     }
+}
 
-    pub fn WTERMSIG(status: ::c_int) -> ::c_int {
+safe_f! {
+    pub {const} fn WTERMSIG(status: ::c_int) -> ::c_int {
         status & 0o177
     }
 
-    pub fn WIFEXITED(status: ::c_int) -> bool {
+    pub {const} fn WIFEXITED(status: ::c_int) -> bool {
         (status & 0o177) == 0
     }
 
-    pub fn WEXITSTATUS(status: ::c_int) -> ::c_int {
+    pub {const} fn WEXITSTATUS(status: ::c_int) -> ::c_int {
         status >> 8
     }
 
-    pub fn WCOREDUMP(status: ::c_int) -> bool {
+    pub {const} fn WCOREDUMP(status: ::c_int) -> bool {
         (status & 0o200) != 0
     }
 
-    pub fn QCMD(cmd: ::c_int, type_: ::c_int) -> ::c_int {
+    pub {const} fn QCMD(cmd: ::c_int, type_: ::c_int) -> ::c_int {
         (cmd << 8) | (type_ & 0x00ff)
     }
 }
@@ -566,15 +596,19 @@ extern "C" {
     )]
     pub fn setrlimit(resource: ::c_int, rlim: *const ::rlimit) -> ::c_int;
 
-    pub fn strerror_r(
-        errnum: ::c_int,
-        buf: *mut c_char,
-        buflen: ::size_t,
-    ) -> ::c_int;
+    pub fn strerror_r(errnum: ::c_int, buf: *mut c_char, buflen: ::size_t) -> ::c_int;
     pub fn abs(i: ::c_int) -> ::c_int;
     pub fn atof(s: *const ::c_char) -> ::c_double;
     pub fn labs(i: ::c_long) -> ::c_long;
+    #[cfg_attr(
+        all(target_os = "freebsd", any(freebsd12, freebsd11, freebsd10)),
+        link_name = "rand@FBSD_1.0"
+    )]
     pub fn rand() -> ::c_int;
+    #[cfg_attr(
+        all(target_os = "freebsd", any(freebsd12, freebsd11, freebsd10)),
+        link_name = "srand@FBSD_1.0"
+    )]
     pub fn srand(seed: ::c_uint);
 
     pub fn getifaddrs(ifap: *mut *mut ::ifaddrs) -> ::c_int;
@@ -597,13 +631,12 @@ extern "C" {
     pub fn if_nameindex() -> *mut if_nameindex;
     pub fn if_freenameindex(ptr: *mut if_nameindex);
 
-    pub fn getpeereid(
-        socket: ::c_int,
-        euid: *mut ::uid_t,
-        egid: *mut ::gid_t,
-    ) -> ::c_int;
+    pub fn getpeereid(socket: ::c_int, euid: *mut ::uid_t, egid: *mut ::gid_t) -> ::c_int;
 
-    #[cfg_attr(target_os = "macos", link_name = "glob$INODE64")]
+    #[cfg_attr(
+        all(target_os = "macos", not(target_arch = "aarch64")),
+        link_name = "glob$INODE64"
+    )]
     #[cfg_attr(target_os = "netbsd", link_name = "__glob30")]
     #[cfg_attr(
         all(target_os = "freebsd", any(freebsd11, freebsd10)),
@@ -612,9 +645,7 @@ extern "C" {
     pub fn glob(
         pattern: *const ::c_char,
         flags: ::c_int,
-        errfunc: ::Option<
-            extern "C" fn(epath: *const ::c_char, errno: ::c_int) -> ::c_int,
-        >,
+        errfunc: ::Option<extern "C" fn(epath: *const ::c_char, errno: ::c_int) -> ::c_int>,
         pglob: *mut ::glob_t,
     ) -> ::c_int;
     #[cfg_attr(target_os = "netbsd", link_name = "__globfree30")]
@@ -624,11 +655,7 @@ extern "C" {
     )]
     pub fn globfree(pglob: *mut ::glob_t);
 
-    pub fn posix_madvise(
-        addr: *mut ::c_void,
-        len: ::size_t,
-        advice: ::c_int,
-    ) -> ::c_int;
+    pub fn posix_madvise(addr: *mut ::c_void, len: ::size_t, advice: ::c_int) -> ::c_int;
 
     pub fn shm_unlink(name: *const ::c_char) -> ::c_int;
 
@@ -651,22 +678,14 @@ extern "C" {
         link_name = "telldir$INODE64$UNIX2003"
     )]
     pub fn telldir(dirp: *mut ::DIR) -> ::c_long;
-    pub fn madvise(
-        addr: *mut ::c_void,
-        len: ::size_t,
-        advice: ::c_int,
-    ) -> ::c_int;
+    pub fn madvise(addr: *mut ::c_void, len: ::size_t, advice: ::c_int) -> ::c_int;
 
     #[cfg_attr(
         all(target_os = "macos", target_arch = "x86"),
         link_name = "msync$UNIX2003"
     )]
     #[cfg_attr(target_os = "netbsd", link_name = "__msync13")]
-    pub fn msync(
-        addr: *mut ::c_void,
-        len: ::size_t,
-        flags: ::c_int,
-    ) -> ::c_int;
+    pub fn msync(addr: *mut ::c_void, len: ::size_t, flags: ::c_int) -> ::c_int;
 
     #[cfg_attr(
         all(target_os = "macos", target_arch = "x86"),
@@ -689,49 +708,29 @@ extern "C" {
         all(target_os = "macos", target_arch = "x86"),
         link_name = "bind$UNIX2003"
     )]
-    pub fn bind(
-        socket: ::c_int,
-        address: *const ::sockaddr,
-        address_len: ::socklen_t,
-    ) -> ::c_int;
+    pub fn bind(socket: ::c_int, address: *const ::sockaddr, address_len: ::socklen_t) -> ::c_int;
 
     #[cfg_attr(
         all(target_os = "macos", target_arch = "x86"),
         link_name = "writev$UNIX2003"
     )]
-    pub fn writev(
-        fd: ::c_int,
-        iov: *const ::iovec,
-        iovcnt: ::c_int,
-    ) -> ::ssize_t;
+    pub fn writev(fd: ::c_int, iov: *const ::iovec, iovcnt: ::c_int) -> ::ssize_t;
     #[cfg_attr(
         all(target_os = "macos", target_arch = "x86"),
         link_name = "readv$UNIX2003"
     )]
-    pub fn readv(
-        fd: ::c_int,
-        iov: *const ::iovec,
-        iovcnt: ::c_int,
-    ) -> ::ssize_t;
+    pub fn readv(fd: ::c_int, iov: *const ::iovec, iovcnt: ::c_int) -> ::ssize_t;
 
     #[cfg_attr(
         all(target_os = "macos", target_arch = "x86"),
         link_name = "sendmsg$UNIX2003"
     )]
-    pub fn sendmsg(
-        fd: ::c_int,
-        msg: *const ::msghdr,
-        flags: ::c_int,
-    ) -> ::ssize_t;
+    pub fn sendmsg(fd: ::c_int, msg: *const ::msghdr, flags: ::c_int) -> ::ssize_t;
     #[cfg_attr(
         all(target_os = "macos", target_arch = "x86"),
         link_name = "recvmsg$UNIX2003"
     )]
-    pub fn recvmsg(
-        fd: ::c_int,
-        msg: *mut ::msghdr,
-        flags: ::c_int,
-    ) -> ::ssize_t;
+    pub fn recvmsg(fd: ::c_int, msg: *mut ::msghdr, flags: ::c_int) -> ::ssize_t;
 
     pub fn sync();
     pub fn getgrgid_r(
@@ -760,11 +759,7 @@ extern "C" {
         all(target_os = "macos", target_arch = "x86"),
         link_name = "pthread_sigmask$UNIX2003"
     )]
-    pub fn pthread_sigmask(
-        how: ::c_int,
-        set: *const sigset_t,
-        oldset: *mut sigset_t,
-    ) -> ::c_int;
+    pub fn pthread_sigmask(how: ::c_int, set: *const sigset_t, oldset: *mut sigset_t) -> ::c_int;
     pub fn sem_open(name: *const ::c_char, oflag: ::c_int, ...) -> *mut sem_t;
     pub fn getgrnam(name: *const ::c_char) -> *mut ::group;
     #[cfg_attr(
@@ -773,6 +768,8 @@ extern "C" {
     )]
     pub fn pthread_cancel(thread: ::pthread_t) -> ::c_int;
     pub fn pthread_kill(thread: ::pthread_t, sig: ::c_int) -> ::c_int;
+    pub fn sched_get_priority_min(policy: ::c_int) -> ::c_int;
+    pub fn sched_get_priority_max(policy: ::c_int) -> ::c_int;
     pub fn sem_unlink(name: *const ::c_char) -> ::c_int;
     #[cfg_attr(target_os = "netbsd", link_name = "__getpwnam_r50")]
     pub fn getpwnam_r(
@@ -833,12 +830,22 @@ extern "C" {
         options: ::c_int,
         rusage: *mut ::rusage,
     ) -> ::pid_t;
-
-    pub fn regcomp(
-        preg: *mut regex_t,
-        pattern: *const ::c_char,
-        cflags: ::c_int,
+    #[cfg_attr(
+        all(target_os = "macos", target_arch = "x86"),
+        link_name = "getitimer$UNIX2003"
+    )]
+    pub fn getitimer(which: ::c_int, curr_value: *mut ::itimerval) -> ::c_int;
+    #[cfg_attr(
+        all(target_os = "macos", target_arch = "x86"),
+        link_name = "setitimer$UNIX2003"
+    )]
+    pub fn setitimer(
+        which: ::c_int,
+        new_value: *const ::itimerval,
+        old_value: *mut ::itimerval,
     ) -> ::c_int;
+
+    pub fn regcomp(preg: *mut regex_t, pattern: *const ::c_char, cflags: ::c_int) -> ::c_int;
 
     pub fn regexec(
         preg: *const regex_t,
@@ -856,6 +863,10 @@ extern "C" {
     ) -> ::size_t;
 
     pub fn regfree(preg: *mut regex_t);
+
+    pub fn arc4random() -> u32;
+    pub fn arc4random_buf(buf: *mut ::c_void, size: ::size_t);
+    pub fn arc4random_uniform(l: u32) -> u32;
 }
 
 cfg_if! {

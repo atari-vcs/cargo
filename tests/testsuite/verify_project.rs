@@ -51,12 +51,12 @@ fn cargo_verify_project_honours_unstable_features() {
         .file(
             "Cargo.toml",
             r#"
-        cargo-features = ["test-dummy-unstable"]
+                cargo-features = ["test-dummy-unstable"]
 
-        [package]
-        name = "foo"
-        version = "0.0.1"
-    "#,
+                [package]
+                name = "foo"
+                version = "0.0.1"
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -68,6 +68,6 @@ fn cargo_verify_project_honours_unstable_features() {
 
     p.cargo("verify-project")
         .with_status(1)
-        .with_stdout(r#"{"invalid":"failed to parse manifest at `[CWD]/Cargo.toml`"}"#)
+        .with_json(r#"{"invalid":"failed to parse manifest at `[CWD]/Cargo.toml`"}"#)
         .run();
 }

@@ -67,13 +67,16 @@
 //! hopefully those are more obvious inline in the code itself.
 
 use crate::core::dependency::Dependency;
-use crate::core::{InternedString, PackageId, SourceId, Summary};
-use crate::sources::registry::{RegistryData, RegistryPackage};
-use crate::util::paths;
-use crate::util::{internal, CargoResult, Config, Filesystem, ToSemver};
-use log::info;
-use semver::{Version, VersionReq};
+use crate::core::{PackageId, SourceId, Summary};
+use crate::sources::registry::{RegistryData, RegistryPackage, INDEX_V_MAX};
+use crate::util::interning::InternedString;
+use crate::util::{internal, CargoResult, Config, Filesystem, OptVersionReq, ToSemver};
+use anyhow::bail;
+use cargo_util::{paths, registry::make_dep_path};
+use log::{debug, info};
+use semver::Version;
 use std::collections::{HashMap, HashSet};
+use std::convert::TryInto;
 use std::fs;
 use std::path::Path;
 use std::str;
@@ -115,7 +118,7 @@ impl<'s> Iterator for UncanonicalizedIter<'s> {
                 .chars()
                 .scan(0u16, |s, c| {
                     // the check against 15 here's to prevent
-                    // shift overflow on inputs with more then 15 hyphens
+                    // shift overflow on inputs with more than 15 hyphens
                     if (c == '_' || c == '-') && *s <= 15 {
                         let switch = (self.hyphen_combination_num & (1u16 << *s)) > 0;
                         let out = if (c == '_') ^ switch { '_' } else { '-' };
@@ -163,10 +166,28 @@ fn overflow_hyphen() {
     )
 }
 
+/// Manager for handling the on-disk index.
+///
+/// Note that local and remote registries store the index differently. Local
+/// is a simple on-disk tree of files of the raw index. Remote registries are
+/// stored as a raw git repository. The different means of access are handled
+/// via the [`RegistryData`] trait abstraction.
+///
+/// This transparently handles caching of the index in a more efficient format.
 pub struct RegistryIndex<'cfg> {
     source_id: SourceId,
+    /// Root directory of the index for the registry.
     path: Filesystem,
+    /// Cache of summary data.
+    ///
+    /// This is keyed off the package name. The [`Summaries`] value handles
+    /// loading the summary data. It keeps an optimized on-disk representation
+    /// of the JSON files, which is created in an as-needed fashion. If it
+    /// hasn't been cached already, it uses [`RegistryData::load`] to access
+    /// to JSON files from the index, and the creates the optimized on-disk
+    /// summary cache.
     summaries_cache: HashMap<InternedString, Summaries>,
+    /// [`Config`] reference for convenience.
     config: &'cfg Config,
 }
 
@@ -214,6 +235,8 @@ enum MaybeIndexSummary {
 pub struct IndexSummary {
     pub summary: Summary,
     pub yanked: bool,
+    /// Schema version, see [`RegistryPackage`].
+    v: u32,
 }
 
 /// A representation of the cache on disk that Cargo maintains of summaries.
@@ -241,7 +264,7 @@ impl<'cfg> RegistryIndex<'cfg> {
 
     /// Returns the hash listed for a specified `PackageId`.
     pub fn hash(&mut self, pkg: PackageId, load: &mut dyn RegistryData) -> CargoResult<&str> {
-        let req = VersionReq::exact(pkg.version());
+        let req = OptVersionReq::exact(pkg.version());
         let summary = self
             .summaries(pkg.name(), &req, load)?
             .next()
@@ -262,13 +285,16 @@ impl<'cfg> RegistryIndex<'cfg> {
     pub fn summaries<'a, 'b>(
         &'a mut self,
         name: InternedString,
-        req: &'b VersionReq,
+        req: &'b OptVersionReq,
         load: &mut dyn RegistryData,
     ) -> CargoResult<impl Iterator<Item = &'a IndexSummary> + 'b>
     where
         'a: 'b,
     {
         let source_id = self.source_id;
+        let config = self.config;
+        let namespaced_features = self.config.cli_unstable().namespaced_features;
+        let weak_dep_features = self.config.cli_unstable().weak_dep_features;
 
         // First up actually parse what summaries we have available. If Cargo
         // has run previously this will parse a Cargo-specific cache file rather
@@ -283,16 +309,41 @@ impl<'cfg> RegistryIndex<'cfg> {
         // minimize the amount of work being done here and parse as little as
         // necessary.
         let raw_data = &summaries.raw_data;
+        let max_version = if namespaced_features || weak_dep_features {
+            INDEX_V_MAX
+        } else {
+            1
+        };
         Ok(summaries
             .versions
             .iter_mut()
             .filter_map(move |(k, v)| if req.matches(k) { Some(v) } else { None })
-            .filter_map(move |maybe| match maybe.parse(raw_data, source_id) {
-                Ok(summary) => Some(summary),
-                Err(e) => {
-                    info!("failed to parse `{}` registry package: {}", name, e);
-                    None
+            .filter_map(
+                move |maybe| match maybe.parse(config, raw_data, source_id) {
+                    Ok(summary) => Some(summary),
+                    Err(e) => {
+                        info!("failed to parse `{}` registry package: {}", name, e);
+                        None
+                    }
+                },
+            )
+            .filter(move |is| {
+                if is.v > max_version {
+                    debug!(
+                        "unsupported schema version {} ({} {})",
+                        is.v,
+                        is.summary.name(),
+                        is.summary.version()
+                    );
+                    false
+                } else {
+                    true
                 }
+            })
+            .filter(move |is| {
+                is.summary
+                    .unstable_gate(namespaced_features, weak_dep_features)
+                    .is_ok()
             }))
     }
 
@@ -322,12 +373,7 @@ impl<'cfg> RegistryIndex<'cfg> {
             .chars()
             .flat_map(|c| c.to_lowercase())
             .collect::<String>();
-        let raw_path = match fs_name.len() {
-            1 => format!("1/{}", fs_name),
-            2 => format!("2/{}", fs_name),
-            3 => format!("3/{}/{}", &fs_name[..1], fs_name),
-            _ => format!("{}/{}/{}", &fs_name[0..2], &fs_name[2..4], fs_name),
-        };
+        let raw_path = make_dep_path(&fs_name, false);
 
         // Attempt to handle misspellings by searching for a chain of related
         // names to the original `raw_path` name. Only return summaries
@@ -336,7 +382,7 @@ impl<'cfg> RegistryIndex<'cfg> {
         // along the way produce helpful "did you mean?" suggestions.
         for path in UncanonicalizedIter::new(&raw_path).take(1024) {
             let summaries = Summaries::parse(
-                index_version.as_ref().map(|s| &**s),
+                index_version.as_deref(),
                 root,
                 &cache_root,
                 path.as_ref(),
@@ -438,7 +484,7 @@ impl<'cfg> RegistryIndex<'cfg> {
     }
 
     pub fn is_yanked(&mut self, pkg: PackageId, load: &mut dyn RegistryData) -> CargoResult<bool> {
-        let req = VersionReq::exact(pkg.version());
+        let req = OptVersionReq::exact(pkg.version());
         let found = self
             .summaries(pkg.name(), &req, load)?
             .any(|summary| summary.yanked);
@@ -518,9 +564,17 @@ impl Summaries {
                 // allow future cargo implementations to break the
                 // interpretation of each line here and older cargo will simply
                 // ignore the new lines.
-                let summary = match IndexSummary::parse(line, source_id) {
+                let summary = match IndexSummary::parse(config, line, source_id) {
                     Ok(summary) => summary,
                     Err(e) => {
+                        // This should only happen when there is an index
+                        // entry from a future version of cargo that this
+                        // version doesn't understand. Hopefully, those future
+                        // versions of cargo correctly set INDEX_V_MAX and
+                        // CURRENT_CACHE_VERSION, otherwise this will skip
+                        // entries in the cache preventing those newer
+                        // versions from reading them (that is, until the
+                        // cache is rebuilt).
                         log::info!("failed to parse {:?} registry package: {}", relative, e);
                         continue;
                     }
@@ -549,7 +603,14 @@ impl Summaries {
         // actually happens to verify that our cache is indeed fresh and
         // computes exactly the same value as before.
         if cfg!(debug_assertions) && cache_contents.is_some() {
-            assert_eq!(cache_bytes, cache_contents);
+            if cache_bytes != cache_contents {
+                panic!(
+                    "original cache contents:\n{:?}\n\
+                     does not equal new cache contents:\n{:?}\n",
+                    cache_contents.as_ref().map(|s| String::from_utf8_lossy(s)),
+                    cache_bytes.as_ref().map(|s| String::from_utf8_lossy(s)),
+                );
+            }
         }
 
         // Once we have our `cache_bytes` which represents the `Summaries` we're
@@ -601,9 +662,9 @@ impl Summaries {
 // Implementation of serializing/deserializing the cache of summaries on disk.
 // Currently the format looks like:
 //
-// +--------------+-------------+---+
-// | version byte | git sha rev | 0 |
-// +--------------+-------------+---+
+// +--------------------+----------------------+-------------+---+
+// | cache version byte | index format version | git sha rev | 0 |
+// +--------------------+----------------------+-------------+---+
 //
 // followed by...
 //
@@ -620,8 +681,22 @@ impl Summaries {
 // versions of Cargo share the same cache they don't get too confused. The git
 // sha lets us know when the file needs to be regenerated (it needs regeneration
 // whenever the index itself updates).
+//
+// Cache versions:
+// * `1`: The original version.
+// * `2`: Added the "index format version" field so that if the index format
+//   changes, different versions of cargo won't get confused reading each
+//   other's caches.
+// * `3`: Bumped the version to work around a issue where multiple versions of
+//   a package were published that differ only by semver metadata. For
+//   example, openssl-src 110.0.0 and 110.0.0+1.1.0f. Previously, the cache
+//   would be incorrectly populated with two entries, both 110.0.0. After
+//   this, the metadata will be correctly included. This isn't really a format
+//   change, just a version bump to clear the incorrect cache entries. Note:
+//   the index shouldn't allow these, but unfortunately crates.io doesn't
+//   check it.
 
-const CURRENT_CACHE_VERSION: u8 = 1;
+const CURRENT_CACHE_VERSION: u8 = 3;
 
 impl<'a> SummariesCache<'a> {
     fn parse(data: &'a [u8], last_index_update: &str) -> CargoResult<SummariesCache<'a>> {
@@ -630,19 +705,32 @@ impl<'a> SummariesCache<'a> {
             .split_first()
             .ok_or_else(|| anyhow::format_err!("malformed cache"))?;
         if *first_byte != CURRENT_CACHE_VERSION {
-            anyhow::bail!("looks like a different Cargo's cache, bailing out");
+            bail!("looks like a different Cargo's cache, bailing out");
         }
+        let index_v_bytes = rest
+            .get(..4)
+            .ok_or_else(|| anyhow::anyhow!("cache expected 4 bytes for index version"))?;
+        let index_v = u32::from_le_bytes(index_v_bytes.try_into().unwrap());
+        if index_v != INDEX_V_MAX {
+            bail!(
+                "index format version {} doesn't match the version I know ({})",
+                index_v,
+                INDEX_V_MAX
+            );
+        }
+        let rest = &rest[4..];
+
         let mut iter = split(rest, 0);
         if let Some(update) = iter.next() {
             if update != last_index_update.as_bytes() {
-                anyhow::bail!(
+                bail!(
                     "cache out of date: current index ({}) != cache ({})",
                     last_index_update,
                     str::from_utf8(update)?,
                 )
             }
         } else {
-            anyhow::bail!("malformed file");
+            bail!("malformed file");
         }
         let mut ret = SummariesCache::default();
         while let Some(version) = iter.next() {
@@ -663,6 +751,7 @@ impl<'a> SummariesCache<'a> {
             .sum();
         let mut contents = Vec::with_capacity(size);
         contents.push(CURRENT_CACHE_VERSION);
+        contents.extend(&u32::to_le_bytes(INDEX_V_MAX));
         contents.extend_from_slice(index_version.as_bytes());
         contents.push(0);
         for (version, data) in self.versions.iter() {
@@ -681,12 +770,17 @@ impl MaybeIndexSummary {
     /// Does nothing if this is already `Parsed`, and otherwise the `raw_data`
     /// passed in is sliced with the bounds in `Unparsed` and then actually
     /// parsed.
-    fn parse(&mut self, raw_data: &[u8], source_id: SourceId) -> CargoResult<&IndexSummary> {
+    fn parse(
+        &mut self,
+        config: &Config,
+        raw_data: &[u8],
+        source_id: SourceId,
+    ) -> CargoResult<&IndexSummary> {
         let (start, end) = match self {
             MaybeIndexSummary::Unparsed { start, end } => (*start, *end),
             MaybeIndexSummary::Parsed(summary) => return Ok(summary),
         };
-        let summary = IndexSummary::parse(&raw_data[start..end], source_id)?;
+        let summary = IndexSummary::parse(config, &raw_data[start..end], source_id)?;
         *self = MaybeIndexSummary::Parsed(summary);
         match self {
             MaybeIndexSummary::Unparsed { .. } => unreachable!(),
@@ -706,32 +800,47 @@ impl IndexSummary {
     /// a package.
     ///
     /// The `line` provided is expected to be valid JSON.
-    fn parse(line: &[u8], source_id: SourceId) -> CargoResult<IndexSummary> {
+    fn parse(config: &Config, line: &[u8], source_id: SourceId) -> CargoResult<IndexSummary> {
+        // ****CAUTION**** Please be extremely careful with returning errors
+        // from this function. Entries that error are not included in the
+        // index cache, and can cause cargo to get confused when switching
+        // between different versions that understand the index differently.
+        // Make sure to consider the INDEX_V_MAX and CURRENT_CACHE_VERSION
+        // values carefully when making changes here.
         let RegistryPackage {
             name,
             vers,
             cksum,
             deps,
-            features,
+            mut features,
+            features2,
             yanked,
             links,
+            v,
         } = serde_json::from_slice(line)?;
+        let v = v.unwrap_or(1);
         log::trace!("json parsed registry {}/{}", name, vers);
         let pkgid = PackageId::new(name, &vers, source_id)?;
         let deps = deps
             .into_iter()
             .map(|dep| dep.into_dep(source_id))
             .collect::<CargoResult<Vec<_>>>()?;
-        let mut summary = Summary::new(pkgid, deps, &features, links, false)?;
+        if let Some(features2) = features2 {
+            for (name, values) in features2 {
+                features.entry(name).or_default().extend(values);
+            }
+        }
+        let mut summary = Summary::new(config, pkgid, deps, &features, links)?;
         summary.set_checksum(cksum);
         Ok(IndexSummary {
             summary,
             yanked: yanked.unwrap_or(false),
+            v,
         })
     }
 }
 
-fn split<'a>(haystack: &'a [u8], needle: u8) -> impl Iterator<Item = &'a [u8]> + 'a {
+fn split(haystack: &[u8], needle: u8) -> impl Iterator<Item = &[u8]> {
     struct Split<'a> {
         haystack: &'a [u8],
         needle: u8,

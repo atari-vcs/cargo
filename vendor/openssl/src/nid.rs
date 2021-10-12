@@ -1,12 +1,11 @@
 //! A collection of numerical identifiers for OpenSSL objects.
-use ffi;
 use libc::{c_char, c_int};
 
 use std::ffi::CStr;
 use std::str;
 
-use cvt_p;
-use error::ErrorStack;
+use crate::cvt_p;
+use crate::error::ErrorStack;
 
 /// The digest and public-key algorithms associated with a signature.
 pub struct SignatureAlgorithms {
@@ -55,6 +54,7 @@ impl Nid {
     }
 
     /// Return the integer representation of a `Nid`.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn as_raw(&self) -> c_int {
         self.0
     }
@@ -62,6 +62,7 @@ impl Nid {
     /// Returns the `Nid`s of the digest and public key algorithms associated with a signature ID.
     ///
     /// This corresponds to `OBJ_find_sigid_algs`.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn signature_algorithms(&self) -> Option<SignatureAlgorithms> {
         unsafe {
             let mut digest = 0;
@@ -81,6 +82,7 @@ impl Nid {
     /// This corresponds to [`OBJ_nid2ln`]
     ///
     /// [`OBJ_nid2ln`]: https://www.openssl.org/docs/man1.1.0/crypto/OBJ_nid2ln.html
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn long_name(&self) -> Result<&'static str, ErrorStack> {
         unsafe {
             cvt_p(ffi::OBJ_nid2ln(self.0) as *mut c_char)
@@ -92,6 +94,7 @@ impl Nid {
     /// This corresponds to [`OBJ_nid2sn`]
     ///
     /// [`OBJ_nid2sn`]: https://www.openssl.org/docs/man1.1.0/crypto/OBJ_nid2sn.html
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn short_name(&self) -> Result<&'static str, ErrorStack> {
         unsafe {
             cvt_p(ffi::OBJ_nid2sn(self.0) as *mut c_char)

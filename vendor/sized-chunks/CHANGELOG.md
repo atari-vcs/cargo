@@ -5,6 +5,82 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/) and this project
 adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [0.6.5] - 2021-04-16
+
+-   When `InlineArray` cannot hold any values because of misalignment, report it as capacity 0
+    instead of panicking at runtime. (#22)
+
+## [0.6.4] - 2021-02-17
+
+### FIXED
+
+-   `InlineArray` can be used in recursive types again.
+
+### CHANGED
+
+-   `InlineArray::new()` now panics when it can't store elements with large alignment (this was UB
+    prior to 0.6.3). Alignments of `usize` and smaller are always supported. Larger alignments are
+    supported if the capacity-providing type has sufficient alignment.
+
+## [0.6.3] - 2021-02-14
+
+### FIXED
+
+-   Multilple soundness fixes: `InlineArray` handles large alignment, panic safety in `Chunk`'s
+    `clone` and `from_iter`, capacity checks in `unit()`, `pair()` and `from()`.
+-   `InlineArray` can now handle zero sized values. This relies on conditionals in const functions,
+    a feature which was introduced in Rust 1.46.0, which means this is now the minimum Rust version
+    this crate will work on.
+
+## [0.6.2] - 2020-05-15
+
+### FIXED
+
+-   This release exists for no other purpose than to bump the `refpool` optional dependency.
+
+## [0.6.1] - 2020-03-26
+
+### ADDED
+
+-   The crate now has a `std` feature flag, which is on by default, and will make the crate `no_std`
+    if disabled.
+
+### FIXED
+
+-   Fixed a compilation error if you had the `arbitrary` feature flag enabled without the
+    `ringbuffer` flag.
+
+## [0.6.0] - 2020-03-24
+
+### CHANGED
+
+-   `RingBuffer` and its accompanying slice types `Slice` and `SliceMut` now implement `Array` and
+    `ArrayMut` from [`array-ops`](http://docs.rs/array-ops), giving them most of the methods that
+    would be available on primitive slice types and cutting down on code duplication in the
+    implementation, but at the price of having to pull `Array` et al into scope when you need them.
+    Because this means adding a dependency to `array-ops`, `RingBuffer` has now been moved behind
+    the `ringbuffer` feature flag. `Chunk` and `InlineArray` don't and won't implement `Array`,
+    because they are both able to implement `Deref<[A]>`, which provides the same functionality more
+    efficiently.
+
+### ADDED
+
+-   The `insert_from` and `insert_ordered` methods recently added to `Chunk` have now also been
+    added to `RingBuffer`.
+-   `RingBuffer`'s `Slice` and `SliceMut` now also have the three `binary_search` methods regular
+    slices have.
+-   `SparseChunk`, `RingBuffer`, `Slice` and `SliceMut` now have unsafe `get_unchecked` and
+    `get_unchecked_mut` methods.
+-   `PartialEq` implementations allowing you to compare `RingBuffer`s, `Slice`s and `SliceMut`s
+    interchangeably have been added.
+
+### FIXED
+
+-   Fixed an aliasing issue in `RingBuffer`'s mutable iterator, as uncovered by Miri. Behind the
+    scenes, the full non-fuzzing unit test suite is now able to run on Miri without crashing it
+    (after migrating the last Proptest tests away from the test suite into the fuzz targets), and
+    this has been included in its CI build. (#6)
+
 ## [0.5.3] - 2020-03-11
 
 ### FIXED

@@ -1,8 +1,5 @@
 //! Tests for the `cargo update` command.
 
-use std::fs::File;
-use std::io::prelude::*;
-
 use cargo_test_support::registry::Package;
 use cargo_test_support::{basic_manifest, project};
 
@@ -42,20 +39,18 @@ fn minor_update_two_places() {
     p.cargo("build").run();
     Package::new("log", "0.1.1").publish();
 
-    File::create(p.root().join("foo/Cargo.toml"))
-        .unwrap()
-        .write_all(
-            br#"
-                [package]
-                name = "foo"
-                version = "0.0.1"
-                authors = []
+    p.change_file(
+        "foo/Cargo.toml",
+        r#"
+            [package]
+            name = "foo"
+            version = "0.0.1"
+            authors = []
 
-                [dependencies]
-                log = "0.1.1"
-            "#,
-        )
-        .unwrap();
+            [dependencies]
+            log = "0.1.1"
+        "#,
+    );
 
     p.cargo("build").run();
 }
@@ -438,41 +433,7 @@ fn update_precise_first_run() {
     {
       "authors": [],
       "categories": [],
-      "dependencies": [],
-      "description": null,
-      "edition": "2015",
-      "features": {},
-      "id": "serde 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
-      "keywords": [],
-      "license": null,
-      "license_file": null,
-      "links": null,
-      "manifest_path": "[..]/home/.cargo/registry/src/-[..]/serde-0.2.0/Cargo.toml",
-      "metadata": null,
-      "publish": null,
-      "name": "serde",
-      "readme": null,
-      "repository": null,
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "targets": [
-        {
-          "crate_types": [
-            "lib"
-          ],
-          "doctest": true,
-          "edition": "2015",
-          "kind": [
-            "lib"
-          ],
-          "name": "serde",
-          "src_path": "[..]/home/.cargo/registry/src/-[..]/serde-0.2.0/src/lib.rs"
-        }
-      ],
-      "version": "0.2.0"
-    },
-    {
-      "authors": [],
-      "categories": [],
+      "default_run": null,
       "dependencies": [
         {
           "features": [],
@@ -488,8 +449,10 @@ fn update_precise_first_run() {
         }
       ],
       "description": null,
+      "documentation": null,
       "edition": "2015",
       "features": {},
+      "homepage": null,
       "id": "bar 0.0.1 (path+file://[..]/foo)",
       "keywords": [],
       "license": null,
@@ -507,7 +470,9 @@ fn update_precise_first_run() {
           "crate_types": [
             "lib"
           ],
+          "doc": true,
           "doctest": true,
+          "test": true,
           "edition": "2015",
           "kind": [
             "lib"
@@ -517,6 +482,46 @@ fn update_precise_first_run() {
         }
       ],
       "version": "0.0.1"
+    },
+    {
+      "authors": [],
+      "categories": [],
+      "default_run": null,
+      "dependencies": [],
+      "description": null,
+      "documentation": null,
+      "edition": "2015",
+      "features": {},
+      "homepage": null,
+      "id": "serde 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+      "keywords": [],
+      "license": null,
+      "license_file": null,
+      "links": null,
+      "manifest_path": "[..]/home/.cargo/registry/src/-[..]/serde-0.2.0/Cargo.toml",
+      "metadata": null,
+      "publish": null,
+      "name": "serde",
+      "readme": null,
+      "repository": null,
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "targets": [
+        {
+          "crate_types": [
+            "lib"
+          ],
+          "doc": true,
+          "doctest": true,
+          "edition": "2015",
+          "kind": [
+            "lib"
+          ],
+          "name": "serde",
+          "src_path": "[..]/home/.cargo/registry/src/-[..]/serde-0.2.0/src/lib.rs",
+          "test": true
+        }
+      ],
+      "version": "0.2.0"
     }
   ],
   "resolve": {
@@ -554,7 +559,8 @@ fn update_precise_first_run() {
   "workspace_members": [
     "bar 0.0.1 (path+file://[..]/foo)"
   ],
-  "workspace_root": "[..]/foo"
+  "workspace_root": "[..]/foo",
+  "metadata": null
 }"#,
         )
         .run();
@@ -580,7 +586,7 @@ fn preserve_top_comment() {
     let mut lines = lockfile.lines().collect::<Vec<_>>();
     lines.insert(2, "# some other comment");
     let mut lockfile = lines.join("\n");
-    lockfile.push_str("\n\n"); // .lines/.join loses the last newline
+    lockfile.push('\n'); // .lines/.join loses the last newline
     println!("saving Cargo.lock contents:\n{}", lockfile);
 
     p.change_file("Cargo.lock", &lockfile);
@@ -630,7 +636,7 @@ fn dry_run_update() {
         .build();
 
     p.cargo("build").run();
-    let old_lockfile = p.read_file("Cargo.lock");
+    let old_lockfile = p.read_lockfile();
 
     Package::new("log", "0.1.1").publish();
     Package::new("serde", "0.1.1").dep("log", "0.1").publish();
@@ -644,6 +650,31 @@ fn dry_run_update() {
 ",
         )
         .run();
-    let new_lockfile = p.read_file("Cargo.lock");
+    let new_lockfile = p.read_lockfile();
     assert_eq!(old_lockfile, new_lockfile)
+}
+
+#[cargo_test]
+fn workspace_only() {
+    let p = project().file("src/main.rs", "fn main() {}").build();
+    p.cargo("generate-lockfile").run();
+    let lock1 = p.read_lockfile();
+
+    p.change_file(
+        "Cargo.toml",
+        r#"
+            [package]
+            name = "foo"
+            authors = []
+            version = "0.0.2"
+        "#,
+    );
+    p.cargo("update --workspace").run();
+    let lock2 = p.read_lockfile();
+
+    assert_ne!(lock1, lock2);
+    assert!(lock1.contains("0.0.1"));
+    assert!(lock2.contains("0.0.2"));
+    assert!(!lock1.contains("0.0.2"));
+    assert!(!lock2.contains("0.0.1"));
 }

@@ -1,21 +1,22 @@
 //! Digital Signatures
 //!
 //! DSA ensures a message originated from a known sender, and was not modified.
-//! DSA uses asymetrical keys and an algorithm to output a signature of the message
+//! DSA uses asymmetrical keys and an algorithm to output a signature of the message
 //! using the private key that can be validated with the public key but not be generated
 //! without the private key.
 
-use ffi;
+use cfg_if::cfg_if;
 use foreign_types::{ForeignType, ForeignTypeRef};
 use libc::c_int;
 use std::fmt;
 use std::mem;
 use std::ptr;
 
-use bn::{BigNum, BigNumRef};
-use error::ErrorStack;
-use pkey::{HasParams, HasPrivate, HasPublic, Private, Public};
-use {cvt, cvt_p};
+use crate::bn::{BigNum, BigNumRef};
+use crate::error::ErrorStack;
+use crate::pkey::{HasParams, HasPrivate, HasPublic, Private, Public};
+use crate::util::ForeignTypeRefExt;
+use crate::{cvt, cvt_p};
 
 generic_foreign_type_and_impl_send_sync! {
     type CType = ffi::DSA;
@@ -30,7 +31,7 @@ generic_foreign_type_and_impl_send_sync! {
     /// * `q`: DSA sub-prime parameter
     /// * `g`: DSA base parameter
     ///
-    /// These values are used to calculate a pair of asymetrical keys used for
+    /// These values are used to calculate a pair of asymmetrical keys used for
     /// signing.
     ///
     /// OpenSSL documentation at [`DSA_new`]
@@ -80,26 +81,6 @@ impl<T> DsaRef<T>
 where
     T: HasPublic,
 {
-    private_key_to_pem! {
-        /// Serializes the private key to a PEM-encoded DSAPrivateKey structure.
-        ///
-        /// The output will have a header of `-----BEGIN DSA PRIVATE KEY-----`.
-        ///
-        /// This corresponds to [`PEM_write_bio_DSAPrivateKey`].
-        ///
-        /// [`PEM_write_bio_DSAPrivateKey`]: https://www.openssl.org/docs/man1.1.0/crypto/PEM_write_bio_DSAPrivateKey.html
-        private_key_to_pem,
-        /// Serializes the private key to a PEM-encoded encrypted DSAPrivateKey structure.
-        ///
-        /// The output will have a header of `-----BEGIN DSA PRIVATE KEY-----`.
-        ///
-        /// This corresponds to [`PEM_write_bio_DSAPrivateKey`].
-        ///
-        /// [`PEM_write_bio_DSAPrivateKey`]: https://www.openssl.org/docs/man1.1.0/crypto/PEM_write_bio_DSAPrivateKey.html
-        private_key_to_pem_passphrase,
-        ffi::PEM_write_bio_DSAPrivateKey
-    }
-
     to_pem! {
         /// Serialies the public key into a PEM-encoded SubjectPublicKeyInfo structure.
         ///
@@ -127,7 +108,7 @@ where
         unsafe {
             let mut pub_key = ptr::null();
             DSA_get0_key(self.as_ptr(), &mut pub_key, ptr::null_mut());
-            BigNumRef::from_ptr(pub_key as *mut _)
+            BigNumRef::from_const_ptr(pub_key)
         }
     }
 }
@@ -136,12 +117,32 @@ impl<T> DsaRef<T>
 where
     T: HasPrivate,
 {
+    private_key_to_pem! {
+        /// Serializes the private key to a PEM-encoded DSAPrivateKey structure.
+        ///
+        /// The output will have a header of `-----BEGIN DSA PRIVATE KEY-----`.
+        ///
+        /// This corresponds to [`PEM_write_bio_DSAPrivateKey`].
+        ///
+        /// [`PEM_write_bio_DSAPrivateKey`]: https://www.openssl.org/docs/man1.1.0/crypto/PEM_write_bio_DSAPrivateKey.html
+        private_key_to_pem,
+        /// Serializes the private key to a PEM-encoded encrypted DSAPrivateKey structure.
+        ///
+        /// The output will have a header of `-----BEGIN DSA PRIVATE KEY-----`.
+        ///
+        /// This corresponds to [`PEM_write_bio_DSAPrivateKey`].
+        ///
+        /// [`PEM_write_bio_DSAPrivateKey`]: https://www.openssl.org/docs/man1.1.0/crypto/PEM_write_bio_DSAPrivateKey.html
+        private_key_to_pem_passphrase,
+        ffi::PEM_write_bio_DSAPrivateKey
+    }
+
     /// Returns a reference to the private key component of `self`.
     pub fn priv_key(&self) -> &BigNumRef {
         unsafe {
             let mut priv_key = ptr::null();
             DSA_get0_key(self.as_ptr(), ptr::null_mut(), &mut priv_key);
-            BigNumRef::from_ptr(priv_key as *mut _)
+            BigNumRef::from_const_ptr(priv_key)
         }
     }
 }
@@ -164,7 +165,7 @@ where
         unsafe {
             let mut p = ptr::null();
             DSA_get0_pqg(self.as_ptr(), &mut p, ptr::null_mut(), ptr::null_mut());
-            BigNumRef::from_ptr(p as *mut _)
+            BigNumRef::from_const_ptr(p)
         }
     }
 
@@ -173,7 +174,7 @@ where
         unsafe {
             let mut q = ptr::null();
             DSA_get0_pqg(self.as_ptr(), ptr::null_mut(), &mut q, ptr::null_mut());
-            BigNumRef::from_ptr(q as *mut _)
+            BigNumRef::from_const_ptr(q)
         }
     }
 
@@ -182,7 +183,7 @@ where
         unsafe {
             let mut g = ptr::null();
             DSA_get0_pqg(self.as_ptr(), ptr::null_mut(), ptr::null_mut(), &mut g);
-            BigNumRef::from_ptr(g as *mut _)
+            BigNumRef::from_const_ptr(g)
         }
     }
 }
@@ -287,7 +288,7 @@ impl Dsa<Public> {
 }
 
 impl<T> fmt::Debug for Dsa<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "DSA")
     }
 }
@@ -357,10 +358,10 @@ cfg_if! {
 #[cfg(test)]
 mod test {
     use super::*;
-    use bn::BigNumContext;
-    use hash::MessageDigest;
-    use pkey::PKey;
-    use sign::{Signer, Verifier};
+    use crate::bn::BigNumContext;
+    use crate::hash::MessageDigest;
+    use crate::pkey::PKey;
+    use crate::sign::{Signer, Verifier};
 
     #[test]
     pub fn test_generate() {
@@ -451,6 +452,7 @@ mod test {
     }
 
     #[test]
+    #[allow(clippy::redundant_clone)]
     fn clone() {
         let key = Dsa::generate(2048).unwrap();
         drop(key.clone());

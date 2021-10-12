@@ -303,7 +303,7 @@
 //!
 //! | Feature | Description |
 //! | ------- | ----------- |
-//! | [`pool`](https://crates.io/crates/refpool) | Constructors and pool types for [`refpool`](https://crates.io/crates/refpool) memory pools (recommended only for `im-rc`) |
+//! | [`pool`](https://crates.io/crates/refpool) | Constructors and pool types for [`refpool`](https://crates.io/crates/refpool) memory pools (only available in `im-rc`) |
 //! | [`proptest`](https://crates.io/crates/proptest) | Strategies for all `im` datatypes under a `proptest` namespace, eg. `im::vector::proptest::vector()` |
 //! | [`quickcheck`](https://crates.io/crates/quickcheck) | [`quickcheck::Arbitrary`](https://docs.rs/quickcheck/latest/quickcheck/trait.Arbitrary.html) implementations for all `im` datatypes (not available in `im-rc`) |
 //! | [`rayon`](https://crates.io/crates/rayon) | parallel iterator implementations for [`Vector`][vector::Vector] (not available in `im-rc`) |
@@ -324,11 +324,11 @@
 //! [std::hash::Hash]: https://doc.rust-lang.org/std/hash/trait.Hash.html
 //! [std::marker::Send]: https://doc.rust-lang.org/std/marker/trait.Send.html
 //! [std::marker::Sync]: https://doc.rust-lang.org/std/marker/trait.Sync.html
-//! [hashmap::HashMap]: ./hashmap/struct.HashMap.html
-//! [hashset::HashSet]: ./hashset/struct.HashSet.html
-//! [ordmap::OrdMap]: ./ordmap/struct.OrdMap.html
-//! [ordset::OrdSet]: ./ordset/struct.OrdSet.html
-//! [vector::Vector]: ./vector/enum.Vector.html
+//! [hashmap::HashMap]: ./struct.HashMap.html
+//! [hashset::HashSet]: ./struct.HashSet.html
+//! [ordmap::OrdMap]: ./struct.OrdMap.html
+//! [ordset::OrdSet]: ./struct.OrdSet.html
+//! [vector::Vector]: ./struct.Vector.html
 //! [vector::Vector::push_back]: ./vector/enum.Vector.html#method.push_back
 //! [rrb-tree]: https://infoscience.epfl.ch/record/213452/files/rrbvector.pdf
 //! [hamt]: https://en.wikipedia.org/wiki/Hash_array_mapped_trie
@@ -382,8 +382,13 @@ pub mod arbitrary;
 #[doc(hidden)]
 pub mod quickcheck;
 
-#[cfg(not(feature = "pool"))]
+#[cfg(any(threadsafe, not(feature = "pool")))]
 mod fakepool;
+
+#[cfg(all(threadsafe, feature = "pool"))]
+compile_error!(
+    "The `pool` feature is not threadsafe but you've enabled it on a threadsafe version of `im`."
+);
 
 pub use crate::hashmap::HashMap;
 pub use crate::hashset::HashSet;

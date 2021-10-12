@@ -40,7 +40,7 @@ impl Version {
 
     /// Returns the human readable version string,
     pub fn version(&self) -> &str {
-        unsafe { ::opt_str((*self.inner).version).unwrap() }
+        unsafe { crate::opt_str((*self.inner).version).unwrap() }
     }
 
     /// Returns a numeric representation of the version number
@@ -51,11 +51,16 @@ impl Version {
         unsafe { (*self.inner).version_num as u32 }
     }
 
+    /// Returns true if this was built with the vendored version of libcurl.
+    pub fn vendored(&self) -> bool {
+        curl_sys::vendored()
+    }
+
     /// Returns a human readable string of the host libcurl is built for.
     ///
     /// This is discovered as part of the build environment.
     pub fn host(&self) -> &str {
-        unsafe { ::opt_str((*self.inner).host).unwrap() }
+        unsafe { crate::opt_str((*self.inner).host).unwrap() }
     }
 
     /// Returns whether libcurl supports IPv6
@@ -141,6 +146,41 @@ impl Version {
         self.flag(curl_sys::CURL_VERSION_HTTP2)
     }
 
+    /// Returns whether libcurl was built with support for HTTP3.
+    pub fn feature_http3(&self) -> bool {
+        self.flag(curl_sys::CURL_VERSION_HTTP3)
+    }
+
+    /// Returns whether libcurl was built with support for Brotli.
+    pub fn feature_brotli(&self) -> bool {
+        self.flag(curl_sys::CURL_VERSION_BROTLI)
+    }
+
+    /// Returns whether libcurl was built with support for Alt-Svc.
+    pub fn feature_altsvc(&self) -> bool {
+        self.flag(curl_sys::CURL_VERSION_ALTSVC)
+    }
+
+    /// Returns whether libcurl was built with support for zstd
+    pub fn feature_zstd(&self) -> bool {
+        self.flag(curl_sys::CURL_VERSION_ZSTD)
+    }
+
+    /// Returns whether libcurl was built with support for unicode
+    pub fn feature_unicode(&self) -> bool {
+        self.flag(curl_sys::CURL_VERSION_UNICODE)
+    }
+
+    /// Returns whether libcurl was built with support for hsts
+    pub fn feature_hsts(&self) -> bool {
+        self.flag(curl_sys::CURL_VERSION_HSTS)
+    }
+
+    /// Returns whether libcurl was built with support for gsasl
+    pub fn feature_gsasl(&self) -> bool {
+        self.flag(curl_sys::CURL_VERSION_GSASL)
+    }
+
     fn flag(&self, flag: c_int) -> bool {
         unsafe { (*self.inner).features & flag != 0 }
     }
@@ -148,13 +188,13 @@ impl Version {
     /// Returns the version of OpenSSL that is used, or None if there is no SSL
     /// support.
     pub fn ssl_version(&self) -> Option<&str> {
-        unsafe { ::opt_str((*self.inner).ssl_version) }
+        unsafe { crate::opt_str((*self.inner).ssl_version) }
     }
 
     /// Returns the version of libz that is used, or None if there is no libz
     /// support.
     pub fn libz_version(&self) -> Option<&str> {
-        unsafe { ::opt_str((*self.inner).libz_version) }
+        unsafe { crate::opt_str((*self.inner).libz_version) }
     }
 
     /// Returns an iterator over the list of protocols that this build of
@@ -173,7 +213,7 @@ impl Version {
     pub fn ares_version(&self) -> Option<&str> {
         unsafe {
             if (*self.inner).age >= curl_sys::CURLVERSION_SECOND {
-                ::opt_str((*self.inner).ares)
+                crate::opt_str((*self.inner).ares)
             } else {
                 None
             }
@@ -195,7 +235,7 @@ impl Version {
     pub fn libidn_version(&self) -> Option<&str> {
         unsafe {
             if (*self.inner).age >= curl_sys::CURLVERSION_THIRD {
-                ::opt_str((*self.inner).libidn)
+                crate::opt_str((*self.inner).libidn)
             } else {
                 None
             }
@@ -217,7 +257,7 @@ impl Version {
     pub fn libssh_version(&self) -> Option<&str> {
         unsafe {
             if (*self.inner).age >= curl_sys::CURLVERSION_FOURTH {
-                ::opt_str((*self.inner).libssh_version)
+                crate::opt_str((*self.inner).libssh_version)
             } else {
                 None
             }
@@ -239,7 +279,7 @@ impl Version {
     pub fn brotli_version(&self) -> Option<&str> {
         unsafe {
             if (*self.inner).age >= curl_sys::CURLVERSION_FIFTH {
-                ::opt_str((*self.inner).brotli_version)
+                crate::opt_str((*self.inner).brotli_version)
             } else {
                 None
             }
@@ -261,7 +301,7 @@ impl Version {
     pub fn nghttp2_version(&self) -> Option<&str> {
         unsafe {
             if (*self.inner).age >= curl_sys::CURLVERSION_SIXTH {
-                ::opt_str((*self.inner).nghttp2_version)
+                crate::opt_str((*self.inner).nghttp2_version)
             } else {
                 None
             }
@@ -272,7 +312,75 @@ impl Version {
     pub fn quic_version(&self) -> Option<&str> {
         unsafe {
             if (*self.inner).age >= curl_sys::CURLVERSION_SIXTH {
-                ::opt_str((*self.inner).quic_version)
+                crate::opt_str((*self.inner).quic_version)
+            } else {
+                None
+            }
+        }
+    }
+
+    /// If available, the built-in default of CURLOPT_CAINFO.
+    pub fn cainfo(&self) -> Option<&str> {
+        unsafe {
+            if (*self.inner).age >= curl_sys::CURLVERSION_SEVENTH {
+                crate::opt_str((*self.inner).cainfo)
+            } else {
+                None
+            }
+        }
+    }
+
+    /// If available, the built-in default of CURLOPT_CAPATH.
+    pub fn capath(&self) -> Option<&str> {
+        unsafe {
+            if (*self.inner).age >= curl_sys::CURLVERSION_SEVENTH {
+                crate::opt_str((*self.inner).capath)
+            } else {
+                None
+            }
+        }
+    }
+
+    /// If avaiable, the numeric zstd version
+    ///
+    /// Represented as `(MAJOR << 24) | (MINOR << 12) | PATCH`
+    pub fn zstd_ver_num(&self) -> Option<u32> {
+        unsafe {
+            if (*self.inner).age >= curl_sys::CURLVERSION_EIGHTH {
+                Some((*self.inner).zstd_ver_num)
+            } else {
+                None
+            }
+        }
+    }
+
+    /// If available, the human readable version of zstd
+    pub fn zstd_version(&self) -> Option<&str> {
+        unsafe {
+            if (*self.inner).age >= curl_sys::CURLVERSION_EIGHTH {
+                crate::opt_str((*self.inner).zstd_version)
+            } else {
+                None
+            }
+        }
+    }
+
+    /// If available, the human readable version of hyper
+    pub fn hyper_version(&self) -> Option<&str> {
+        unsafe {
+            if (*self.inner).age >= curl_sys::CURLVERSION_NINTH {
+                crate::opt_str((*self.inner).hyper_version)
+            } else {
+                None
+            }
+        }
+    }
+
+    /// If available, the human readable version of hyper
+    pub fn gsasl_version(&self) -> Option<&str> {
+        unsafe {
+            if (*self.inner).age >= curl_sys::CURLVERSION_TENTH {
+                crate::opt_str((*self.inner).gsasl_version)
             } else {
                 None
             }
@@ -284,6 +392,9 @@ impl fmt::Debug for Version {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut f = f.debug_struct("Version");
         f.field("version", &self.version())
+            .field("rust_crate_version", &env!("CARGO_PKG_VERSION"))
+            .field("rust_sys_crate_version", &curl_sys::rust_crate_version())
+            .field("vendored", &self.vendored())
             .field("host", &self.host())
             .field("feature_ipv6", &self.feature_ipv6())
             .field("feature_ssl", &self.feature_ssl())
@@ -302,7 +413,14 @@ impl fmt::Debug for Version {
             .field(
                 "feature_unix_domain_socket",
                 &self.feature_unix_domain_socket(),
-            );
+            )
+            .field("feature_altsvc", &self.feature_altsvc())
+            .field("feature_zstd", &self.feature_zstd())
+            .field("feature_unicode", &self.feature_unicode())
+            .field("feature_http3", &self.feature_http3())
+            .field("feature_http2", &self.feature_http2())
+            .field("feature_gsasl", &self.feature_gsasl())
+            .field("feature_brotli", &self.feature_brotli());
 
         if let Some(s) = self.ssl_version() {
             f.field("ssl_version", &s);
@@ -337,6 +455,24 @@ impl fmt::Debug for Version {
         if let Some(s) = self.quic_version() {
             f.field("quic_version", &s);
         }
+        if let Some(s) = self.zstd_ver_num() {
+            f.field("zstd_ver_num", &format!("{:x}", s));
+        }
+        if let Some(s) = self.zstd_version() {
+            f.field("zstd_version", &s);
+        }
+        if let Some(s) = self.cainfo() {
+            f.field("cainfo", &s);
+        }
+        if let Some(s) = self.capath() {
+            f.field("capath", &s);
+        }
+        if let Some(s) = self.hyper_version() {
+            f.field("hyper_version", &s);
+        }
+        if let Some(s) = self.gsasl_version() {
+            f.field("gsasl_version", &s);
+        }
 
         f.field("protocols", &self.protocols().collect::<Vec<_>>());
 
@@ -352,7 +488,7 @@ impl<'a> Iterator for Protocols<'a> {
             if (*self.cur).is_null() {
                 return None;
             }
-            let ret = ::opt_str(*self.cur).unwrap();
+            let ret = crate::opt_str(*self.cur).unwrap();
             self.cur = self.cur.offset(1);
             Some(ret)
         }

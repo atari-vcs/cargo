@@ -33,6 +33,11 @@ impl<'repo> Branch<'repo> {
         &self.inner
     }
 
+    /// Gain mutable access to the reference that is this branch
+    pub fn get_mut(&mut self) -> &mut Reference<'repo> {
+        &mut self.inner
+    }
+
     /// Take ownership of the underlying reference.
     pub fn into_reference(self) -> Reference<'repo> {
         self.inner
@@ -164,7 +169,7 @@ mod tests {
         let mut b1 = b1.rename("bar", false).unwrap();
         assert_eq!(b1.name().unwrap(), Some("bar"));
         assert!(b1.upstream().is_err());
-        b1.set_upstream(Some("master")).unwrap();
+        b1.set_upstream(Some("main")).unwrap();
         b1.upstream().unwrap();
         b1.set_upstream(None).unwrap();
 

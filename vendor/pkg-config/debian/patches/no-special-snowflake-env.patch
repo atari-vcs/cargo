@@ -1,3 +1,64 @@
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -12,13 +12,6 @@
+ //! * `FOO_NO_PKG_CONFIG` - if set, this will disable running `pkg-config` when
+ //!   probing for the library named `foo`.
+ //!
+-//! * `PKG_CONFIG_ALLOW_CROSS` - The `pkg-config` command usually doesn't
+-//!   support cross-compilation, and this crate prevents it from selecting
+-//!   incompatible versions of libraries.
+-//!   Setting `PKG_CONFIG_ALLOW_CROSS=1` disables this protection, which is
+-//!   likely to cause linking errors, unless `pkg-config` has been configured
+-//!   to use appropriate sysroot and search paths for the target platform.
+-//!
+ //! There are also a number of environment variables which can configure how a
+ //! library is linked to (dynamically vs statically). These variables control
+ //! whether the `--static` flag is passed. Note that this behavior can be
+@@ -112,10 +105,7 @@
+     EnvNoPkgConfig(String),
+ 
+     /// Detected cross compilation without a custom sysroot.
+-    ///
+-    /// Ignore the error with `PKG_CONFIG_ALLOW_CROSS=1`,
+-    /// which may let `pkg-config` select libraries
+-    /// for the host's architecture instead of the target's.
++    /// Kept for compatibility; the Debian package never emits this.
+     CrossCompilation,
+ 
+     /// Failed to run `pkg-config`.
+@@ -139,14 +129,6 @@
+     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+         match *self {
+             Error::EnvNoPkgConfig(ref name) => write!(f, "Aborted because {} is set", name),
+-            Error::CrossCompilation => f.write_str(
+-                "pkg-config has not been configured to support cross-compilation.
+-
+-                Install a sysroot for the target platform and configure it via
+-                PKG_CONFIG_SYSROOT_DIR and PKG_CONFIG_PATH, or install a
+-                cross-compiling wrapper for pkg-config and set it via
+-                PKG_CONFIG environment variable.",
+-            ),
+             Error::Command {
+                 ref command,
+                 ref cause,
+@@ -170,7 +152,7 @@
+                 }
+                 Ok(())
+             }
+-            Error::__Nonexhaustive => panic!(),
++            Error::CrossCompilation | Error::__Nonexhaustive => panic!(),
+         }
+     }
+ }
+@@ -336,6 +318,8 @@
+         if host == target {
+             return true;
+         }
++        // always enable PKG_CONFIG_ALLOW_CROSS override in Debian
++        return true;
+ 
+         // pkg-config may not be aware of cross-compilation, and require
+         // a wrapper script that sets up platform-specific prefixes.
 --- a/tests/test.rs
 +++ b/tests/test.rs
 @@ -34,7 +34,6 @@
@@ -16,33 +77,3 @@
  fn cross_enabled() {
      let _g = LOCK.lock();
      reset();
---- a/src/lib.rs
-+++ b/src/lib.rs
-@@ -9,8 +9,6 @@
- //! A number of environment variables are available to globally configure how
- //! this crate will invoke `pkg-config`:
- //!
--//! * `PKG_CONFIG_ALLOW_CROSS` - if this variable is not set, then `pkg-config`
--//!   will automatically be disabled for all cross compiles.
- //! * `FOO_NO_PKG_CONFIG` - if set, this will disable running `pkg-config` when
- //!   probing for the library named `foo`.
- //!
-@@ -344,17 +342,7 @@
- 
-         // pkg-config may not be aware of cross-compilation, and require
-         // a wrapper script that sets up platform-specific prefixes.
--        match self.targetted_env_var("PKG_CONFIG_ALLOW_CROSS") {
--            // don't use pkg-config if explicitly disabled
--            Ok(ref val) if val == "0" => false,
--            Ok(_) => true,
--            Err(_) => {
--                // if not disabled, and pkg-config is customized,
--                // then assume it's prepared for cross-compilation
--                self.targetted_env_var("PKG_CONFIG").is_ok()
--                    || self.targetted_env_var("PKG_CONFIG_SYSROOT_DIR").is_ok()
--            }
--        }
-+        true
-     }
- 
-     /// Deprecated in favor of the top level `get_variable` function

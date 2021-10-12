@@ -1,6 +1,6 @@
 extern crate filetime;
 extern crate tar;
-extern crate tempdir;
+extern crate tempfile;
 #[cfg(all(unix, feature = "xattr"))]
 extern crate xattr;
 
@@ -10,9 +10,9 @@ use std::io::{self, Cursor};
 use std::iter::repeat;
 use std::path::{Path, PathBuf};
 
-use self::tempdir::TempDir;
 use filetime::FileTime;
-use tar::{Archive, Builder, EntryType, Header};
+use tar::{Archive, Builder, EntryType, Header, HeaderMode};
+use tempfile::{Builder as TempBuilder, TempDir};
 
 macro_rules! t {
     ($e:expr) => {
@@ -132,7 +132,7 @@ fn reading_files() {
 #[test]
 fn writing_files() {
     let mut ar = Builder::new(Vec::new());
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
 
     let path = td.path().join("test");
     t!(t!(File::create(&path)).write_all(b"test"));
@@ -156,7 +156,7 @@ fn writing_files() {
 #[test]
 fn large_filename() {
     let mut ar = Builder::new(Vec::new());
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
 
     let path = td.path().join("test");
     t!(t!(File::create(&path)).write_all(b"test"));
@@ -236,7 +236,7 @@ fn check_dirtree(td: &TempDir) {
 
 #[test]
 fn extracting_directories() {
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
     let rdr = Cursor::new(tar!("directory.tar"));
     let mut ar = Archive::new(rdr);
     t!(ar.unpack(td.path()));
@@ -244,11 +244,81 @@ fn extracting_directories() {
 }
 
 #[test]
+fn extracting_duplicate_file_fail() {
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let path_present = td.path().join("a");
+    t!(File::create(path_present));
+
+    let rdr = Cursor::new(tar!("reading_files.tar"));
+    let mut ar = Archive::new(rdr);
+    ar.set_overwrite(false);
+    if let Err(err) = ar.unpack(td.path()) {
+        if err.kind() == std::io::ErrorKind::AlreadyExists {
+            // as expected with overwrite false
+            return;
+        }
+        panic!("unexpected error: {:?}", err);
+    }
+    panic!(
+        "unpack() should have returned an error of kind {:?}, returned Ok",
+        std::io::ErrorKind::AlreadyExists
+    )
+}
+
+#[test]
+fn extracting_duplicate_file_succeed() {
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let path_present = td.path().join("a");
+    t!(File::create(path_present));
+
+    let rdr = Cursor::new(tar!("reading_files.tar"));
+    let mut ar = Archive::new(rdr);
+    ar.set_overwrite(true);
+    t!(ar.unpack(td.path()));
+}
+
+#[test]
+#[cfg(unix)]
+fn extracting_duplicate_link_fail() {
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let path_present = td.path().join("lnk");
+    t!(std::os::unix::fs::symlink("file", path_present));
+
+    let rdr = Cursor::new(tar!("link.tar"));
+    let mut ar = Archive::new(rdr);
+    ar.set_overwrite(false);
+    if let Err(err) = ar.unpack(td.path()) {
+        if err.kind() == std::io::ErrorKind::AlreadyExists {
+            // as expected with overwrite false
+            return;
+        }
+        panic!("unexpected error: {:?}", err);
+    }
+    panic!(
+        "unpack() should have returned an error of kind {:?}, returned Ok",
+        std::io::ErrorKind::AlreadyExists
+    )
+}
+
+#[test]
+#[cfg(unix)]
+fn extracting_duplicate_link_succeed() {
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let path_present = td.path().join("lnk");
+    t!(std::os::unix::fs::symlink("file", path_present));
+
+    let rdr = Cursor::new(tar!("link.tar"));
+    let mut ar = Archive::new(rdr);
+    ar.set_overwrite(true);
+    t!(ar.unpack(td.path()));
+}
+
+#[test]
 #[cfg(all(unix, feature = "xattr"))]
 fn xattrs() {
     // If /tmp is a tmpfs, xattr will fail
     // The xattr crate's unit tests also use /var/tmp for this reason
-    let td = t!(TempDir::new_in("/var/tmp", "tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir_in("/var/tmp"));
     let rdr = Cursor::new(tar!("xattrs.tar"));
     let mut ar = Archive::new(rdr);
     ar.set_unpack_xattrs(true);
@@ -263,7 +333,7 @@ fn xattrs() {
 fn no_xattrs() {
     // If /tmp is a tmpfs, xattr will fail
     // The xattr crate's unit tests also use /var/tmp for this reason
-    let td = t!(TempDir::new_in("/var/tmp", "tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir_in("/var/tmp"));
     let rdr = Cursor::new(tar!("xattrs.tar"));
     let mut ar = Archive::new(rdr);
     ar.set_unpack_xattrs(false);
@@ -277,7 +347,7 @@ fn no_xattrs() {
 
 #[test]
 fn writing_and_extracting_directories() {
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
 
     let mut ar = Builder::new(Vec::new());
     let tmppath = td.path().join("tmpfile");
@@ -295,7 +365,7 @@ fn writing_and_extracting_directories() {
 
 #[test]
 fn writing_directories_recursively() {
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
 
     let base_dir = td.path().join("base");
     t!(fs::create_dir(&base_dir));
@@ -326,7 +396,7 @@ fn writing_directories_recursively() {
 
 #[test]
 fn append_dir_all_blank_dest() {
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
 
     let base_dir = td.path().join("base");
     t!(fs::create_dir(&base_dir));
@@ -357,7 +427,7 @@ fn append_dir_all_blank_dest() {
 
 #[test]
 fn append_dir_all_does_not_work_on_non_directory() {
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
     let path = td.path().join("test");
     t!(t!(File::create(&path)).write_all(b"test"));
 
@@ -368,7 +438,7 @@ fn append_dir_all_does_not_work_on_non_directory() {
 
 #[test]
 fn extracting_duplicate_dirs() {
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
     let rdr = Cursor::new(tar!("duplicate_dirs.tar"));
     let mut ar = Archive::new(rdr);
     t!(ar.unpack(td.path()));
@@ -379,7 +449,7 @@ fn extracting_duplicate_dirs() {
 
 #[test]
 fn unpack_old_style_bsd_dir() {
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
 
     let mut ar = Builder::new(Vec::new());
 
@@ -405,7 +475,7 @@ fn unpack_old_style_bsd_dir() {
 
 #[test]
 fn handling_incorrect_file_size() {
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
 
     let mut ar = Builder::new(Vec::new());
 
@@ -432,7 +502,7 @@ fn handling_incorrect_file_size() {
 
 #[test]
 fn extracting_malicious_tarball() {
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
 
     let mut evil_tar = Vec::new();
 
@@ -530,7 +600,7 @@ fn octal_spaces() {
 
 #[test]
 fn extracting_malformed_tar_null_blocks() {
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
 
     let mut ar = Builder::new(Vec::new());
 
@@ -553,7 +623,7 @@ fn extracting_malformed_tar_null_blocks() {
 
 #[test]
 fn empty_filename() {
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
     let rdr = Cursor::new(tar!("empty_filename.tar"));
     let mut ar = Archive::new(rdr);
     assert!(ar.unpack(td.path()).is_ok());
@@ -561,7 +631,7 @@ fn empty_filename() {
 
 #[test]
 fn file_times() {
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
     let rdr = Cursor::new(tar!("file_times.tar"));
     let mut ar = Archive::new(rdr);
     t!(ar.unpack(td.path()));
@@ -576,9 +646,30 @@ fn file_times() {
 }
 
 #[test]
+fn zero_file_times() {
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+
+    let mut ar = Builder::new(Vec::new());
+    ar.mode(HeaderMode::Deterministic);
+    let path = td.path().join("tmpfile");
+    t!(File::create(&path));
+    t!(ar.append_path_with_name(&path, "a"));
+
+    let data = t!(ar.into_inner());
+    let mut ar = Archive::new(&data[..]);
+    assert!(ar.unpack(td.path()).is_ok());
+
+    let meta = fs::metadata(td.path().join("a")).unwrap();
+    let mtime = FileTime::from_last_modification_time(&meta);
+    let atime = FileTime::from_last_access_time(&meta);
+    assert!(mtime.unix_seconds() != 0);
+    assert!(atime.unix_seconds() != 0);
+}
+
+#[test]
 fn backslash_treated_well() {
     // Insert a file into an archive with a backslash
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
     let mut ar = Builder::new(Vec::<u8>::new());
     t!(ar.append_dir("foo\\bar", td.path()));
     let mut ar = Archive::new(Cursor::new(t!(ar.into_inner())));
@@ -616,7 +707,7 @@ fn nul_bytes_in_path() {
     use std::os::unix::prelude::*;
 
     let nul_path = OsStr::from_bytes(b"foo\0");
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
     let mut ar = Builder::new(Vec::<u8>::new());
     let err = ar.append_dir(nul_path, td.path()).unwrap_err();
     assert!(err.to_string().contains("contains a nul byte"));
@@ -638,7 +729,7 @@ fn links() {
 #[test]
 #[cfg(unix)] // making symlinks on windows is hard
 fn unpack_links() {
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
     let mut ar = Archive::new(Cursor::new(tar!("link.tar")));
     t!(ar.unpack(td.path()));
 
@@ -649,6 +740,26 @@ fn unpack_links() {
         Path::new("file")
     );
     t!(File::open(td.path().join("lnk")));
+}
+
+#[test]
+fn pax_size() {
+    let mut ar = Archive::new(tar!("pax_size.tar"));
+    let mut entries = t!(ar.entries());
+    let mut entry = t!(entries.next().unwrap());
+    let mut attributes = t!(entry.pax_extensions()).unwrap();
+
+    let _first = t!(attributes.next().unwrap());
+    let _second = t!(attributes.next().unwrap());
+    let _third = t!(attributes.next().unwrap());
+    let fourth = t!(attributes.next().unwrap());
+    assert!(attributes.next().is_none());
+
+    assert_eq!(fourth.key(), Ok("size"));
+    assert_eq!(fourth.value(), Ok("4"));
+
+    assert_eq!(entry.header().size().unwrap(), 0);
+    assert_eq!(entry.size(), 4);
 }
 
 #[test]
@@ -678,6 +789,22 @@ fn pax_path() {
 
     let first = t!(entries.next().unwrap());
     assert!(first.path().unwrap().ends_with("aaaaaaaaaaaaaaa"));
+}
+
+#[test]
+fn pax_linkpath() {
+    let mut ar = Archive::new(tar!("pax2.tar"));
+    let mut links = t!(ar.entries()).skip(3).take(2);
+
+    let long_symlink = t!(links.next().unwrap());
+    let link_name = long_symlink.link_name().unwrap().unwrap();
+    assert!(link_name.to_str().unwrap().len() > 99);
+    assert!(link_name.ends_with("bbbbbbbbbbbbbbb"));
+
+    let long_hardlink = t!(links.next().unwrap());
+    let link_name = long_hardlink.link_name().unwrap().unwrap();
+    assert!(link_name.to_str().unwrap().len() > 99);
+    assert!(link_name.ends_with("ccccccccccccccc"));
 }
 
 #[test]
@@ -732,7 +859,7 @@ fn long_linkname_trailing_nul() {
 
 #[test]
 fn encoded_long_name_has_trailing_nul() {
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
     let path = td.path().join("foo");
     t!(t!(File::create(&path)).write_all(b"test"));
 
@@ -807,7 +934,7 @@ fn reading_sparse() {
 fn extract_sparse() {
     let rdr = Cursor::new(tar!("sparse.tar"));
     let mut ar = Archive::new(rdr);
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
     t!(ar.unpack(td.path()));
 
     let mut s = String::new();
@@ -845,9 +972,23 @@ fn extract_sparse() {
 }
 
 #[test]
+fn sparse_with_trailing() {
+    let rdr = Cursor::new(tar!("sparse-1.tar"));
+    let mut ar = Archive::new(rdr);
+    let mut entries = t!(ar.entries());
+    let mut a = t!(entries.next().unwrap());
+    let mut s = String::new();
+    t!(a.read_to_string(&mut s));
+    assert_eq!(0x100_00c, s.len());
+    assert_eq!(&s[..0xc], "0MB through\n");
+    assert!(s[0xc..0x100_000].chars().all(|x| x == '\u{0}'));
+    assert_eq!(&s[0x100_000..], "1MB through\n");
+}
+
+#[test]
 fn path_separators() {
     let mut ar = Builder::new(Vec::new());
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
 
     let path = td.path().join("test");
     t!(t!(File::create(&path)).write_all(b"test"));
@@ -895,7 +1036,7 @@ fn append_path_symlink() {
 
     let mut ar = Builder::new(Vec::new());
     ar.follow_symlinks(false);
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
 
     let long_linkname = repeat("abcd").take(30).collect::<String>();
     let long_pathname = repeat("dcba").take(30).collect::<String>();
@@ -943,7 +1084,7 @@ fn append_path_symlink() {
 
 #[test]
 fn name_with_slash_doesnt_fool_long_link_and_bsd_compat() {
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
 
     let mut ar = Builder::new(Vec::new());
 
@@ -977,7 +1118,7 @@ fn name_with_slash_doesnt_fool_long_link_and_bsd_compat() {
 #[test]
 fn insert_local_file_different_name() {
     let mut ar = Builder::new(Vec::new());
-    let td = t!(TempDir::new("tar-rs"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
     let path = td.path().join("directory");
     t!(fs::create_dir(&path));
     ar.append_path_with_name(&path, "archive/dir").unwrap();
@@ -1000,8 +1141,8 @@ fn insert_local_file_different_name() {
 fn tar_directory_containing_symlink_to_directory() {
     use std::os::unix::fs::symlink;
 
-    let td = t!(TempDir::new("tar-rs"));
-    let dummy_src = t!(TempDir::new("dummy_src"));
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let dummy_src = t!(TempBuilder::new().prefix("dummy_src").tempdir());
     let dummy_dst = td.path().join("dummy_dst");
     let mut ar = Builder::new(Vec::new());
     t!(symlink(dummy_src.path().display().to_string(), &dummy_dst));
@@ -1010,4 +1151,97 @@ fn tar_directory_containing_symlink_to_directory() {
     assert!(dummy_dst.read_link().unwrap().is_dir());
     ar.append_dir_all("symlinks", td.path()).unwrap();
     ar.finish().unwrap();
+}
+
+#[test]
+fn long_path() {
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let rdr = Cursor::new(tar!("7z_long_path.tar"));
+    let mut ar = Archive::new(rdr);
+    assert!(ar.unpack(td.path()).is_ok());
+}
+
+#[test]
+fn unpack_path_larger_than_windows_max_path() {
+    let dir_name = "iamaprettylongnameandtobepreciseiam91characterslongwhichsomethinkisreallylongandothersdonot";
+    // 183 character directory name
+    let really_long_path = format!("{}{}", dir_name, dir_name);
+    let td = t!(TempBuilder::new().prefix(&really_long_path).tempdir());
+    // directory in 7z_long_path.tar is over 100 chars
+    let rdr = Cursor::new(tar!("7z_long_path.tar"));
+    let mut ar = Archive::new(rdr);
+    // should unpack path greater than windows MAX_PATH length of 260 characters
+    assert!(ar.unpack(td.path()).is_ok());
+}
+
+#[test]
+fn append_long_multibyte() {
+    let mut x = tar::Builder::new(Vec::new());
+    let mut name = String::new();
+    let data: &[u8] = &[];
+    for _ in 0..512 {
+        name.push('a');
+        name.push('𑢮');
+        x.append_data(&mut Header::new_gnu(), &name, data).unwrap();
+        name.pop();
+    }
+}
+
+#[test]
+fn read_only_directory_containing_files() {
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+
+    let mut b = Builder::new(Vec::<u8>::new());
+
+    let mut h = Header::new_gnu();
+    t!(h.set_path("dir/"));
+    h.set_size(0);
+    h.set_entry_type(EntryType::dir());
+    h.set_mode(0o444);
+    h.set_cksum();
+    t!(b.append(&h, "".as_bytes()));
+
+    let mut h = Header::new_gnu();
+    t!(h.set_path("dir/file"));
+    h.set_size(2);
+    h.set_entry_type(EntryType::file());
+    h.set_cksum();
+    t!(b.append(&h, "hi".as_bytes()));
+
+    let contents = t!(b.into_inner());
+    let mut ar = Archive::new(&contents[..]);
+    assert!(ar.unpack(td.path()).is_ok());
+}
+
+// This test was marked linux only due to macOS CI can't handle `set_current_dir` correctly
+#[test]
+#[cfg(target_os = "linux")]
+fn tar_directory_containing_special_files() {
+    use std::env;
+    use std::ffi::CString;
+
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let fifo = td.path().join("fifo");
+
+    unsafe {
+        let fifo_path = t!(CString::new(fifo.to_str().unwrap()));
+        let ret = libc::mknod(fifo_path.as_ptr(), libc::S_IFIFO | 0o644, 0);
+        if ret != 0 {
+            libc::perror(fifo_path.as_ptr());
+            panic!("Failed to create a FIFO file");
+        }
+    }
+
+    t!(env::set_current_dir(td.path()));
+    let mut ar = Builder::new(Vec::new());
+    // append_path has a different logic for processing files, so we need to test it as well
+    t!(ar.append_path("fifo"));
+    t!(ar.append_dir_all("special", td.path()));
+    // unfortunately, block device file cannot be created by non-root users
+    // as a substitute, just test the file that exists on most Unix systems
+    t!(env::set_current_dir("/dev/"));
+    t!(ar.append_path("loop0"));
+    // CI systems seem to have issues with creating a chr device
+    t!(ar.append_path("null"));
+    t!(ar.finish());
 }

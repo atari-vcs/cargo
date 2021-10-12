@@ -23,6 +23,7 @@ pub fn cli() -> App {
         .arg_jobs()
         .arg_dry_run("Perform all checks without uploading")
         .arg(opt("registry", "Registry to publish to").value_name("REGISTRY"))
+        .after_help("Run `cargo help publish` for more detailed information.\n")
 }
 
 pub fn exec(config: &mut Config, args: &ArgMatches<'_>) -> CliResult {
@@ -40,13 +41,11 @@ pub fn exec(config: &mut Config, args: &ArgMatches<'_>) -> CliResult {
             index,
             verify: !args.is_present("no-verify"),
             allow_dirty: args.is_present("allow-dirty"),
-            target: args.target(),
+            targets: args.targets(),
             jobs: args.jobs()?,
             dry_run: args.is_present("dry-run"),
             registry,
-            features: args._values_of("features"),
-            all_features: args.is_present("all-features"),
-            no_default_features: args.is_present("no-default-features"),
+            cli_features: args.cli_features()?,
         },
     )?;
     Ok(())

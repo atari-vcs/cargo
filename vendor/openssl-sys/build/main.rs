@@ -1,6 +1,8 @@
+#![allow(clippy::inconsistent_digit_grouping, clippy::unusual_byte_groupings)]
+
 extern crate autocfg;
 extern crate cc;
-#[cfg(feature = "vendored")]
+#[cfg(feature = "vendored_debian_disabled")]
 extern crate openssl_src;
 extern crate pkg_config;
 #[cfg(target_env = "msvc")]
@@ -14,7 +16,7 @@ use std::path::{Path, PathBuf};
 mod cfgs;
 
 mod find_normal;
-#[cfg(feature = "vendored")]
+#[cfg(feature = "vendored_debian_disabled")]
 mod find_vendored;
 
 enum Version {
@@ -42,7 +44,7 @@ fn env(name: &str) -> Option<OsString> {
 }
 
 fn find_openssl(target: &str) -> (PathBuf, PathBuf) {
-    #[cfg(feature = "vendored")]
+    #[cfg(feature = "vendored_debian_disabled")]
     {
         // vendor if the feature is present, unless
         // OPENSSL_NO_VENDOR exists and isn't `0`
@@ -79,14 +81,20 @@ fn main() {
     );
     println!("cargo:include={}", include_dir.to_string_lossy());
 
-    let version = validate_headers(&[include_dir.clone().into()]);
+    let version = validate_headers(&[include_dir]);
 
     let libs_env = env("OPENSSL_LIBS");
     let libs = match libs_env.as_ref().and_then(|s| s.to_str()) {
-        Some(ref v) => v.split(":").collect(),
+        Some(v) => {
+            if v.is_empty() {
+                vec![]
+            } else {
+                v.split(':').collect()
+            }
+        }
         None => match version {
             Version::Openssl10x if target.contains("windows") => vec!["ssleay32", "libeay32"],
-            Version::Openssl11x if target.contains("windows") => vec!["libssl", "libcrypto"],
+            Version::Openssl11x if target.contains("windows-msvc") => vec!["libssl", "libcrypto"],
             _ => vec!["ssl", "crypto"],
         },
     };
@@ -115,6 +123,7 @@ fn check_rustc_versions() {
 
 /// Validates the header files found in `include_dir` and then returns the
 /// version string of OpenSSL.
+#[allow(clippy::manual_strip)] // we need to support pre-1.45.0
 fn validate_headers(include_dirs: &[PathBuf]) -> Version {
     // This `*-sys` crate only works with OpenSSL 1.0.1, 1.0.2, and 1.1.0. To
     // correctly expose the right API from this crate, take a look at
@@ -170,11 +179,15 @@ See rust-openssl README for more information:
         let line = line.trim();
 
         let openssl_prefix = "RUST_VERSION_OPENSSL_";
+        let new_openssl_prefix = "RUST_VERSION_NEW_OPENSSL_";
         let libressl_prefix = "RUST_VERSION_LIBRESSL_";
         let conf_prefix = "RUST_CONF_";
         if line.starts_with(openssl_prefix) {
             let version = &line[openssl_prefix.len()..];
             openssl_version = Some(parse_version(version));
+        } else if line.starts_with(new_openssl_prefix) {
+            let version = &line[new_openssl_prefix.len()..];
+            openssl_version = Some(parse_new_version(version));
         } else if line.starts_with(libressl_prefix) {
             let version = &line[libressl_prefix.len()..];
             libressl_version = Some(parse_version(version));
@@ -216,6 +229,15 @@ See rust-openssl README for more information:
             (3, 0, 0) => ('3', '0', '0'),
             (3, 0, 1) => ('3', '0', '1'),
             (3, 0, _) => ('3', '0', 'x'),
+            (3, 1, 0) => ('3', '1', '0'),
+            (3, 1, _) => ('3', '1', 'x'),
+            (3, 2, 0) => ('3', '2', '0'),
+            (3, 2, 1) => ('3', '2', '1'),
+            (3, 2, _) => ('3', '2', 'x'),
+            (3, 3, 0) => ('3', '3', '0'),
+            (3, 3, 1) => ('3', '3', '1'),
+            (3, 3, _) => ('3', '3', 'x'),
+            (3, 4, 0) => ('3', '4', '0'),
             _ => version_error(),
         };
 
@@ -227,8 +249,10 @@ See rust-openssl README for more information:
         let openssl_version = openssl_version.unwrap();
         println!("cargo:version_number={:x}", openssl_version);
 
-        if openssl_version >= 0x1_01_02_00_0 {
+        if openssl_version >= 0x4_00_00_00_0 {
             version_error()
+        } else if openssl_version >= 0x3_00_00_00_0 {
+            Version::Openssl11x
         } else if openssl_version >= 0x1_01_01_00_0 {
             println!("cargo:version=111");
             Version::Openssl11x
@@ -256,7 +280,7 @@ fn version_error() -> ! {
         "
 
 This crate is only compatible with OpenSSL 1.0.1 through 1.1.1, or LibreSSL 2.5
-through 3.0.x, but a different version of OpenSSL was found. The build is now aborting
+through 3.4.0, but a different version of OpenSSL was found. The build is now aborting
 due to this version mismatch.
 
 "
@@ -265,6 +289,7 @@ due to this version mismatch.
 
 // parses a string that looks like "0x100020cfL"
 #[allow(deprecated)] // trim_right_matches is now trim_end_matches
+#[allow(clippy::match_like_matches_macro)] // matches macro requires rust 1.42.0
 fn parse_version(version: &str) -> u64 {
     // cut off the 0x prefix
     assert!(version.starts_with("0x"));
@@ -279,13 +304,24 @@ fn parse_version(version: &str) -> u64 {
     u64::from_str_radix(version, 16).unwrap()
 }
 
+// parses a string that looks like 3_0_0
+fn parse_new_version(version: &str) -> u64 {
+    println!("version: {}", version);
+    let mut it = version.split('_');
+    let major = it.next().unwrap().parse::<u64>().unwrap();
+    let minor = it.next().unwrap().parse::<u64>().unwrap();
+    let patch = it.next().unwrap().parse::<u64>().unwrap();
+
+    (major << 28) | (minor << 20) | (patch << 4)
+}
+
 /// Given a libdir for OpenSSL (where artifacts are located) as well as the name
 /// of the libraries we're linking to, figure out whether we should link them
 /// statically or dynamically.
 fn determine_mode(libdir: &Path, libs: &[&str]) -> &'static str {
     // First see if a mode was explicitly requested
     let kind = env("OPENSSL_STATIC");
-    match kind.as_ref().and_then(|s| s.to_str()).map(|s| &s[..]) {
+    match kind.as_ref().and_then(|s| s.to_str()) {
         Some("0") => return "dylib",
         Some(_) => return "static",
         None => {}

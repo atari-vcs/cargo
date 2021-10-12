@@ -1,7 +1,6 @@
 //! Base64 encoding support.
-use cvt_n;
-use error::ErrorStack;
-use ffi;
+use crate::cvt_n;
+use crate::error::ErrorStack;
 use libc::c_int;
 
 /// Encodes a slice of bytes to a base64 string.
@@ -43,6 +42,11 @@ pub fn encode_block(src: &[u8]) -> String {
 pub fn decode_block(src: &str) -> Result<Vec<u8>, ErrorStack> {
     let src = src.trim();
 
+    // https://github.com/openssl/openssl/issues/12143
+    if src.is_empty() {
+        return Ok(vec![]);
+    }
+
     assert!(src.len() <= c_int::max_value() as usize);
     let src_len = src.len() as c_int;
 
@@ -63,7 +67,7 @@ pub fn decode_block(src: &str) -> Result<Vec<u8>, ErrorStack> {
         out.set_len(out_len as usize);
     }
 
-    if src.ends_with("=") {
+    if src.ends_with('=') {
         out.pop();
         if src.ends_with("==") {
             out.pop();

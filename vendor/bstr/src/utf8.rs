@@ -5,9 +5,9 @@ use core::str;
 #[cfg(feature = "std")]
 use std::error;
 
-use ascii;
-use bstr::BStr;
-use ext_slice::ByteSlice;
+use crate::ascii;
+use crate::bstr::BStr;
+use crate::ext_slice::ByteSlice;
 
 // The UTF-8 decoder provided here is based on the one presented here:
 // https://bjoern.hoehrmann.de/utf-8/decoder/dfa/
@@ -42,8 +42,10 @@ use ext_slice::ByteSlice;
 const ACCEPT: usize = 12;
 const REJECT: usize = 0;
 
+/// SAFETY: The decode below function relies on the correctness of these
+/// equivalence classes.
 #[cfg_attr(rustfmt, rustfmt::skip)]
-static CLASSES: [u8; 256] = [
+const CLASSES: [u8; 256] = [
    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
@@ -54,8 +56,10 @@ static CLASSES: [u8; 256] = [
   10,3,3,3,3,3,3,3,3,3,3,3,3,4,3,3, 11,6,6,6,5,8,8,8,8,8,8,8,8,8,8,8,
 ];
 
+/// SAFETY: The decode below function relies on the correctness of this state
+/// machine.
 #[cfg_attr(rustfmt, rustfmt::skip)]
-static STATES_FORWARD: &'static [u8] = &[
+const STATES_FORWARD: &'static [u8] = &[
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
   12, 0, 24, 36, 60, 96, 84, 0, 0, 0, 48, 72,
   0, 12, 0, 0, 0, 0, 0, 12, 0, 12, 0, 0,
@@ -221,6 +225,8 @@ impl<'a> DoubleEndedIterator for CharIndices<'a> {
     }
 }
 
+impl<'a> ::core::iter::FusedIterator for CharIndices<'a> {}
+
 /// An iterator over chunks of valid UTF-8 in a byte slice.
 ///
 /// See [`utf8_chunks`](trait.ByteSlice.html#method.utf8_chunks).
@@ -239,6 +245,7 @@ pub struct Utf8Chunks<'a> {
 ///
 /// The `'a` lifetime parameter corresponds to the lifetime of the bytes that
 /// are being iterated over.
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct Utf8Chunk<'a> {
     /// A valid UTF-8 piece, at the start, end, or between invalid UTF-8 bytes.
     ///
@@ -251,6 +258,11 @@ pub struct Utf8Chunk<'a> {
     /// Should be replaced by a single unicode replacement character, if not
     /// empty.
     invalid: &'a BStr,
+    /// Indicates whether the invalid sequence could've been valid if there
+    /// were more bytes.
+    ///
+    /// Can only be true in the last chunk.
+    incomplete: bool,
 }
 
 impl<'a> Utf8Chunk<'a> {
@@ -280,6 +292,18 @@ impl<'a> Utf8Chunk<'a> {
     pub fn invalid(&self) -> &'a [u8] {
         self.invalid.as_bytes()
     }
+
+    /// Returns whether the invalid sequence might still become valid if more
+    /// bytes are added.
+    ///
+    /// Returns true if the end of the input was reached unexpectedly,
+    /// without encountering an unexpected byte.
+    ///
+    /// This can only be the case for the last chunk.
+    #[inline]
+    pub fn incomplete(&self) -> bool {
+        self.incomplete
+    }
 }
 
 impl<'a> Iterator for Utf8Chunks<'a> {
@@ -299,6 +323,7 @@ impl<'a> Iterator for Utf8Chunks<'a> {
                     // by utf8::validate.
                     valid: unsafe { str::from_utf8_unchecked(valid) },
                     invalid: [].as_bstr(),
+                    incomplete: false,
                 })
             }
             Err(e) => {
@@ -306,10 +331,17 @@ impl<'a> Iterator for Utf8Chunks<'a> {
                 // SAFETY: This is safe because of the guarantees provided by
                 // utf8::validate.
                 let valid = unsafe { str::from_utf8_unchecked(valid) };
-                let (invalid, rest) =
-                    rest.split_at(e.error_len().unwrap_or(rest.len()));
+                let (invalid_len, incomplete) = match e.error_len() {
+                    Some(n) => (n, false),
+                    None => (rest.len(), true),
+                };
+                let (invalid, rest) = rest.split_at(invalid_len);
                 self.bytes = rest;
-                Some(Utf8Chunk { valid, invalid: invalid.as_bstr() })
+                Some(Utf8Chunk {
+                    valid,
+                    invalid: invalid.as_bstr(),
+                    incomplete,
+                })
             }
         }
     }
@@ -427,7 +459,7 @@ impl error::Error for Utf8Error {
 }
 
 impl fmt::Display for Utf8Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "invalid UTF-8 found at byte offset {}", self.valid_up_to)
     }
 }
@@ -435,7 +467,7 @@ impl fmt::Display for Utf8Error {
 /// Returns OK if and only if the given slice is completely valid UTF-8.
 ///
 /// If the slice isn't valid UTF-8, then an error is returned that explains
-/// the first location at which invalid UTF-89 was detected.
+/// the first location at which invalid UTF-8 was detected.
 pub fn validate(slice: &[u8]) -> Result<(), Utf8Error> {
     // The fast path for validating UTF-8. It steps through a UTF-8 automaton
     // and uses a SIMD accelerated ASCII fast path on x86_64. If an error is
@@ -481,7 +513,7 @@ pub fn validate(slice: &[u8]) -> Result<(), Utf8Error> {
         // code unit sequence. To do this, we simply locate the last leading
         // byte that occurs before rejected_at.
         let mut backup = rejected_at.saturating_sub(1);
-        while backup > 0 && !is_leading_utf8_byte(slice[backup]) {
+        while backup > 0 && !is_leading_or_invalid_utf8_byte(slice[backup]) {
             backup -= 1;
         }
         let upto = cmp::min(slice.len(), rejected_at.saturating_add(1));
@@ -715,7 +747,7 @@ pub fn decode_last<B: AsRef<[u8]>>(slice: B) -> (Option<char>, usize) {
     }
     let mut start = slice.len() - 1;
     let limit = slice.len().saturating_sub(4);
-    while start > limit && !is_leading_utf8_byte(slice[start]) {
+    while start > limit && !is_leading_or_invalid_utf8_byte(slice[start]) {
         start -= 1;
     }
     let (ch, size) = decode(&slice[start..]);
@@ -783,6 +815,8 @@ pub fn decode_last_lossy<B: AsRef<[u8]>>(slice: B) -> (char, usize) {
     }
 }
 
+/// SAFETY: The decode function relies on state being equal to ACCEPT only if
+/// cp is a valid Unicode scalar value.
 #[inline]
 pub fn decode_step(state: &mut usize, cp: &mut u32, b: u8) {
     let class = CLASSES[b as usize];
@@ -794,10 +828,29 @@ pub fn decode_step(state: &mut usize, cp: &mut u32, b: u8) {
     *state = STATES_FORWARD[*state + class as usize] as usize;
 }
 
-fn is_leading_utf8_byte(b: u8) -> bool {
+/// Returns true if and only if the given byte is either a valid leading UTF-8
+/// byte, or is otherwise an invalid byte that can never appear anywhere in a
+/// valid UTF-8 sequence.
+fn is_leading_or_invalid_utf8_byte(b: u8) -> bool {
     // In the ASCII case, the most significant bit is never set. The leading
     // byte of a 2/3/4-byte sequence always has the top two most significant
-    // bigs set.
+    // bits set. For bytes that can never appear anywhere in valid UTF-8, this
+    // also returns true, since every such byte has its two most significant
+    // bits set:
+    //
+    //     \xC0 :: 11000000
+    //     \xC1 :: 11000001
+    //     \xF5 :: 11110101
+    //     \xF6 :: 11110110
+    //     \xF7 :: 11110111
+    //     \xF8 :: 11111000
+    //     \xF9 :: 11111001
+    //     \xFA :: 11111010
+    //     \xFB :: 11111011
+    //     \xFC :: 11111100
+    //     \xFD :: 11111101
+    //     \xFE :: 11111110
+    //     \xFF :: 11111111
     (b & 0b1100_0000) != 0b1000_0000
 }
 
@@ -805,9 +858,9 @@ fn is_leading_utf8_byte(b: u8) -> bool {
 mod tests {
     use std::char;
 
-    use ext_slice::{ByteSlice, B};
-    use tests::LOSSY_TESTS;
-    use utf8::{self, Utf8Error};
+    use crate::ext_slice::{ByteSlice, B};
+    use crate::tests::LOSSY_TESTS;
+    use crate::utf8::{self, Utf8Error};
 
     fn utf8e(valid_up_to: usize) -> Utf8Error {
         Utf8Error { valid_up_to, error_len: None }
@@ -1222,5 +1275,96 @@ mod tests {
                 i, input,
             );
         }
+    }
+
+    #[test]
+    fn utf8_chunks() {
+        let mut c = utf8::Utf8Chunks { bytes: b"123\xC0" };
+        assert_eq!(
+            (c.next(), c.next()),
+            (
+                Some(utf8::Utf8Chunk {
+                    valid: "123",
+                    invalid: b"\xC0".as_bstr(),
+                    incomplete: false,
+                }),
+                None,
+            )
+        );
+
+        let mut c = utf8::Utf8Chunks { bytes: b"123\xFF\xFF" };
+        assert_eq!(
+            (c.next(), c.next(), c.next()),
+            (
+                Some(utf8::Utf8Chunk {
+                    valid: "123",
+                    invalid: b"\xFF".as_bstr(),
+                    incomplete: false,
+                }),
+                Some(utf8::Utf8Chunk {
+                    valid: "",
+                    invalid: b"\xFF".as_bstr(),
+                    incomplete: false,
+                }),
+                None,
+            )
+        );
+
+        let mut c = utf8::Utf8Chunks { bytes: b"123\xD0" };
+        assert_eq!(
+            (c.next(), c.next()),
+            (
+                Some(utf8::Utf8Chunk {
+                    valid: "123",
+                    invalid: b"\xD0".as_bstr(),
+                    incomplete: true,
+                }),
+                None,
+            )
+        );
+
+        let mut c = utf8::Utf8Chunks { bytes: b"123\xD0456" };
+        assert_eq!(
+            (c.next(), c.next(), c.next()),
+            (
+                Some(utf8::Utf8Chunk {
+                    valid: "123",
+                    invalid: b"\xD0".as_bstr(),
+                    incomplete: false,
+                }),
+                Some(utf8::Utf8Chunk {
+                    valid: "456",
+                    invalid: b"".as_bstr(),
+                    incomplete: false,
+                }),
+                None,
+            )
+        );
+
+        let mut c = utf8::Utf8Chunks { bytes: b"123\xE2\x98" };
+        assert_eq!(
+            (c.next(), c.next()),
+            (
+                Some(utf8::Utf8Chunk {
+                    valid: "123",
+                    invalid: b"\xE2\x98".as_bstr(),
+                    incomplete: true,
+                }),
+                None,
+            )
+        );
+
+        let mut c = utf8::Utf8Chunks { bytes: b"123\xF4\x8F\xBF" };
+        assert_eq!(
+            (c.next(), c.next()),
+            (
+                Some(utf8::Utf8Chunk {
+                    valid: "123",
+                    invalid: b"\xF4\x8F\xBF".as_bstr(),
+                    incomplete: true,
+                }),
+                None,
+            )
+        );
     }
 }

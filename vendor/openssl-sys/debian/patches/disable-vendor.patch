@@ -1,6 +1,6 @@
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -21,14 +21,11 @@
+@@ -31,14 +31,11 @@
  [build-dependencies.cc]
  version = "1.0"
  
@@ -16,3 +16,31 @@
 +openssl-src = []
  [target."cfg(target_env = \"msvc\")".build-dependencies.vcpkg]
  version = "0.2.8"
+--- a/build/main.rs
++++ b/build/main.rs
+@@ -1,6 +1,6 @@
+ extern crate autocfg;
+ extern crate cc;
+-#[cfg(feature = "vendored")]
++#[cfg(feature = "vendored_debian_disabled")]
+ extern crate openssl_src;
+ extern crate pkg_config;
+ #[cfg(target_env = "msvc")]
+@@ -14,7 +14,7 @@
+ mod cfgs;
+ 
+ mod find_normal;
+-#[cfg(feature = "vendored")]
++#[cfg(feature = "vendored_debian_disabled")]
+ mod find_vendored;
+ 
+ enum Version {
+@@ -42,7 +42,7 @@
+ }
+ 
+ fn find_openssl(target: &str) -> (PathBuf, PathBuf) {
+-    #[cfg(feature = "vendored")]
++    #[cfg(feature = "vendored_debian_disabled")]
+     {
+         // vendor if the feature is present, unless
+         // OPENSSL_NO_VENDOR exists and isn't `0`

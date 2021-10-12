@@ -4,24 +4,24 @@ use cargo::util::IntoUrl;
 use cargo_test_support::publish::validate_alt_upload;
 use cargo_test_support::registry::{self, Package};
 use cargo_test_support::{basic_manifest, git, paths, project};
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs;
 
 #[cargo_test]
 fn depend_on_alt_registry() {
+    registry::alt_init();
     let p = project()
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies.bar]
-            version = "0.0.1"
-            registry = "alternative"
-        "#,
+                [dependencies.bar]
+                version = "0.0.1"
+                registry = "alternative"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .build();
@@ -29,17 +29,16 @@ fn depend_on_alt_registry() {
     Package::new("bar", "0.0.1").alternative(true).publish();
 
     p.cargo("build")
-        .with_stderr(&format!(
+        .with_stderr(
             "\
-[UPDATING] `{reg}` index
+[UPDATING] `alternative` index
 [DOWNLOADING] crates ...
-[DOWNLOADED] bar v0.0.1 (registry `[ROOT][..]`)
-[COMPILING] bar v0.0.1 (registry `[ROOT][..]`)
+[DOWNLOADED] bar v0.0.1 (registry `alternative`)
+[COMPILING] bar v0.0.1 (registry `alternative`)
 [COMPILING] foo v0.0.1 ([CWD])
 [FINISHED] dev [unoptimized + debuginfo] target(s) in [..]s
 ",
-            reg = registry::alt_registry_path().to_str().unwrap()
-        ))
+        )
         .run();
 
     p.cargo("clean").run();
@@ -48,7 +47,7 @@ fn depend_on_alt_registry() {
     p.cargo("build")
         .with_stderr(
             "\
-[COMPILING] bar v0.0.1 (registry `[ROOT][..]`)
+[COMPILING] bar v0.0.1 (registry `alternative`)
 [COMPILING] foo v0.0.1 ([CWD])
 [FINISHED] dev [unoptimized + debuginfo] target(s) in [..]s
 ",
@@ -58,19 +57,20 @@ fn depend_on_alt_registry() {
 
 #[cargo_test]
 fn depend_on_alt_registry_depends_on_same_registry_no_index() {
+    registry::alt_init();
     let p = project()
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies.bar]
-            version = "0.0.1"
-            registry = "alternative"
-        "#,
+                [dependencies.bar]
+                version = "0.0.1"
+                registry = "alternative"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .build();
@@ -82,37 +82,37 @@ fn depend_on_alt_registry_depends_on_same_registry_no_index() {
         .publish();
 
     p.cargo("build")
-        .with_stderr(&format!(
+        .with_stderr(
             "\
-[UPDATING] `{reg}` index
+[UPDATING] `alternative` index
 [DOWNLOADING] crates ...
-[DOWNLOADED] [..] v0.0.1 (registry `[ROOT][..]`)
-[DOWNLOADED] [..] v0.0.1 (registry `[ROOT][..]`)
-[COMPILING] baz v0.0.1 (registry `[ROOT][..]`)
-[COMPILING] bar v0.0.1 (registry `[ROOT][..]`)
+[DOWNLOADED] [..] v0.0.1 (registry `alternative`)
+[DOWNLOADED] [..] v0.0.1 (registry `alternative`)
+[COMPILING] baz v0.0.1 (registry `alternative`)
+[COMPILING] bar v0.0.1 (registry `alternative`)
 [COMPILING] foo v0.0.1 ([CWD])
 [FINISHED] dev [unoptimized + debuginfo] target(s) in [..]s
 ",
-            reg = registry::alt_registry_path().to_str().unwrap()
-        ))
+        )
         .run();
 }
 
 #[cargo_test]
 fn depend_on_alt_registry_depends_on_same_registry() {
+    registry::alt_init();
     let p = project()
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies.bar]
-            version = "0.0.1"
-            registry = "alternative"
-        "#,
+                [dependencies.bar]
+                version = "0.0.1"
+                registry = "alternative"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .build();
@@ -124,37 +124,37 @@ fn depend_on_alt_registry_depends_on_same_registry() {
         .publish();
 
     p.cargo("build")
-        .with_stderr(&format!(
+        .with_stderr(
             "\
-[UPDATING] `{reg}` index
+[UPDATING] `alternative` index
 [DOWNLOADING] crates ...
-[DOWNLOADED] [..] v0.0.1 (registry `[ROOT][..]`)
-[DOWNLOADED] [..] v0.0.1 (registry `[ROOT][..]`)
-[COMPILING] baz v0.0.1 (registry `[ROOT][..]`)
-[COMPILING] bar v0.0.1 (registry `[ROOT][..]`)
+[DOWNLOADED] [..] v0.0.1 (registry `alternative`)
+[DOWNLOADED] [..] v0.0.1 (registry `alternative`)
+[COMPILING] baz v0.0.1 (registry `alternative`)
+[COMPILING] bar v0.0.1 (registry `alternative`)
 [COMPILING] foo v0.0.1 ([CWD])
 [FINISHED] dev [unoptimized + debuginfo] target(s) in [..]s
 ",
-            reg = registry::alt_registry_path().to_str().unwrap()
-        ))
+        )
         .run();
 }
 
 #[cargo_test]
 fn depend_on_alt_registry_depends_on_crates_io() {
+    registry::alt_init();
     let p = project()
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies.bar]
-            version = "0.0.1"
-            registry = "alternative"
-        "#,
+                [dependencies.bar]
+                version = "0.0.1"
+                registry = "alternative"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .build();
@@ -166,41 +166,39 @@ fn depend_on_alt_registry_depends_on_crates_io() {
         .publish();
 
     p.cargo("build")
-        .with_stderr_unordered(&format!(
+        .with_stderr_unordered(
             "\
-[UPDATING] `{alt_reg}` index
-[UPDATING] `{reg}` index
+[UPDATING] `alternative` index
+[UPDATING] `dummy-registry` index
 [DOWNLOADING] crates ...
-[DOWNLOADED] baz v0.0.1 (registry `[ROOT][..]`)
-[DOWNLOADED] bar v0.0.1 (registry `[ROOT][..]`)
+[DOWNLOADED] baz v0.0.1 (registry `dummy-registry`)
+[DOWNLOADED] bar v0.0.1 (registry `alternative`)
 [COMPILING] baz v0.0.1
-[COMPILING] bar v0.0.1 (registry `[ROOT][..]`)
+[COMPILING] bar v0.0.1 (registry `alternative`)
 [COMPILING] foo v0.0.1 ([CWD])
 [FINISHED] dev [unoptimized + debuginfo] target(s) in [..]s
 ",
-            alt_reg = registry::alt_registry_path().to_str().unwrap(),
-            reg = registry::registry_path().to_str().unwrap()
-        ))
+        )
         .run();
 }
 
 #[cargo_test]
 fn registry_and_path_dep_works() {
-    registry::init();
+    registry::alt_init();
 
     let p = project()
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies.bar]
-            path = "bar"
-            registry = "alternative"
-        "#,
+                [dependencies.bar]
+                path = "bar"
+                registry = "alternative"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file("bar/Cargo.toml", &basic_manifest("bar", "0.0.1"))
@@ -220,21 +218,21 @@ fn registry_and_path_dep_works() {
 
 #[cargo_test]
 fn registry_incompatible_with_git() {
-    registry::init();
+    registry::alt_init();
 
     let p = project()
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies.bar]
-            git = ""
-            registry = "alternative"
-        "#,
+                [dependencies.bar]
+                git = ""
+                registry = "alternative"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .build();
@@ -250,29 +248,30 @@ fn registry_incompatible_with_git() {
 
 #[cargo_test]
 fn cannot_publish_to_crates_io_with_registry_dependency() {
+    registry::alt_init();
     let fakeio_path = paths::root().join("fake.io");
     let fakeio_url = fakeio_path.into_url().unwrap();
     let p = project()
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-            [dependencies.bar]
-            version = "0.0.1"
-            registry = "alternative"
-        "#,
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
+                [dependencies.bar]
+                version = "0.0.1"
+                registry = "alternative"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .file(
             ".cargo/config",
             &format!(
                 r#"
-            [registries.fakeio]
-            index = "{}"
-        "#,
+                    [registries.fakeio]
+                    index = "{}"
+                "#,
                 fakeio_url
             ),
         )
@@ -286,8 +285,8 @@ fn cannot_publish_to_crates_io_with_registry_dependency() {
         .file(
             "config.json",
             r#"
-            {"dl": "https://crates.io/api/v1/crates", "api": "https://crates.io"}
-        "#,
+                {"dl": "https://crates.io/api/v1/crates", "api": "https://crates.io"}
+            "#,
         )
         .build();
 
@@ -299,7 +298,7 @@ fn cannot_publish_to_crates_io_with_registry_dependency() {
         .with_stderr_contains("[ERROR] crates cannot be published to crates.io[..]")
         .run();
 
-    p.cargo("publish --index")
+    p.cargo("publish --token sekrit --index")
         .arg(fakeio_url.to_string())
         .with_status(101)
         .with_stderr_contains("[ERROR] crates cannot be published to crates.io[..]")
@@ -308,19 +307,20 @@ fn cannot_publish_to_crates_io_with_registry_dependency() {
 
 #[cargo_test]
 fn publish_with_registry_dependency() {
+    registry::alt_init();
     let p = project()
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies.bar]
-            version = "0.0.1"
-            registry = "alternative"
-        "#,
+                [dependencies.bar]
+                version = "0.0.1"
+                registry = "alternative"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .build();
@@ -360,6 +360,8 @@ fn publish_with_registry_dependency() {
             "readme": null,
             "readme_file": null,
             "repository": null,
+            "homepage": null,
+            "documentation": null,
             "vers": "0.0.1"
         }"#,
         "foo-0.0.1.crate",
@@ -369,22 +371,23 @@ fn publish_with_registry_dependency() {
 
 #[cargo_test]
 fn alt_registry_and_crates_io_deps() {
+    registry::alt_init();
     let p = project()
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            crates_io_dep = "0.0.1"
+                [dependencies]
+                crates_io_dep = "0.0.1"
 
-            [dependencies.alt_reg_dep]
-            version = "0.1.0"
-            registry = "alternative"
-        "#,
+                [dependencies.alt_reg_dep]
+                version = "0.1.0"
+                registry = "alternative"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .build();
@@ -395,41 +398,42 @@ fn alt_registry_and_crates_io_deps() {
         .publish();
 
     p.cargo("build")
-        .with_stderr_contains(format!(
-            "[UPDATING] `{}` index",
-            registry::alt_registry_path().to_str().unwrap()
-        ))
-        .with_stderr_contains(&format!(
-            "[UPDATING] `{}` index",
-            registry::registry_path().to_str().unwrap()
-        ))
-        .with_stderr_contains("[DOWNLOADED] crates_io_dep v0.0.1 (registry `[ROOT][..]`)")
-        .with_stderr_contains("[DOWNLOADED] alt_reg_dep v0.1.0 (registry `[ROOT][..]`)")
-        .with_stderr_contains("[COMPILING] alt_reg_dep v0.1.0 (registry `[ROOT][..]`)")
-        .with_stderr_contains("[COMPILING] crates_io_dep v0.0.1")
-        .with_stderr_contains("[COMPILING] foo v0.0.1 ([CWD])")
-        .with_stderr_contains("[FINISHED] dev [unoptimized + debuginfo] target(s) in [..]s")
+        .with_stderr_unordered(
+            "\
+[UPDATING] `alternative` index
+[UPDATING] `dummy-registry` index
+[DOWNLOADING] crates ...
+[DOWNLOADED] crates_io_dep v0.0.1 (registry `dummy-registry`)
+[DOWNLOADED] alt_reg_dep v0.1.0 (registry `alternative`)
+[COMPILING] alt_reg_dep v0.1.0 (registry `alternative`)
+[COMPILING] crates_io_dep v0.0.1
+[COMPILING] foo v0.0.1 ([CWD])
+[FINISHED] dev [unoptimized + debuginfo] target(s) in [..]s
+",
+        )
         .run();
 }
 
 #[cargo_test]
 fn block_publish_due_to_no_token() {
-    let p = project().file("src/main.rs", "fn main() {}").build();
-
-    // Setup the registry by publishing a package
-    Package::new("bar", "0.0.1").alternative(true).publish();
+    registry::alt_init();
+    let p = project().file("src/lib.rs", "").build();
 
     fs::remove_file(paths::home().join(".cargo/credentials")).unwrap();
 
     // Now perform the actual publish
     p.cargo("publish --registry alternative")
         .with_status(101)
-        .with_stderr_contains("error: no upload token found, please run `cargo login`")
+        .with_stderr_contains(
+            "error: no upload token found, \
+            please run `cargo login` or pass `--token`",
+        )
         .run();
 }
 
 #[cargo_test]
 fn publish_to_alt_registry() {
+    registry::alt_init();
     let p = project().file("src/main.rs", "fn main() {}").build();
 
     // Setup the registry by publishing a package
@@ -459,6 +463,8 @@ fn publish_to_alt_registry() {
             "readme": null,
             "readme_file": null,
             "repository": null,
+            "homepage": null,
+            "documentation": null,
             "vers": "0.0.1"
         }"#,
         "foo-0.0.1.crate",
@@ -468,20 +474,21 @@ fn publish_to_alt_registry() {
 
 #[cargo_test]
 fn publish_with_crates_io_dep() {
+    registry::alt_init();
     let p = project()
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = ["me"]
-            license = "MIT"
-            description = "foo"
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = ["me"]
+                license = "MIT"
+                description = "foo"
 
-            [dependencies.bar]
-            version = "0.0.1"
-        "#,
+                [dependencies.bar]
+                version = "0.0.1"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .build();
@@ -522,6 +529,8 @@ fn publish_with_crates_io_dep() {
             "readme": null,
             "readme_file": null,
             "repository": null,
+            "homepage": null,
+            "documentation": null,
             "vers": "0.0.1"
         }"#,
         "foo-0.0.1.crate",
@@ -530,70 +539,53 @@ fn publish_with_crates_io_dep() {
 }
 
 #[cargo_test]
-fn passwords_in_registry_index_url_forbidden() {
-    registry::init();
-
-    let config = paths::home().join(".cargo/config");
-
-    File::create(config)
-        .unwrap()
-        .write_all(
-            br#"
-        [registry]
-        index = "ssh://git:secret@foobar.com"
-        "#,
-        )
-        .unwrap();
-
-    let p = project().file("src/main.rs", "fn main() {}").build();
-
-    p.cargo("publish")
-        .with_status(101)
-        .with_stderr_contains("error: Registry URLs may not contain passwords")
-        .run();
-}
-
-#[cargo_test]
 fn passwords_in_registries_index_url_forbidden() {
-    registry::init();
+    registry::alt_init();
 
     let config = paths::home().join(".cargo/config");
 
-    File::create(config)
-        .unwrap()
-        .write_all(
-            br#"
+    fs::write(
+        config,
+        r#"
         [registries.alternative]
         index = "ssh://git:secret@foobar.com"
         "#,
-        )
-        .unwrap();
+    )
+    .unwrap();
 
     let p = project().file("src/main.rs", "fn main() {}").build();
 
     p.cargo("publish --registry alternative")
         .with_status(101)
-        .with_stderr_contains("error: Registry URLs may not contain passwords")
+        .with_stderr(
+            "\
+error: invalid index URL for registry `alternative` defined in [..]/home/.cargo/config
+
+Caused by:
+  registry URLs may not contain passwords
+",
+        )
         .run();
 }
 
 #[cargo_test]
 fn patch_alt_reg() {
+    registry::alt_init();
     Package::new("bar", "0.1.0").publish();
     let p = project()
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
+                [package]
+                name = "foo"
+                version = "0.0.1"
 
-            [dependencies]
-            bar = { version = "0.1.0", registry = "alternative" }
+                [dependencies]
+                bar = { version = "0.1.0", registry = "alternative" }
 
-            [patch.alternative]
-            bar = { path = "bar" }
-        "#,
+                [patch.alternative]
+                bar = { path = "bar" }
+            "#,
         )
         .file(
             "src/lib.rs",
@@ -609,7 +601,7 @@ fn patch_alt_reg() {
     p.cargo("build")
         .with_stderr(
             "\
-[UPDATING] `[ROOT][..]` index
+[UPDATING] `alternative` index
 [COMPILING] bar v0.1.0 ([CWD]/bar)
 [COMPILING] foo v0.0.1 ([CWD])
 [FINISHED] dev [unoptimized + debuginfo] target(s) in [..]
@@ -624,15 +616,15 @@ fn bad_registry_name() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies.bar]
-            version = "0.0.1"
-            registry = "bad name"
-        "#,
+                [dependencies.bar]
+                version = "0.0.1"
+                registry = "bad name"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .build();
@@ -644,7 +636,7 @@ fn bad_registry_name() {
 [ERROR] failed to parse manifest at `[CWD]/Cargo.toml`
 
 Caused by:
-  Invalid character ` ` in registry name: `bad name`",
+  invalid character ` ` in registry name: `bad name`, [..]",
         )
         .run();
 
@@ -655,19 +647,20 @@ Caused by:
         "owner",
         "publish",
         "search",
-        "yank",
+        "yank --vers 0.0.1",
     ] {
         p.cargo(cmd)
             .arg("--registry")
             .arg("bad name")
             .with_status(101)
-            .with_stderr("[ERROR] Invalid character ` ` in registry name: `bad name`")
+            .with_stderr("[ERROR] invalid character ` ` in registry name: `bad name`, [..]")
             .run();
     }
 }
 
 #[cargo_test]
 fn no_api() {
+    registry::alt_init();
     Package::new("bar", "0.0.1").alternative(true).publish();
     // Configure without `api`.
     let repo = git2::Repository::open(registry::alt_registry_path()).unwrap();
@@ -685,37 +678,33 @@ fn no_api() {
         .file(
             "Cargo.toml",
             r#"
-             [package]
-             name = "foo"
-             version = "0.0.1"
+                [package]
+                name = "foo"
+                version = "0.0.1"
 
-             [dependencies.bar]
-             version = "0.0.1"
-             registry = "alternative"
-         "#,
+                [dependencies.bar]
+                version = "0.0.1"
+                registry = "alternative"
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
 
     p.cargo("build")
-        .with_stderr(&format!(
+        .with_stderr(
             "\
-[UPDATING] `{reg}` index
+[UPDATING] `alternative` index
 [DOWNLOADING] crates ...
-[DOWNLOADED] bar v0.0.1 (registry `[ROOT][..]`)
-[COMPILING] bar v0.0.1 (registry `[ROOT][..]`)
+[DOWNLOADED] bar v0.0.1 (registry `alternative`)
+[COMPILING] bar v0.0.1 (registry `alternative`)
 [COMPILING] foo v0.0.1 ([CWD])
 [FINISHED] dev [unoptimized + debuginfo] target(s) in [..]s
 ",
-            reg = registry::alt_registry_path().to_str().unwrap()
-        ))
+        )
         .run();
 
     // Check all of the API commands.
-    let err = format!(
-        "[ERROR] registry `{}` does not support API commands",
-        registry::alt_registry_path().display()
-    );
+    let err = "[ERROR] registry `alternative` does not support API commands";
 
     p.cargo("login --registry alternative TOKEN")
         .with_status(101)
@@ -751,18 +740,19 @@ fn no_api() {
 #[cargo_test]
 fn alt_reg_metadata() {
     // Check for "registry" entries in `cargo metadata` with alternative registries.
+    registry::alt_init();
     let p = project()
         .file(
             "Cargo.toml",
             r#"
-             [package]
-             name = "foo"
-             version = "0.0.1"
+                [package]
+                name = "foo"
+                version = "0.0.1"
 
-             [dependencies]
-             altdep = { version = "0.0.1", registry = "alternative" }
-             iodep = { version = "0.0.1" }
-         "#,
+                [dependencies]
+                altdep = { version = "0.0.1", registry = "alternative" }
+                iodep = { version = "0.0.1" }
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -829,9 +819,12 @@ fn alt_reg_metadata() {
                         "publish": null,
                         "authors": [],
                         "categories": [],
+                        "default_run": null,
                         "keywords": [],
                         "readme": null,
                         "repository": null,
+                        "homepage": null,
+                        "documentation": null,
                         "edition": "2015",
                         "links": null
                     }
@@ -842,7 +835,8 @@ fn alt_reg_metadata() {
                 "resolve": null,
                 "target_directory": "[..]/foo/target",
                 "version": 1,
-                "workspace_root": "[..]/foo"
+                "workspace_root": "[..]/foo",
+                "metadata": null
             }"#,
         )
         .run();
@@ -853,28 +847,6 @@ fn alt_reg_metadata() {
             r#"
              {
                 "packages": [
-                    {
-                        "name": "altdep2",
-                        "version": "0.0.1",
-                        "id": "altdep2 0.0.1 (registry+file:[..]/alternative-registry)",
-                        "license": null,
-                        "license_file": null,
-                        "description": null,
-                        "source": "registry+file:[..]/alternative-registry",
-                        "dependencies": [],
-                        "targets": "{...}",
-                        "features": {},
-                        "manifest_path": "[..]/altdep2-0.0.1/Cargo.toml",
-                        "metadata": null,
-                        "publish": null,
-                        "authors": [],
-                        "categories": [],
-                        "keywords": [],
-                        "readme": null,
-                        "repository": null,
-                        "edition": "2015",
-                        "links": null
-                    },
                     {
                         "name": "altdep",
                         "version": "0.0.1",
@@ -904,9 +876,62 @@ fn alt_reg_metadata() {
                         "publish": null,
                         "authors": [],
                         "categories": [],
+                        "default_run": null,
                         "keywords": [],
                         "readme": null,
                         "repository": null,
+                        "homepage": null,
+                        "documentation": null,
+                        "edition": "2015",
+                        "links": null
+                    },
+                    {
+                        "name": "altdep2",
+                        "version": "0.0.1",
+                        "id": "altdep2 0.0.1 (registry+file:[..]/alternative-registry)",
+                        "license": null,
+                        "license_file": null,
+                        "description": null,
+                        "source": "registry+file:[..]/alternative-registry",
+                        "dependencies": [],
+                        "targets": "{...}",
+                        "features": {},
+                        "manifest_path": "[..]/altdep2-0.0.1/Cargo.toml",
+                        "metadata": null,
+                        "publish": null,
+                        "authors": [],
+                        "categories": [],
+                        "default_run": null,
+                        "keywords": [],
+                        "readme": null,
+                        "repository": null,
+                        "homepage": null,
+                        "documentation": null,
+                        "edition": "2015",
+                        "links": null
+                    },
+                    {
+                        "name": "bar",
+                        "version": "0.0.1",
+                        "id": "bar 0.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
+                        "license": null,
+                        "license_file": null,
+                        "description": null,
+                        "source": "registry+https://github.com/rust-lang/crates.io-index",
+                        "dependencies": [],
+                        "targets": "{...}",
+                        "features": {},
+                        "manifest_path": "[..]/bar-0.0.1/Cargo.toml",
+                        "metadata": null,
+                        "publish": null,
+                        "authors": [],
+                        "categories": [],
+                        "default_run": null,
+                        "keywords": [],
+                        "readme": null,
+                        "repository": null,
+                        "homepage": null,
+                        "documentation": null,
                         "edition": "2015",
                         "links": null
                     },
@@ -951,9 +976,12 @@ fn alt_reg_metadata() {
                         "publish": null,
                         "authors": [],
                         "categories": [],
+                        "default_run": null,
                         "keywords": [],
                         "readme": null,
                         "repository": null,
+                        "homepage": null,
+                        "documentation": null,
                         "edition": "2015",
                         "links": null
                     },
@@ -986,31 +1014,12 @@ fn alt_reg_metadata() {
                         "publish": null,
                         "authors": [],
                         "categories": [],
+                        "default_run": null,
                         "keywords": [],
                         "readme": null,
                         "repository": null,
-                        "edition": "2015",
-                        "links": null
-                    },
-                    {
-                        "name": "bar",
-                        "version": "0.0.1",
-                        "id": "bar 0.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
-                        "license": null,
-                        "license_file": null,
-                        "description": null,
-                        "source": "registry+https://github.com/rust-lang/crates.io-index",
-                        "dependencies": [],
-                        "targets": "{...}",
-                        "features": {},
-                        "manifest_path": "[..]/bar-0.0.1/Cargo.toml",
-                        "metadata": null,
-                        "publish": null,
-                        "authors": [],
-                        "categories": [],
-                        "keywords": [],
-                        "readme": null,
-                        "repository": null,
+                        "homepage": null,
+                        "documentation": null,
                         "edition": "2015",
                         "links": null
                     }
@@ -1021,7 +1030,8 @@ fn alt_reg_metadata() {
                 "resolve": "{...}",
                 "target_directory": "[..]/foo/target",
                 "version": 1,
-                "workspace_root": "[..]/foo"
+                "workspace_root": "[..]/foo",
+                "metadata": null
             }"#,
         )
         .run();
@@ -1031,18 +1041,19 @@ fn alt_reg_metadata() {
 fn unknown_registry() {
     // A known registry refers to an unknown registry.
     // foo -> bar(crates.io) -> baz(alt)
+    registry::alt_init();
     let p = project()
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies.bar]
-            version = "0.0.1"
-        "#,
+                [dependencies.bar]
+                version = "0.0.1"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .build();
@@ -1072,6 +1083,44 @@ fn unknown_registry() {
             {
               "packages": [
                 {
+                  "name": "bar",
+                  "version": "0.0.1",
+                  "id": "bar 0.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
+                  "license": null,
+                  "license_file": null,
+                  "description": null,
+                  "source": "registry+https://github.com/rust-lang/crates.io-index",
+                  "dependencies": [
+                    {
+                      "name": "baz",
+                      "source": "registry+file://[..]/alternative-registry",
+                      "req": "^0.0.1",
+                      "kind": null,
+                      "rename": null,
+                      "optional": false,
+                      "uses_default_features": true,
+                      "features": [],
+                      "target": null,
+                      "registry": "file:[..]/alternative-registry"
+                    }
+                  ],
+                  "targets": "{...}",
+                  "features": {},
+                  "manifest_path": "[..]",
+                  "metadata": null,
+                  "publish": null,
+                  "authors": [],
+                  "categories": [],
+                  "default_run": null,
+                  "keywords": [],
+                  "readme": null,
+                  "repository": null,
+                  "homepage": null,
+                  "documentation": null,
+                  "edition": "2015",
+                  "links": null
+                },
+                {
                   "name": "baz",
                   "version": "0.0.1",
                   "id": "baz 0.0.1 (registry+file://[..]/alternative-registry)",
@@ -1087,9 +1136,12 @@ fn unknown_registry() {
                   "publish": null,
                   "authors": [],
                   "categories": [],
+                  "default_run": null,
                   "keywords": [],
                   "readme": null,
                   "repository": null,
+                  "homepage": null,
+                  "documentation": null,
                   "edition": "2015",
                   "links": null
                 },
@@ -1122,44 +1174,12 @@ fn unknown_registry() {
                   "publish": null,
                   "authors": [],
                   "categories": [],
+                  "default_run": null,
                   "keywords": [],
                   "readme": null,
                   "repository": null,
-                  "edition": "2015",
-                  "links": null
-                },
-                {
-                  "name": "bar",
-                  "version": "0.0.1",
-                  "id": "bar 0.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
-                  "license": null,
-                  "license_file": null,
-                  "description": null,
-                  "source": "registry+https://github.com/rust-lang/crates.io-index",
-                  "dependencies": [
-                    {
-                      "name": "baz",
-                      "source": "registry+file://[..]/alternative-registry",
-                      "req": "^0.0.1",
-                      "kind": null,
-                      "rename": null,
-                      "optional": false,
-                      "uses_default_features": true,
-                      "features": [],
-                      "target": null,
-                      "registry": "file:[..]/alternative-registry"
-                    }
-                  ],
-                  "targets": "{...}",
-                  "features": {},
-                  "manifest_path": "[..]",
-                  "metadata": null,
-                  "publish": null,
-                  "authors": [],
-                  "categories": [],
-                  "keywords": [],
-                  "readme": null,
-                  "repository": null,
+                  "homepage": null,
+                  "documentation": null,
                   "edition": "2015",
                   "links": null
                 }
@@ -1170,7 +1190,8 @@ fn unknown_registry() {
               "resolve": "{...}",
               "target_directory": "[..]/foo/target",
               "version": 1,
-              "workspace_root": "[..]/foo"
+              "workspace_root": "[..]/foo",
+              "metadata": null
             }
             "#,
         )
@@ -1179,17 +1200,17 @@ fn unknown_registry() {
 
 #[cargo_test]
 fn registries_index_relative_url() {
+    registry::alt_init();
     let config = paths::root().join(".cargo/config");
     fs::create_dir_all(config.parent().unwrap()).unwrap();
-    File::create(&config)
-        .unwrap()
-        .write_all(
-            br#"
+    fs::write(
+        &config,
+        r#"
             [registries.relative]
             index = "file:alternative-registry"
         "#,
-        )
-        .unwrap();
+    )
+    .unwrap();
 
     registry::init();
 
@@ -1197,15 +1218,15 @@ fn registries_index_relative_url() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies.bar]
-            version = "0.0.1"
-            registry = "relative"
-        "#,
+                [dependencies.bar]
+                version = "0.0.1"
+                registry = "relative"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .build();
@@ -1213,85 +1234,32 @@ fn registries_index_relative_url() {
     Package::new("bar", "0.0.1").alternative(true).publish();
 
     p.cargo("build")
-        .with_stderr(&format!(
+        .with_stderr(
             "\
-[UPDATING] `{reg}` index
+[UPDATING] `relative` index
 [DOWNLOADING] crates ...
-[DOWNLOADED] bar v0.0.1 (registry `[ROOT][..]`)
-[COMPILING] bar v0.0.1 (registry `[ROOT][..]`)
+[DOWNLOADED] bar v0.0.1 (registry `relative`)
+[COMPILING] bar v0.0.1 (registry `relative`)
 [COMPILING] foo v0.0.1 ([CWD])
 [FINISHED] dev [unoptimized + debuginfo] target(s) in [..]s
 ",
-            reg = registry::alt_registry_path().to_str().unwrap()
-        ))
-        .run();
-}
-
-#[cargo_test]
-fn registry_index_relative_url() {
-    let config = paths::root().join(".cargo/config");
-    fs::create_dir_all(config.parent().unwrap()).unwrap();
-    File::create(&config)
-        .unwrap()
-        .write_all(
-            br#"
-            [registry]
-            index = "file:alternative-registry"
-        "#,
         )
-        .unwrap();
-
-    registry::init();
-
-    let p = project()
-        .file(
-            "Cargo.toml",
-            r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
-
-            [dependencies.bar]
-            version = "0.0.1"
-        "#,
-        )
-        .file("src/main.rs", "fn main() {}")
-        .build();
-
-    Package::new("bar", "0.0.1").alternative(true).publish();
-
-    fs::remove_file(paths::home().join(".cargo/config")).unwrap();
-
-    p.cargo("build")
-        .with_stderr(&format!(
-            "\
-warning: custom registry support via the `registry.index` configuration is being removed, this functionality will not work in the future
-[UPDATING] `{reg}` index
-[DOWNLOADING] crates ...
-[DOWNLOADED] bar v0.0.1 (registry `[ROOT][..]`)
-[COMPILING] bar v0.0.1 (registry `[ROOT][..]`)
-[COMPILING] foo v0.0.1 ([CWD])
-[FINISHED] dev [unoptimized + debuginfo] target(s) in [..]s
-",
-            reg = registry::alt_registry_path().to_str().unwrap()
-        ))
         .run();
 }
 
 #[cargo_test]
 fn registries_index_relative_path_not_allowed() {
+    registry::alt_init();
     let config = paths::root().join(".cargo/config");
     fs::create_dir_all(config.parent().unwrap()).unwrap();
-    File::create(&config)
-        .unwrap()
-        .write_all(
-            br#"
+    fs::write(
+        &config,
+        r#"
             [registries.relative]
             index = "alternative-registry"
         "#,
-        )
-        .unwrap();
+    )
+    .unwrap();
 
     registry::init();
 
@@ -1299,15 +1267,15 @@ fn registries_index_relative_path_not_allowed() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies.bar]
-            version = "0.0.1"
-            registry = "relative"
-        "#,
+                [dependencies.bar]
+                version = "0.0.1"
+                registry = "relative"
+            "#,
         )
         .file("src/main.rs", "fn main() {}")
         .build();
@@ -1320,10 +1288,29 @@ fn registries_index_relative_path_not_allowed() {
 error: failed to parse manifest at `{root}/foo/Cargo.toml`
 
 Caused by:
+  invalid index URL for registry `relative` defined in [..]/.cargo/config
+
+Caused by:
   invalid url `alternative-registry`: relative URL without a base
 ",
             root = paths::root().to_str().unwrap()
         ))
         .with_status(101)
         .run();
+}
+
+#[cargo_test]
+fn both_index_and_registry() {
+    let p = project().file("src/lib.rs", "").build();
+    for cmd in &["publish", "owner", "search", "yank --vers 1.0.0"] {
+        p.cargo(cmd)
+            .arg("--registry=foo")
+            .arg("--index=foo")
+            .with_status(101)
+            .with_stderr(
+                "[ERROR] both `--index` and `--registry` \
+                should not be set at the same time",
+            )
+            .run();
+    }
 }

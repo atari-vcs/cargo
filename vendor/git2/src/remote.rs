@@ -1,15 +1,16 @@
 use libc;
-use std::ffi::CString;
+use raw::git_strarray;
 use std::marker;
 use std::mem;
 use std::ops::Range;
 use std::ptr;
 use std::slice;
 use std::str;
+use std::{ffi::CString, os::raw::c_char};
 
 use crate::string_array::StringArray;
 use crate::util::Binding;
-use crate::{raw, Direction, Error, FetchPrune, Oid, ProxyOptions, Refspec};
+use crate::{raw, Buf, Direction, Error, FetchPrune, Oid, ProxyOptions, Refspec};
 use crate::{AutotagOption, Progress, RemoteCallbacks, Repository};
 
 /// A structure representing a [remote][1] of a git repository.
@@ -29,7 +30,7 @@ pub struct Refspecs<'remote> {
     remote: &'remote Remote<'remote>,
 }
 
-/// Description of a reference advertised bya remote server, given out on calls
+/// Description of a reference advertised by a remote server, given out on calls
 /// to `list`.
 pub struct RemoteHead<'remote> {
     raw: *const raw::git_remote_head,
@@ -43,6 +44,8 @@ pub struct FetchOptions<'cb> {
     prune: FetchPrune,
     update_fetchhead: bool,
     download_tags: AutotagOption,
+    custom_headers: Vec<CString>,
+    custom_headers_ptrs: Vec<*const c_char>,
 }
 
 /// Options to control the behavior of a git push.
@@ -50,6 +53,8 @@ pub struct PushOptions<'cb> {
     callbacks: Option<RemoteCallbacks<'cb>>,
     proxy: Option<ProxyOptions<'cb>>,
     pb_parallelism: u32,
+    custom_headers: Vec<CString>,
+    custom_headers_ptrs: Vec<*const c_char>,
 }
 
 /// Holds callbacks for a connection to a `Remote`. Disconnects when dropped
@@ -71,6 +76,22 @@ impl<'repo> Remote<'repo> {
         crate::init();
         let remote_name = CString::new(remote_name).unwrap();
         unsafe { raw::git_remote_is_valid_name(remote_name.as_ptr()) == 1 }
+    }
+
+    /// Create a detached remote
+    ///
+    /// Create a remote with the given url in-memory. You can use this
+    /// when you have a URL instead of a remote's name.
+    /// Contrasted with an anonymous remote, a detached remote will not
+    /// consider any repo configuration values.
+    pub fn create_detached(url: &str) -> Result<Remote<'_>, Error> {
+        crate::init();
+        let mut ret = ptr::null_mut();
+        let url = CString::new(url)?;
+        unsafe {
+            try_call!(raw::git_remote_create_detached(&mut ret, url));
+            Ok(Binding::from_raw(ret))
+        }
     }
 
     /// Get the remote's name.
@@ -110,6 +131,20 @@ impl<'repo> Remote<'repo> {
     /// Get the remote's pushurl as a byte array.
     pub fn pushurl_bytes(&self) -> Option<&[u8]> {
         unsafe { crate::opt_bytes(self, raw::git_remote_pushurl(&*self.raw)) }
+    }
+
+    /// Get the remote's default branch.
+    ///
+    /// The remote (or more exactly its transport) must have connected to the
+    /// remote repository. This default branch is available as soon as the
+    /// connection to the remote is initiated and it remains available after
+    /// disconnecting.
+    pub fn default_branch(&self) -> Result<Buf, Error> {
+        unsafe {
+            let buf = Buf::new();
+            try_call!(raw::git_remote_default_branch(buf.raw(), self.raw));
+            Ok(buf)
+        }
     }
 
     /// Open a connection to a remote.
@@ -161,8 +196,11 @@ impl<'repo> Remote<'repo> {
     }
 
     /// Disconnect from the remote
-    pub fn disconnect(&mut self) {
-        unsafe { raw::git_remote_disconnect(self.raw) }
+    pub fn disconnect(&mut self) -> Result<(), Error> {
+        unsafe {
+            try_call!(raw::git_remote_disconnect(self.raw));
+        }
+        Ok(())
     }
 
     /// Download and index the packfile
@@ -184,6 +222,17 @@ impl<'repo> Remote<'repo> {
         let raw = opts.map(|o| o.raw());
         unsafe {
             try_call!(raw::git_remote_download(self.raw, &arr, raw.as_ref()));
+        }
+        Ok(())
+    }
+
+    /// Cancel the operation
+    ///
+    /// At certain points in its operation, the network code checks whether the
+    /// operation has been cancelled and if so stops the operation.
+    pub fn stop(&mut self) -> Result<(), Error> {
+        unsafe {
+            try_call!(raw::git_remote_stop(self.raw));
         }
         Ok(())
     }
@@ -214,15 +263,15 @@ impl<'repo> Remote<'repo> {
     ///
     /// # Examples
     ///
-    /// Example of functionality similar to `git fetch origin/master`:
+    /// Example of functionality similar to `git fetch origin/main`:
     ///
     /// ```no_run
-    /// fn fetch_origin_master(repo: git2::Repository) -> Result<(), git2::Error> {
-    ///     repo.find_remote("origin")?.fetch(&["master"], None, None)
+    /// fn fetch_origin_main(repo: git2::Repository) -> Result<(), git2::Error> {
+    ///     repo.find_remote("origin")?.fetch(&["main"], None, None)
     /// }
     ///
     /// let repo = git2::Repository::discover("rust").unwrap();
-    /// fetch_origin_master(repo).unwrap();
+    /// fetch_origin_main(repo).unwrap();
     /// ```
     pub fn fetch<Str: AsRef<str> + crate::IntoCString + Clone>(
         &mut self,
@@ -310,6 +359,15 @@ impl<'repo> Remote<'repo> {
                 &[RemoteHead<'_>],
             >(slice))
         }
+    }
+
+    /// Prune tracking refs that are no longer present on remote
+    pub fn prune(&mut self, callbacks: Option<RemoteCallbacks<'_>>) -> Result<(), Error> {
+        let cbs = Box::new(callbacks.unwrap_or_else(RemoteCallbacks::new));
+        unsafe {
+            try_call!(raw::git_remote_prune(self.raw, &cbs.raw()));
+        }
+        Ok(())
     }
 
     /// Get the remote's list of fetch refspecs
@@ -421,6 +479,8 @@ impl<'cb> FetchOptions<'cb> {
             prune: FetchPrune::Unspecified,
             update_fetchhead: true,
             download_tags: AutotagOption::Unspecified,
+            custom_headers: Vec::new(),
+            custom_headers_ptrs: Vec::new(),
         }
     }
 
@@ -458,6 +518,16 @@ impl<'cb> FetchOptions<'cb> {
         self.download_tags = opt;
         self
     }
+
+    /// Set extra headers for this fetch operation.
+    pub fn custom_headers(&mut self, custom_headers: &[&str]) -> &mut Self {
+        self.custom_headers = custom_headers
+            .iter()
+            .map(|&s| CString::new(s).unwrap())
+            .collect();
+        self.custom_headers_ptrs = self.custom_headers.iter().map(|s| s.as_ptr()).collect();
+        self
+    }
 }
 
 impl<'cb> Binding for FetchOptions<'cb> {
@@ -482,10 +552,9 @@ impl<'cb> Binding for FetchOptions<'cb> {
             prune: crate::call::convert(&self.prune),
             update_fetchhead: crate::call::convert(&self.update_fetchhead),
             download_tags: crate::call::convert(&self.download_tags),
-            // TODO: expose this as a builder option
-            custom_headers: raw::git_strarray {
-                count: 0,
-                strings: ptr::null_mut(),
+            custom_headers: git_strarray {
+                count: self.custom_headers_ptrs.len(),
+                strings: self.custom_headers_ptrs.as_ptr() as *mut _,
             },
         }
     }
@@ -504,6 +573,8 @@ impl<'cb> PushOptions<'cb> {
             callbacks: None,
             proxy: None,
             pb_parallelism: 1,
+            custom_headers: Vec::new(),
+            custom_headers_ptrs: Vec::new(),
         }
     }
 
@@ -529,6 +600,16 @@ impl<'cb> PushOptions<'cb> {
         self.pb_parallelism = parallel;
         self
     }
+
+    /// Set extra headers for this push operation.
+    pub fn custom_headers(&mut self, custom_headers: &[&str]) -> &mut Self {
+        self.custom_headers = custom_headers
+            .iter()
+            .map(|&s| CString::new(s).unwrap())
+            .collect();
+        self.custom_headers_ptrs = self.custom_headers.iter().map(|s| s.as_ptr()).collect();
+        self
+    }
 }
 
 impl<'cb> Binding for PushOptions<'cb> {
@@ -551,10 +632,9 @@ impl<'cb> Binding for PushOptions<'cb> {
                 .map(|m| m.raw())
                 .unwrap_or_else(|| ProxyOptions::new().raw()),
             pb_parallelism: self.pb_parallelism as libc::c_uint,
-            // TODO: expose this as a builder option
-            custom_headers: raw::git_strarray {
-                count: 0,
-                strings: ptr::null_mut(),
+            custom_headers: git_strarray {
+                count: self.custom_headers_ptrs.len(),
+                strings: self.custom_headers_ptrs.as_ptr() as *mut _,
             },
         }
     }
@@ -573,11 +653,24 @@ impl<'repo, 'connection, 'cb> RemoteConnection<'repo, 'connection, 'cb> {
     pub fn list(&self) -> Result<&[RemoteHead<'_>], Error> {
         self.remote.list()
     }
+
+    /// Get the remote's default branch.
+    ///
+    /// This default branch is available as soon as the connection to the remote
+    /// is initiated and it remains available after disconnecting.
+    pub fn default_branch(&self) -> Result<Buf, Error> {
+        self.remote.default_branch()
+    }
+
+    /// access remote bound to this connection
+    pub fn remote(&mut self) -> &mut Remote<'repo> {
+        self.remote
+    }
 }
 
 impl<'repo, 'connection, 'cb> Drop for RemoteConnection<'repo, 'connection, 'cb> {
     fn drop(&mut self) {
-        self.remote.disconnect()
+        drop(self.remote.disconnect());
     }
 }
 
@@ -595,7 +688,7 @@ mod tests {
         drop(repo);
 
         let repo = t!(Repository::init(td.path()));
-        let origin = t!(repo.find_remote("origin"));
+        let mut origin = t!(repo.find_remote("origin"));
         assert_eq!(origin.name(), Some("origin"));
         assert_eq!(origin.url(), Some("/path/to/nowhere"));
         assert_eq!(origin.pushurl(), None);
@@ -605,6 +698,8 @@ mod tests {
 
         let stats = origin.stats();
         assert_eq!(stats.total_objects(), 0);
+
+        t!(origin.stop());
     }
 
     #[test]
@@ -648,12 +743,12 @@ mod tests {
 
         origin.connect(Direction::Push).unwrap();
         assert!(origin.connected());
-        origin.disconnect();
+        origin.disconnect().unwrap();
 
         origin.connect(Direction::Fetch).unwrap();
         assert!(origin.connected());
         origin.download(&[] as &[&str], None).unwrap();
-        origin.disconnect();
+        origin.disconnect().unwrap();
 
         {
             let mut connection = origin.connect_auth(Direction::Push, None, None).unwrap();
@@ -732,7 +827,7 @@ mod tests {
             assert_eq!(list.len(), 2);
             assert_eq!(list[0].name(), "HEAD");
             assert!(!list[0].is_local());
-            assert_eq!(list[1].name(), "refs/heads/master");
+            assert_eq!(list[1].name(), "refs/heads/main");
             assert!(!list[1].is_local());
         }
         assert!(progress_hit.get());
@@ -765,7 +860,7 @@ mod tests {
             assert_eq!(list.len(), 2);
             assert_eq!(list[0].name(), "HEAD");
             assert!(!list[0].is_local());
-            assert_eq!(list[1].name(), "refs/heads/master");
+            assert_eq!(list[1].name(), "refs/heads/main");
             assert!(!list[1].is_local());
         }
         assert!(!origin.connected());
@@ -778,7 +873,10 @@ mod tests {
         let td3 = TempDir::new().unwrap();
         let url = crate::test::path2url(&td2.path());
 
-        Repository::init_bare(td2.path()).unwrap();
+        let mut opts = crate::RepositoryInitOptions::new();
+        opts.bare(true);
+        opts.initial_head("main");
+        Repository::init_opts(td2.path(), &opts).unwrap();
         // git push
         let mut remote = repo.remote("origin", &url).unwrap();
         let mut updated = false;
@@ -786,14 +884,14 @@ mod tests {
             let mut callbacks = RemoteCallbacks::new();
             callbacks.push_update_reference(|refname, status| {
                 updated = true;
-                assert_eq!(refname, "refs/heads/master");
+                assert_eq!(refname, "refs/heads/main");
                 assert_eq!(status, None);
                 Ok(())
             });
             let mut options = PushOptions::new();
             options.remote_callbacks(callbacks);
             remote
-                .push(&["refs/heads/master"], Some(&mut options))
+                .push(&["refs/heads/main"], Some(&mut options))
                 .unwrap();
         }
         assert!(updated);
@@ -802,5 +900,47 @@ mod tests {
         let commit = repo.head().unwrap().target().unwrap();
         let commit = repo.find_commit(commit).unwrap();
         assert_eq!(commit.message(), Some("initial"));
+    }
+
+    #[test]
+    fn prune() {
+        let (td, remote_repo) = crate::test::repo_init();
+        let oid = remote_repo.head().unwrap().target().unwrap();
+        let commit = remote_repo.find_commit(oid).unwrap();
+        remote_repo.branch("stale", &commit, true).unwrap();
+
+        let td2 = TempDir::new().unwrap();
+        let url = crate::test::path2url(&td.path());
+        let repo = Repository::clone(&url, &td2).unwrap();
+
+        fn assert_branch_count(repo: &Repository, count: usize) {
+            assert_eq!(
+                repo.branches(Some(crate::BranchType::Remote))
+                    .unwrap()
+                    .filter(|b| b.as_ref().unwrap().0.name().unwrap() == Some("origin/stale"))
+                    .count(),
+                count,
+            );
+        }
+
+        assert_branch_count(&repo, 1);
+
+        // delete `stale` branch on remote repo
+        let mut stale_branch = remote_repo
+            .find_branch("stale", crate::BranchType::Local)
+            .unwrap();
+        stale_branch.delete().unwrap();
+
+        // prune
+        let mut remote = repo.find_remote("origin").unwrap();
+        remote.connect(Direction::Push).unwrap();
+        let mut callbacks = RemoteCallbacks::new();
+        callbacks.update_tips(|refname, _a, b| {
+            assert_eq!(refname, "refs/remotes/origin/stale");
+            assert!(b.is_zero());
+            true
+        });
+        remote.prune(Some(callbacks)).unwrap();
+        assert_branch_count(&repo, 0);
     }
 }

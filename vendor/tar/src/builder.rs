@@ -1,10 +1,10 @@
-use std::borrow::Cow;
 use std::fs;
 use std::io;
 use std::io::prelude::*;
 use std::path::Path;
+use std::str;
 
-use crate::header::{bytes2path, path2bytes, HeaderMode};
+use crate::header::{path2bytes, HeaderMode};
 use crate::{other, EntryType, Header};
 
 /// A structure for building archives
@@ -52,7 +52,7 @@ impl<W: Write> Builder<W> {
     /// Gets mutable reference to the underlying object.
     ///
     /// Note that care must be taken while writing to the underlying
-    /// object. But, e.g. `get_mut().flush()` is clamed to be safe and
+    /// object. But, e.g. `get_mut().flush()` is claimed to be safe and
     /// useful in the situations when one needs to be ensured that
     /// tar entry was flushed to the disk.
     pub fn get_mut(&mut self) -> &mut W {
@@ -197,12 +197,14 @@ impl<W: Write> Builder<W> {
     /// This function will open the file specified by `path` and insert the file
     /// into the archive as `name` with appropriate metadata set, returning any
     /// I/O error which occurs while writing. The path name for the file inside
-    /// of this archive will be `name` and `path` is required to be a relative
-    /// path.
+    /// of this archive will be `name` is required to be a relative path.
     ///
     /// Note that this will not attempt to seek the archive to a valid position,
     /// so if the archive is in the middle of a read or some other similar
     /// operation then this may corrupt the archive.
+    ///
+    /// Note if the `path` is a directory. This will just add an entry to the archive,
+    /// rather than contents of the directory.
     ///
     /// Also note that after all files have been written to an archive the
     /// `finish` function needs to be called to finish writing the archive.
@@ -274,6 +276,9 @@ impl<W: Write> Builder<W> {
     /// Note that this will not attempt to seek the archive to a valid position,
     /// so if the archive is in the middle of a read or some other similar
     /// operation then this may corrupt the archive.
+    ///
+    /// Note this will not add the contents of the directory to the archive.
+    /// See `append_dir_all` for recusively adding the contents of the directory.
     ///
     /// Also note that after all files have been written to an archive the
     /// `finish` function needs to be called to finish writing the archive.
@@ -353,7 +358,7 @@ impl<W: Write> Builder<W> {
     }
 }
 
-fn append(mut dst: &mut Write, header: &Header, mut data: &mut Read) -> io::Result<()> {
+fn append(mut dst: &mut dyn Write, header: &Header, mut data: &mut dyn Read) -> io::Result<()> {
     dst.write_all(header.as_bytes())?;
     let len = io::copy(&mut data, &mut dst)?;
 
@@ -368,7 +373,7 @@ fn append(mut dst: &mut Write, header: &Header, mut data: &mut Read) -> io::Resu
 }
 
 fn append_path_with_name(
-    dst: &mut Write,
+    dst: &mut dyn Write,
     path: &Path,
     name: Option<&Path>,
     mode: HeaderMode,
@@ -405,12 +410,63 @@ fn append_path_with_name(
             Some(&link_name),
         )
     } else {
-        Err(other(&format!("{} has unknown file type", path.display())))
+        #[cfg(unix)]
+        {
+            append_special(dst, path, &stat, mode)
+        }
+        #[cfg(not(unix))]
+        {
+            Err(other(&format!("{} has unknown file type", path.display())))
+        }
     }
 }
 
+#[cfg(unix)]
+fn append_special(
+    dst: &mut dyn Write,
+    path: &Path,
+    stat: &fs::Metadata,
+    mode: HeaderMode,
+) -> io::Result<()> {
+    use ::std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    let file_type = stat.file_type();
+    let entry_type;
+    if file_type.is_socket() {
+        // sockets can't be archived
+        return Err(other(&format!(
+            "{}: socket can not be archived",
+            path.display()
+        )));
+    } else if file_type.is_fifo() {
+        entry_type = EntryType::Fifo;
+    } else if file_type.is_char_device() {
+        entry_type = EntryType::Char;
+    } else if file_type.is_block_device() {
+        entry_type = EntryType::Block;
+    } else {
+        return Err(other(&format!("{} has unknown file type", path.display())));
+    }
+
+    let mut header = Header::new_gnu();
+    header.set_metadata_in_mode(stat, mode);
+    prepare_header_path(dst, &mut header, path)?;
+
+    header.set_entry_type(entry_type);
+    let dev_id = stat.rdev();
+    let dev_major = ((dev_id >> 32) & 0xffff_f000) | ((dev_id >> 8) & 0x0000_0fff);
+    let dev_minor = ((dev_id >> 12) & 0xffff_ff00) | ((dev_id) & 0x0000_00ff);
+    header.set_device_major(dev_major as u32)?;
+    header.set_device_minor(dev_minor as u32)?;
+
+    header.set_cksum();
+    dst.write_all(header.as_bytes())?;
+
+    Ok(())
+}
+
 fn append_file(
-    dst: &mut Write,
+    dst: &mut dyn Write,
     path: &Path,
     file: &mut fs::File,
     mode: HeaderMode,
@@ -419,7 +475,12 @@ fn append_file(
     append_fs(dst, path, &stat, file, mode, None)
 }
 
-fn append_dir(dst: &mut Write, path: &Path, src_path: &Path, mode: HeaderMode) -> io::Result<()> {
+fn append_dir(
+    dst: &mut dyn Write,
+    path: &Path,
+    src_path: &Path,
+    mode: HeaderMode,
+) -> io::Result<()> {
     let stat = fs::metadata(src_path)?;
     append_fs(dst, path, &stat, &mut io::empty(), mode, None)
 }
@@ -439,7 +500,7 @@ fn prepare_header(size: u64, entry_type: u8) -> Header {
     header
 }
 
-fn prepare_header_path(dst: &mut Write, header: &mut Header, path: &Path) -> io::Result<()> {
+fn prepare_header_path(dst: &mut dyn Write, header: &mut Header, path: &Path) -> io::Result<()> {
     // Try to encode the path directly in the header, but if it ends up not
     // working (probably because it's too long) then try to use the GNU-specific
     // long name extension by emitting an entry which indicates that it's the
@@ -447,8 +508,8 @@ fn prepare_header_path(dst: &mut Write, header: &mut Header, path: &Path) -> io:
     if let Err(e) = header.set_path(path) {
         let data = path2bytes(&path)?;
         let max = header.as_old().name.len();
-        //  Since e isn't specific enough to let us know the path is indeed too
-        //  long, verify it first before using the extension.
+        // Since `e` isn't specific enough to let us know the path is indeed too
+        // long, verify it first before using the extension.
         if data.len() < max {
             return Err(e);
         }
@@ -456,15 +517,26 @@ fn prepare_header_path(dst: &mut Write, header: &mut Header, path: &Path) -> io:
         // null-terminated string
         let mut data2 = data.chain(io::repeat(0).take(1));
         append(dst, &header2, &mut data2)?;
+
         // Truncate the path to store in the header we're about to emit to
-        // ensure we've got something at least mentioned.
-        let path = bytes2path(Cow::Borrowed(&data[..max]))?;
-        header.set_path(&path)?;
+        // ensure we've got something at least mentioned. Note that we use
+        // `str`-encoding to be compatible with Windows, but in general the
+        // entry in the header itself shouldn't matter too much since extraction
+        // doesn't look at it.
+        let truncated = match str::from_utf8(&data[..max]) {
+            Ok(s) => s,
+            Err(e) => str::from_utf8(&data[..e.valid_up_to()]).unwrap(),
+        };
+        header.set_path(truncated)?;
     }
     Ok(())
 }
 
-fn prepare_header_link(dst: &mut Write, header: &mut Header, link_name: &Path) -> io::Result<()> {
+fn prepare_header_link(
+    dst: &mut dyn Write,
+    header: &mut Header,
+    link_name: &Path,
+) -> io::Result<()> {
     // Same as previous function but for linkname
     if let Err(e) = header.set_link_name(&link_name) {
         let data = path2bytes(&link_name)?;
@@ -479,10 +551,10 @@ fn prepare_header_link(dst: &mut Write, header: &mut Header, link_name: &Path) -
 }
 
 fn append_fs(
-    dst: &mut Write,
+    dst: &mut dyn Write,
     path: &Path,
     meta: &fs::Metadata,
-    read: &mut Read,
+    read: &mut dyn Read,
     mode: HeaderMode,
     link_name: Option<&Path>,
 ) -> io::Result<()> {
@@ -498,7 +570,7 @@ fn append_fs(
 }
 
 fn append_dir_all(
-    dst: &mut Write,
+    dst: &mut dyn Write,
     path: &Path,
     src_path: &Path,
     mode: HeaderMode,
@@ -522,6 +594,14 @@ fn append_dir_all(
             let link_name = fs::read_link(&src)?;
             append_fs(dst, &dest, &stat, &mut io::empty(), mode, Some(&link_name))?;
         } else {
+            #[cfg(unix)]
+            {
+                let stat = fs::metadata(&src)?;
+                if !stat.is_file() {
+                    append_special(dst, &dest, &stat, mode)?;
+                    continue;
+                }
+            }
             append_file(dst, &dest, &mut fs::File::open(src)?, mode)?;
         }
     }

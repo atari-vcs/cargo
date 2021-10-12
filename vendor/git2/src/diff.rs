@@ -8,8 +8,8 @@ use std::ptr;
 use std::slice;
 
 use crate::util::{self, Binding};
-use crate::{panic, raw, Buf, Delta, DiffFormat, Error, Oid, Repository};
-use crate::{DiffStatsFormat, IntoCString};
+use crate::{panic, raw, Buf, Delta, DiffFormat, Error, FileMode, Oid, Repository};
+use crate::{DiffFlags, DiffStatsFormat, IntoCString};
 
 /// The diff object that contains all individual file deltas.
 ///
@@ -51,6 +51,16 @@ pub struct DiffOptions {
 /// Control behavior of rename and copy detection
 pub struct DiffFindOptions {
     raw: raw::git_diff_find_options,
+}
+
+/// Control behavior of formatting emails
+pub struct DiffFormatEmailOptions {
+    raw: raw::git_diff_format_email_options,
+}
+
+/// Control behavior of formatting emails
+pub struct DiffPatchidOptions {
+    raw: raw::git_diff_patchid_options,
 }
 
 /// An iterator over the diffs in a delta
@@ -109,11 +119,11 @@ pub type BinaryCb<'a> = dyn FnMut(DiffDelta<'_>, DiffBinary<'_>) -> bool + 'a;
 pub type HunkCb<'a> = dyn FnMut(DiffDelta<'_>, DiffHunk<'_>) -> bool + 'a;
 pub type LineCb<'a> = dyn FnMut(DiffDelta<'_>, Option<DiffHunk<'_>>, DiffLine<'_>) -> bool + 'a;
 
-struct ForeachCallbacks<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> {
-    file: &'a mut FileCb<'b>,
-    binary: Option<&'c mut BinaryCb<'d>>,
-    hunk: Option<&'e mut HunkCb<'f>>,
-    line: Option<&'g mut LineCb<'h>>,
+pub struct DiffCallbacks<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> {
+    pub file: Option<&'a mut FileCb<'b>>,
+    pub binary: Option<&'c mut BinaryCb<'d>>,
+    pub hunk: Option<&'e mut HunkCb<'f>>,
+    pub line: Option<&'g mut LineCb<'h>>,
 }
 
 impl<'repo> Diff<'repo> {
@@ -164,13 +174,9 @@ impl<'repo> Diff<'repo> {
     {
         let mut cb: &mut PrintCb<'_> = &mut cb;
         let ptr = &mut cb as *mut _;
+        let print: raw::git_diff_line_cb = Some(print_cb);
         unsafe {
-            try_call!(raw::git_diff_print(
-                self.raw,
-                format,
-                print_cb,
-                ptr as *mut _
-            ));
+            try_call!(raw::git_diff_print(self.raw, format, print, ptr as *mut _));
             Ok(())
         }
     }
@@ -186,32 +192,33 @@ impl<'repo> Diff<'repo> {
         hunk_cb: Option<&mut HunkCb<'_>>,
         line_cb: Option<&mut LineCb<'_>>,
     ) -> Result<(), Error> {
-        let mut cbs = ForeachCallbacks {
-            file: file_cb,
+        let mut cbs = DiffCallbacks {
+            file: Some(file_cb),
             binary: binary_cb,
             hunk: hunk_cb,
             line: line_cb,
         };
         let ptr = &mut cbs as *mut _;
         unsafe {
-            let binary_cb_c = if cbs.binary.is_some() {
-                Some(binary_cb_c as raw::git_diff_binary_cb)
+            let binary_cb_c: raw::git_diff_binary_cb = if cbs.binary.is_some() {
+                Some(binary_cb_c)
             } else {
                 None
             };
-            let hunk_cb_c = if cbs.hunk.is_some() {
-                Some(hunk_cb_c as raw::git_diff_hunk_cb)
+            let hunk_cb_c: raw::git_diff_hunk_cb = if cbs.hunk.is_some() {
+                Some(hunk_cb_c)
             } else {
                 None
             };
-            let line_cb_c = if cbs.line.is_some() {
-                Some(line_cb_c as raw::git_diff_line_cb)
+            let line_cb_c: raw::git_diff_line_cb = if cbs.line.is_some() {
+                Some(line_cb_c)
             } else {
                 None
             };
+            let file_cb: raw::git_diff_file_cb = Some(file_cb_c);
             try_call!(raw::git_diff_foreach(
                 self.raw,
-                file_cb_c,
+                file_cb,
                 binary_cb_c,
                 hunk_cb_c,
                 line_cb_c,
@@ -244,7 +251,76 @@ impl<'repo> Diff<'repo> {
         Ok(())
     }
 
-    // TODO: num_deltas_of_type, format_email, find_similar
+    /// Create an e-mail ready patch from a diff.
+    ///
+    /// Matches the format created by `git format-patch`
+    pub fn format_email(
+        &mut self,
+        patch_no: usize,
+        total_patches: usize,
+        commit: &crate::Commit<'repo>,
+        opts: Option<&mut DiffFormatEmailOptions>,
+    ) -> Result<Buf, Error> {
+        assert!(patch_no > 0);
+        assert!(patch_no <= total_patches);
+        let mut default = DiffFormatEmailOptions::default();
+        let mut raw_opts = opts.map_or(&mut default.raw, |opts| &mut opts.raw);
+        let summary = commit.summary_bytes().unwrap();
+        let mut message = commit.message_bytes();
+        assert!(message.starts_with(summary));
+        message = &message[summary.len()..];
+        raw_opts.patch_no = patch_no;
+        raw_opts.total_patches = total_patches;
+        let id = commit.id();
+        raw_opts.id = id.raw();
+        raw_opts.summary = summary.as_ptr() as *const _;
+        raw_opts.body = message.as_ptr() as *const _;
+        raw_opts.author = commit.author().raw();
+        let buf = Buf::new();
+        unsafe {
+            try_call!(raw::git_diff_format_email(buf.raw(), self.raw, &*raw_opts));
+        }
+        Ok(buf)
+    }
+
+    /// Create an patchid from a diff.
+    pub fn patchid(&self, opts: Option<&mut DiffPatchidOptions>) -> Result<Oid, Error> {
+        let mut raw = raw::git_oid {
+            id: [0; raw::GIT_OID_RAWSZ],
+        };
+        unsafe {
+            try_call!(raw::git_diff_patchid(
+                &mut raw,
+                self.raw,
+                opts.map(|o| &mut o.raw)
+            ));
+            Ok(Binding::from_raw(&raw as *const _))
+        }
+    }
+
+    // TODO: num_deltas_of_type, find_similar
+}
+impl Diff<'static> {
+    /// Read the contents of a git patch file into a `git_diff` object.
+    ///
+    /// The diff object produced is similar to the one that would be
+    /// produced if you actually produced it computationally by comparing
+    /// two trees, however there may be subtle differences. For example,
+    /// a patch file likely contains abbreviated object IDs, so the
+    /// object IDs parsed by this function will also be abreviated.
+    pub fn from_buffer(buffer: &[u8]) -> Result<Diff<'static>, Error> {
+        crate::init();
+        let mut diff: *mut raw::git_diff = std::ptr::null_mut();
+        unsafe {
+            // NOTE: Doesn't depend on repo, so lifetime can be 'static
+            try_call!(raw::git_diff_from_buffer(
+                &mut diff,
+                buffer.as_ptr() as *const c_char,
+                buffer.len()
+            ));
+            Ok(Diff::from_raw(diff))
+        }
+    }
 }
 
 pub extern "C" fn print_cb(
@@ -263,14 +339,14 @@ pub extern "C" fn print_cb(
             (*data)(delta, hunk, line)
         });
         if r == Some(true) {
-            0
+            raw::GIT_OK
         } else {
-            -1
+            raw::GIT_EUSER
         }
     }
 }
 
-extern "C" fn file_cb_c(
+pub extern "C" fn file_cb_c(
     delta: *const raw::git_diff_delta,
     progress: f32,
     data: *mut c_void,
@@ -279,18 +355,21 @@ extern "C" fn file_cb_c(
         let delta = Binding::from_raw(delta as *mut _);
 
         let r = panic::wrap(|| {
-            let cbs = data as *mut ForeachCallbacks<'_, '_, '_, '_, '_, '_, '_, '_>;
-            ((*cbs).file)(delta, progress)
+            let cbs = data as *mut DiffCallbacks<'_, '_, '_, '_, '_, '_, '_, '_>;
+            match (*cbs).file {
+                Some(ref mut cb) => cb(delta, progress),
+                None => false,
+            }
         });
         if r == Some(true) {
-            0
+            raw::GIT_OK
         } else {
-            -1
+            raw::GIT_EUSER
         }
     }
 }
 
-extern "C" fn binary_cb_c(
+pub extern "C" fn binary_cb_c(
     delta: *const raw::git_diff_delta,
     binary: *const raw::git_diff_binary,
     data: *mut c_void,
@@ -300,21 +379,21 @@ extern "C" fn binary_cb_c(
         let binary = Binding::from_raw(binary);
 
         let r = panic::wrap(|| {
-            let cbs = data as *mut ForeachCallbacks<'_, '_, '_, '_, '_, '_, '_, '_>;
+            let cbs = data as *mut DiffCallbacks<'_, '_, '_, '_, '_, '_, '_, '_>;
             match (*cbs).binary {
                 Some(ref mut cb) => cb(delta, binary),
                 None => false,
             }
         });
         if r == Some(true) {
-            0
+            raw::GIT_OK
         } else {
-            -1
+            raw::GIT_EUSER
         }
     }
 }
 
-extern "C" fn hunk_cb_c(
+pub extern "C" fn hunk_cb_c(
     delta: *const raw::git_diff_delta,
     hunk: *const raw::git_diff_hunk,
     data: *mut c_void,
@@ -324,21 +403,21 @@ extern "C" fn hunk_cb_c(
         let hunk = Binding::from_raw(hunk);
 
         let r = panic::wrap(|| {
-            let cbs = data as *mut ForeachCallbacks<'_, '_, '_, '_, '_, '_, '_, '_>;
+            let cbs = data as *mut DiffCallbacks<'_, '_, '_, '_, '_, '_, '_, '_>;
             match (*cbs).hunk {
                 Some(ref mut cb) => cb(delta, hunk),
                 None => false,
             }
         });
         if r == Some(true) {
-            0
+            raw::GIT_OK
         } else {
-            -1
+            raw::GIT_EUSER
         }
     }
 }
 
-extern "C" fn line_cb_c(
+pub extern "C" fn line_cb_c(
     delta: *const raw::git_diff_delta,
     hunk: *const raw::git_diff_hunk,
     line: *const raw::git_diff_line,
@@ -350,16 +429,16 @@ extern "C" fn line_cb_c(
         let line = Binding::from_raw(line);
 
         let r = panic::wrap(|| {
-            let cbs = data as *mut ForeachCallbacks<'_, '_, '_, '_, '_, '_, '_, '_>;
+            let cbs = data as *mut DiffCallbacks<'_, '_, '_, '_, '_, '_, '_, '_>;
             match (*cbs).line {
                 Some(ref mut cb) => cb(delta, hunk, line),
                 None => false,
             }
         });
         if r == Some(true) {
-            0
+            raw::GIT_OK
         } else {
-            -1
+            raw::GIT_EUSER
         }
     }
 }
@@ -384,6 +463,37 @@ impl<'repo> Drop for Diff<'repo> {
 }
 
 impl<'a> DiffDelta<'a> {
+    /// Returns the flags on the delta.
+    ///
+    /// For more information, see `DiffFlags`'s documentation.
+    pub fn flags(&self) -> DiffFlags {
+        let flags = unsafe { (*self.raw).flags };
+        let mut result = DiffFlags::empty();
+
+        #[cfg(target_env = "msvc")]
+        fn as_u32(flag: i32) -> u32 {
+            flag as u32
+        }
+        #[cfg(not(target_env = "msvc"))]
+        fn as_u32(flag: u32) -> u32 {
+            flag
+        }
+
+        if (flags & as_u32(raw::GIT_DIFF_FLAG_BINARY)) != 0 {
+            result |= DiffFlags::BINARY;
+        }
+        if (flags & as_u32(raw::GIT_DIFF_FLAG_NOT_BINARY)) != 0 {
+            result |= DiffFlags::NOT_BINARY;
+        }
+        if (flags & as_u32(raw::GIT_DIFF_FLAG_VALID_ID)) != 0 {
+            result |= DiffFlags::VALID_ID;
+        }
+        if (flags & as_u32(raw::GIT_DIFF_FLAG_EXISTS)) != 0 {
+            result |= DiffFlags::EXISTS;
+        }
+        result
+    }
+
     // TODO: expose when diffs are more exposed
     // pub fn similarity(&self) -> u16 {
     //     unsafe { (*self.raw).similarity }
@@ -482,7 +592,38 @@ impl<'a> DiffFile<'a> {
         unsafe { (*self.raw).size as u64 }
     }
 
-    // TODO: expose flags/mode
+    /// Returns `true` if file(s) are treated as binary data.
+    pub fn is_binary(&self) -> bool {
+        unsafe { (*self.raw).flags & raw::GIT_DIFF_FLAG_BINARY as u32 != 0 }
+    }
+
+    /// Returns `true` if file(s) are treated as text data.
+    pub fn is_not_binary(&self) -> bool {
+        unsafe { (*self.raw).flags & raw::GIT_DIFF_FLAG_NOT_BINARY as u32 != 0 }
+    }
+
+    /// Returns `true` if `id` value is known correct.
+    pub fn is_valid_id(&self) -> bool {
+        unsafe { (*self.raw).flags & raw::GIT_DIFF_FLAG_VALID_ID as u32 != 0 }
+    }
+
+    /// Returns `true` if file exists at this side of the delta.
+    pub fn exists(&self) -> bool {
+        unsafe { (*self.raw).flags & raw::GIT_DIFF_FLAG_EXISTS as u32 != 0 }
+    }
+
+    /// Returns file mode.
+    pub fn mode(&self) -> FileMode {
+        match unsafe { (*self.raw).mode.into() } {
+            raw::GIT_FILEMODE_UNREADABLE => FileMode::Unreadable,
+            raw::GIT_FILEMODE_TREE => FileMode::Tree,
+            raw::GIT_FILEMODE_BLOB => FileMode::Blob,
+            raw::GIT_FILEMODE_BLOB_EXECUTABLE => FileMode::BlobExecutable,
+            raw::GIT_FILEMODE_LINK => FileMode::Link,
+            raw::GIT_FILEMODE_COMMIT => FileMode::Commit,
+            mode => panic!("unknown mode: {}", mode),
+        }
+    }
 }
 
 impl<'a> Binding for DiffFile<'a> {
@@ -565,7 +706,7 @@ impl DiffOptions {
         self.flag(raw::GIT_DIFF_INCLUDE_UNTRACKED, include)
     }
 
-    /// Flag indicating whether untracked directories are deeply traversed or
+    /// Flag indicating whether untracked directories are traversed deeply or
     /// not.
     pub fn recurse_untracked_dirs(&mut self, recurse: bool) -> &mut DiffOptions {
         self.flag(raw::GIT_DIFF_RECURSE_UNTRACKED_DIRS, recurse)
@@ -576,13 +717,13 @@ impl DiffOptions {
         self.flag(raw::GIT_DIFF_INCLUDE_UNMODIFIED, include)
     }
 
-    /// If entrabled, then Typechange delta records are generated.
+    /// If enabled, then Typechange delta records are generated.
     pub fn include_typechange(&mut self, include: bool) -> &mut DiffOptions {
         self.flag(raw::GIT_DIFF_INCLUDE_TYPECHANGE, include)
     }
 
-    /// Event with `include_typechange`, the tree treturned generally shows a
-    /// deleted blow. This flag correctly labels the tree transitions as a
+    /// Event with `include_typechange`, the tree returned generally shows a
+    /// deleted blob. This flag correctly labels the tree transitions as a
     /// typechange record with the `new_file`'s mode set to tree.
     ///
     /// Note that the tree SHA will not be available.
@@ -643,7 +784,7 @@ impl DiffOptions {
         self.flag(raw::GIT_DIFF_INCLUDE_UNREADABLE, include)
     }
 
-    /// Include unreadable files in the diff
+    /// Include unreadable files in the diff as untracked files
     pub fn include_unreadable_as_untracked(&mut self, include: bool) -> &mut DiffOptions {
         self.flag(raw::GIT_DIFF_INCLUDE_UNREADABLE_AS_UNTRACKED, include)
     }
@@ -655,7 +796,7 @@ impl DiffOptions {
 
     /// Treat all files as binary, disabling text diffs
     pub fn force_binary(&mut self, force: bool) -> &mut DiffOptions {
-        self.flag(raw::GIT_DIFF_FORCE_TEXT, force)
+        self.flag(raw::GIT_DIFF_FORCE_BINARY, force)
     }
 
     /// Ignore all whitespace
@@ -668,7 +809,7 @@ impl DiffOptions {
         self.flag(raw::GIT_DIFF_IGNORE_WHITESPACE_CHANGE, ignore)
     }
 
-    /// Ignore whitespace at tend of line
+    /// Ignore whitespace at the end of line
     pub fn ignore_whitespace_eol(&mut self, ignore: bool) -> &mut DiffOptions {
         self.flag(raw::GIT_DIFF_IGNORE_WHITESPACE_EOL, ignore)
     }
@@ -766,7 +907,7 @@ impl DiffOptions {
 
     /// Add to the array of paths/fnmatch patterns to constrain the diff.
     pub fn pathspec<T: IntoCString>(&mut self, pathspec: T) -> &mut DiffOptions {
-        let s = pathspec.into_c_string().unwrap();
+        let s = util::cstring_to_repo_path(pathspec).unwrap();
         self.pathspec_ptrs.push(s.as_ptr());
         self.pathspec.push(s);
         self
@@ -811,6 +952,61 @@ impl<'diff> DoubleEndedIterator for Deltas<'diff> {
 }
 impl<'diff> ExactSizeIterator for Deltas<'diff> {}
 
+/// Line origin constants.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum DiffLineType {
+    /// These values will be sent to `git_diff_line_cb` along with the line
+    Context,
+    ///
+    Addition,
+    ///
+    Deletion,
+    /// Both files have no LF at end
+    ContextEOFNL,
+    /// Old has no LF at end, new does
+    AddEOFNL,
+    /// Old has LF at end, new does not
+    DeleteEOFNL,
+    /// The following values will only be sent to a `git_diff_line_cb` when
+    /// the content of a diff is being formatted through `git_diff_print`.
+    FileHeader,
+    ///
+    HunkHeader,
+    /// For "Binary files x and y differ"
+    Binary,
+}
+
+impl Binding for DiffLineType {
+    type Raw = raw::git_diff_line_t;
+    unsafe fn from_raw(raw: raw::git_diff_line_t) -> Self {
+        match raw {
+            raw::GIT_DIFF_LINE_CONTEXT => DiffLineType::Context,
+            raw::GIT_DIFF_LINE_ADDITION => DiffLineType::Addition,
+            raw::GIT_DIFF_LINE_DELETION => DiffLineType::Deletion,
+            raw::GIT_DIFF_LINE_CONTEXT_EOFNL => DiffLineType::ContextEOFNL,
+            raw::GIT_DIFF_LINE_ADD_EOFNL => DiffLineType::AddEOFNL,
+            raw::GIT_DIFF_LINE_DEL_EOFNL => DiffLineType::DeleteEOFNL,
+            raw::GIT_DIFF_LINE_FILE_HDR => DiffLineType::FileHeader,
+            raw::GIT_DIFF_LINE_HUNK_HDR => DiffLineType::HunkHeader,
+            raw::GIT_DIFF_LINE_BINARY => DiffLineType::Binary,
+            _ => panic!("Unknown git diff line type"),
+        }
+    }
+    fn raw(&self) -> raw::git_diff_line_t {
+        match *self {
+            DiffLineType::Context => raw::GIT_DIFF_LINE_CONTEXT,
+            DiffLineType::Addition => raw::GIT_DIFF_LINE_ADDITION,
+            DiffLineType::Deletion => raw::GIT_DIFF_LINE_DELETION,
+            DiffLineType::ContextEOFNL => raw::GIT_DIFF_LINE_CONTEXT_EOFNL,
+            DiffLineType::AddEOFNL => raw::GIT_DIFF_LINE_ADD_EOFNL,
+            DiffLineType::DeleteEOFNL => raw::GIT_DIFF_LINE_DEL_EOFNL,
+            DiffLineType::FileHeader => raw::GIT_DIFF_LINE_FILE_HDR,
+            DiffLineType::HunkHeader => raw::GIT_DIFF_LINE_HUNK_HDR,
+            DiffLineType::Binary => raw::GIT_DIFF_LINE_BINARY,
+        }
+    }
+}
+
 impl<'a> DiffLine<'a> {
     /// Line number in old file or `None` for added line
     pub fn old_lineno(&self) -> Option<u32> {
@@ -839,13 +1035,19 @@ impl<'a> DiffLine<'a> {
     }
 
     /// Content of this line as bytes.
-    pub fn content(&self) -> &[u8] {
+    pub fn content(&self) -> &'a [u8] {
         unsafe {
             slice::from_raw_parts(
                 (*self.raw).content as *const u8,
                 (*self.raw).content_len as usize,
             )
         }
+    }
+
+    /// origin of this `DiffLine`.
+    ///
+    pub fn origin_value(&self) -> DiffLineType {
+        unsafe { Binding::from_raw((*self.raw).origin as raw::git_diff_line_t) }
     }
 
     /// Sigil showing the origin of this `DiffLine`.
@@ -927,7 +1129,7 @@ impl<'a> DiffHunk<'a> {
     }
 
     /// Header text
-    pub fn header(&self) -> &[u8] {
+    pub fn header(&self) -> &'a [u8] {
         unsafe {
             slice::from_raw_parts(
                 (*self.raw).header.as_ptr() as *const u8,
@@ -1275,9 +1477,67 @@ impl DiffFindOptions {
     // TODO: expose git_diff_similarity_metric
 }
 
+impl Default for DiffFormatEmailOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DiffFormatEmailOptions {
+    /// Creates a new set of email options,
+    /// initialized to the default values
+    pub fn new() -> Self {
+        let mut opts = DiffFormatEmailOptions {
+            raw: unsafe { mem::zeroed() },
+        };
+        assert_eq!(
+            unsafe { raw::git_diff_format_email_options_init(&mut opts.raw, 1) },
+            0
+        );
+        opts
+    }
+
+    fn flag(&mut self, opt: u32, val: bool) -> &mut Self {
+        if val {
+            self.raw.flags |= opt;
+        } else {
+            self.raw.flags &= !opt;
+        }
+        self
+    }
+
+    /// Exclude `[PATCH]` from the subject header
+    pub fn exclude_subject_patch_header(&mut self, should_exclude: bool) -> &mut Self {
+        self.flag(
+            raw::GIT_DIFF_FORMAT_EMAIL_EXCLUDE_SUBJECT_PATCH_MARKER,
+            should_exclude,
+        )
+    }
+}
+
+impl DiffPatchidOptions {
+    /// Creates a new set of patchid options,
+    /// initialized to the default values
+    pub fn new() -> Self {
+        let mut opts = DiffPatchidOptions {
+            raw: unsafe { mem::zeroed() },
+        };
+        assert_eq!(
+            unsafe {
+                raw::git_diff_patchid_options_init(
+                    &mut opts.raw,
+                    raw::GIT_DIFF_PATCHID_OPTIONS_VERSION,
+                )
+            },
+            0
+        );
+        opts
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::DiffOptions;
+    use crate::{DiffLineType, DiffOptions, Oid, Signature, Time};
     use std::borrow::Borrow;
     use std::fs::File;
     use std::io::Write;
@@ -1292,6 +1552,8 @@ mod tests {
         assert_eq!(stats.insertions(), 0);
         assert_eq!(stats.deletions(), 0);
         assert_eq!(stats.files_changed(), 0);
+        let patchid = diff.patchid(None).unwrap();
+        assert_ne!(patchid, Oid::zero());
     }
 
     #[test]
@@ -1396,5 +1658,188 @@ mod tests {
         assert_eq!(bin_content, Some(deflated_fib));
         assert_eq!(new_lines, 1);
         assert_eq!(line_content, Some("bar\n".to_string()));
+    }
+
+    #[test]
+    fn format_email_simple() {
+        let (_td, repo) = crate::test::repo_init();
+        const COMMIT_MESSAGE: &str = "Modify some content";
+        const EXPECTED_EMAIL_START: &str = concat!(
+            "From f1234fb0588b6ed670779a34ba5c51ef962f285f Mon Sep 17 00:00:00 2001\n",
+            "From: Techcable <dummy@dummy.org>\n",
+            "Date: Tue, 11 Jan 1972 17:46:40 +0000\n",
+            "Subject: [PATCH] Modify some content\n",
+            "\n",
+            "---\n",
+            " file1.txt | 8 +++++---\n",
+            " 1 file changed, 5 insertions(+), 3 deletions(-)\n",
+            "\n",
+            "diff --git a/file1.txt b/file1.txt\n",
+            "index 94aaae8..af8f41d 100644\n",
+            "--- a/file1.txt\n",
+            "+++ b/file1.txt\n",
+            "@@ -1,15 +1,17 @@\n",
+            " file1.txt\n",
+            " file1.txt\n",
+            "+_file1.txt_\n",
+            " file1.txt\n",
+            " file1.txt\n",
+            " file1.txt\n",
+            " file1.txt\n",
+            "+\n",
+            "+\n",
+            " file1.txt\n",
+            " file1.txt\n",
+            " file1.txt\n",
+            " file1.txt\n",
+            " file1.txt\n",
+            "-file1.txt\n",
+            "-file1.txt\n",
+            "-file1.txt\n",
+            "+_file1.txt_\n",
+            "+_file1.txt_\n",
+            " file1.txt\n",
+            "--\n"
+        );
+        const ORIGINAL_FILE: &str = concat!(
+            "file1.txt\n",
+            "file1.txt\n",
+            "file1.txt\n",
+            "file1.txt\n",
+            "file1.txt\n",
+            "file1.txt\n",
+            "file1.txt\n",
+            "file1.txt\n",
+            "file1.txt\n",
+            "file1.txt\n",
+            "file1.txt\n",
+            "file1.txt\n",
+            "file1.txt\n",
+            "file1.txt\n",
+            "file1.txt\n"
+        );
+        const UPDATED_FILE: &str = concat!(
+            "file1.txt\n",
+            "file1.txt\n",
+            "_file1.txt_\n",
+            "file1.txt\n",
+            "file1.txt\n",
+            "file1.txt\n",
+            "file1.txt\n",
+            "\n",
+            "\n",
+            "file1.txt\n",
+            "file1.txt\n",
+            "file1.txt\n",
+            "file1.txt\n",
+            "file1.txt\n",
+            "_file1.txt_\n",
+            "_file1.txt_\n",
+            "file1.txt\n"
+        );
+        const FILE_MODE: i32 = 0o100644;
+        let original_file = repo.blob(ORIGINAL_FILE.as_bytes()).unwrap();
+        let updated_file = repo.blob(UPDATED_FILE.as_bytes()).unwrap();
+        let mut original_tree = repo.treebuilder(None).unwrap();
+        original_tree
+            .insert("file1.txt", original_file, FILE_MODE)
+            .unwrap();
+        let original_tree = original_tree.write().unwrap();
+        let mut updated_tree = repo.treebuilder(None).unwrap();
+        updated_tree
+            .insert("file1.txt", updated_file, FILE_MODE)
+            .unwrap();
+        let updated_tree = updated_tree.write().unwrap();
+        let time = Time::new(64_000_000, 0);
+        let author = Signature::new("Techcable", "dummy@dummy.org", &time).unwrap();
+        let updated_commit = repo
+            .commit(
+                None,
+                &author,
+                &author,
+                COMMIT_MESSAGE,
+                &repo.find_tree(updated_tree).unwrap(),
+                &[], // NOTE: Have no parents to ensure stable hash
+            )
+            .unwrap();
+        let updated_commit = repo.find_commit(updated_commit).unwrap();
+        let mut diff = repo
+            .diff_tree_to_tree(
+                Some(&repo.find_tree(original_tree).unwrap()),
+                Some(&repo.find_tree(updated_tree).unwrap()),
+                None,
+            )
+            .unwrap();
+        let actual_email = diff.format_email(1, 1, &updated_commit, None).unwrap();
+        let actual_email = actual_email.as_str().unwrap();
+        assert!(
+            actual_email.starts_with(EXPECTED_EMAIL_START),
+            "Unexpected email:\n{}",
+            actual_email
+        );
+        let mut remaining_lines = actual_email[EXPECTED_EMAIL_START.len()..].lines();
+        let version_line = remaining_lines.next();
+        assert!(
+            version_line.unwrap().starts_with("libgit2"),
+            "Invalid version line: {:?}",
+            version_line
+        );
+        while let Some(line) = remaining_lines.next() {
+            assert_eq!(line.trim(), "")
+        }
+    }
+
+    #[test]
+    fn foreach_diff_line_origin_value() {
+        let foo_path = Path::new("foo");
+        let (td, repo) = crate::test::repo_init();
+        t!(t!(File::create(&td.path().join(foo_path))).write_all(b"bar\n"));
+        let mut index = t!(repo.index());
+        t!(index.add_path(foo_path));
+        let mut opts = DiffOptions::new();
+        opts.include_untracked(true);
+        let diff = t!(repo.diff_tree_to_index(None, Some(&index), Some(&mut opts)));
+        let mut origin_values: Vec<DiffLineType> = Vec::new();
+        t!(diff.foreach(
+            &mut |_file, _progress| { true },
+            None,
+            None,
+            Some(&mut |_file, _hunk, line| {
+                origin_values.push(line.origin_value());
+                true
+            })
+        ));
+        assert_eq!(origin_values.len(), 1);
+        assert_eq!(origin_values[0], DiffLineType::Addition);
+    }
+
+    #[test]
+    fn foreach_exits_with_euser() {
+        let foo_path = Path::new("foo");
+        let bar_path = Path::new("foo");
+
+        let (td, repo) = crate::test::repo_init();
+        t!(t!(File::create(&td.path().join(foo_path))).write_all(b"bar\n"));
+
+        let mut index = t!(repo.index());
+        t!(index.add_path(foo_path));
+        t!(index.add_path(bar_path));
+
+        let mut opts = DiffOptions::new();
+        opts.include_untracked(true);
+        let diff = t!(repo.diff_tree_to_index(None, Some(&index), Some(&mut opts)));
+
+        let mut calls = 0;
+        let result = diff.foreach(
+            &mut |_file, _progress| {
+                calls += 1;
+                false
+            },
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(result.unwrap_err().code(), crate::ErrorCode::User);
     }
 }

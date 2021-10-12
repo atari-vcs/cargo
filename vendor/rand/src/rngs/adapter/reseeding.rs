@@ -279,7 +279,7 @@ where
 }
 
 
-#[cfg(all(unix, feature = "std", not(target_os = "emscripten")))]
+#[cfg(all(unix, not(target_os = "emscripten")))]
 mod fork {
     use core::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Once;
@@ -316,7 +316,7 @@ mod fork {
     }
 }
 
-#[cfg(not(all(unix, feature = "std", not(target_os = "emscripten"))))]
+#[cfg(not(all(unix, not(target_os = "emscripten"))))]
 mod fork {
     pub fn get_fork_counter() -> usize {
         0
@@ -325,6 +325,7 @@ mod fork {
 }
 
 
+#[cfg(feature = "std_rng")]
 #[cfg(test)]
 mod test {
     use super::ReseedingRng;
@@ -354,6 +355,8 @@ mod test {
 
     #[test]
     fn test_clone_reseeding() {
+        #![allow(clippy::redundant_clone)]
+
         let mut zero = StepRng::new(0, 0);
         let rng = Core::from_rng(&mut zero).unwrap();
         let mut rng1 = ReseedingRng::new(rng, 32 * 4, zero);

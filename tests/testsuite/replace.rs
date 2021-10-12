@@ -19,17 +19,17 @@ fn override_simple() {
             "Cargo.toml",
             &format!(
                 r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                    [package]
+                    name = "foo"
+                    version = "0.0.1"
+                    authors = []
 
-            [dependencies]
-            bar = "0.1.0"
+                    [dependencies]
+                    bar = "0.1.0"
 
-            [replace]
-            "bar:0.1.0" = {{ git = '{}' }}
-        "#,
+                    [replace]
+                    "bar:0.1.0" = {{ git = '{}' }}
+                "#,
                 bar.url()
             ),
         )
@@ -42,7 +42,7 @@ fn override_simple() {
     p.cargo("build")
         .with_stderr(
             "\
-[UPDATING] `[ROOT][..]` index
+[UPDATING] `dummy-registry` index
 [UPDATING] git repository `[..]`
 [COMPILING] bar v0.1.0 (file://[..])
 [COMPILING] foo v0.0.1 ([CWD])
@@ -58,17 +58,17 @@ fn missing_version() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            bar = "0.1.0"
+                [dependencies]
+                bar = "0.1.0"
 
-            [replace]
-            bar = { git = 'https://example.com' }
-        "#,
+                [replace]
+                bar = { git = 'https://example.com' }
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -92,17 +92,17 @@ fn invalid_semver_version() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            bar = "*"
+                [dependencies]
+                bar = "*"
 
-            [replace]
-            "bar:*" = { git = 'https://example.com' }
-        "#,
+                [replace]
+                "bar:*" = { git = 'https://example.com' }
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -129,17 +129,17 @@ fn different_version() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            bar = "0.1.0"
+                [dependencies]
+                bar = "0.1.0"
 
-            [replace]
-            "bar:0.1.0" = "0.2.0"
-        "#,
+                [replace]
+                "bar:0.1.0" = "0.2.0"
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -175,17 +175,17 @@ fn transitive() {
             "Cargo.toml",
             &format!(
                 r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                    [package]
+                    name = "foo"
+                    version = "0.0.1"
+                    authors = []
 
-            [dependencies]
-            baz = "0.2.0"
+                    [dependencies]
+                    baz = "0.2.0"
 
-            [replace]
-            "bar:0.1.0" = {{ git = '{}' }}
-        "#,
+                    [replace]
+                    "bar:0.1.0" = {{ git = '{}' }}
+                "#,
                 foo.url()
             ),
         )
@@ -195,7 +195,7 @@ fn transitive() {
     p.cargo("build")
         .with_stderr(
             "\
-[UPDATING] `[ROOT][..]` index
+[UPDATING] `dummy-registry` index
 [UPDATING] git repository `[..]`
 [DOWNLOADING] crates ...
 [DOWNLOADED] baz v0.2.0 (registry [..])
@@ -224,17 +224,17 @@ fn persists_across_rebuilds() {
             "Cargo.toml",
             &format!(
                 r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                    [package]
+                    name = "foo"
+                    version = "0.0.1"
+                    authors = []
 
-            [dependencies]
-            bar = "0.1.0"
+                    [dependencies]
+                    bar = "0.1.0"
 
-            [replace]
-            "bar:0.1.0" = {{ git = '{}' }}
-        "#,
+                    [replace]
+                    "bar:0.1.0" = {{ git = '{}' }}
+                "#,
                 foo.url()
             ),
         )
@@ -247,7 +247,7 @@ fn persists_across_rebuilds() {
     p.cargo("build")
         .with_stderr(
             "\
-[UPDATING] `[ROOT][..]` index
+[UPDATING] `dummy-registry` index
 [UPDATING] git repository `file://[..]`
 [COMPILING] bar v0.1.0 (file://[..])
 [COMPILING] foo v0.0.1 ([CWD])
@@ -273,17 +273,17 @@ fn replace_registry_with_path() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            bar = "0.1.0"
+                [dependencies]
+                bar = "0.1.0"
 
-            [replace]
-            "bar:0.1.0" = { path = "../bar" }
-        "#,
+                [replace]
+                "bar:0.1.0" = { path = "../bar" }
+            "#,
         )
         .file(
             "src/lib.rs",
@@ -294,8 +294,8 @@ fn replace_registry_with_path() {
     p.cargo("build")
         .with_stderr(
             "\
-[UPDATING] `[ROOT][..]` index
-[COMPILING] bar v0.1.0 ([ROOT][..])
+[UPDATING] `dummy-registry` index
+[COMPILING] bar v0.1.0 ([ROOT][..]/bar)
 [COMPILING] foo v0.0.1 ([CWD])
 [FINISHED] dev [unoptimized + debuginfo] target(s) in [..]
 ",
@@ -327,18 +327,18 @@ fn use_a_spec_to_select() {
             "Cargo.toml",
             &format!(
                 r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                    [package]
+                    name = "foo"
+                    version = "0.0.1"
+                    authors = []
 
-            [dependencies]
-            bar = "0.1"
-            baz = "0.1"
+                    [dependencies]
+                    bar = "0.1"
+                    baz = "0.1"
 
-            [replace]
-            "baz:0.2.0" = {{ git = '{}' }}
-        "#,
+                    [replace]
+                    "baz:0.2.0" = {{ git = '{}' }}
+                "#,
                 foo.url()
             ),
         )
@@ -359,7 +359,7 @@ fn use_a_spec_to_select() {
     p.cargo("build")
         .with_stderr(
             "\
-[UPDATING] `[ROOT][..]` index
+[UPDATING] `dummy-registry` index
 [UPDATING] git repository `[..]`
 [DOWNLOADING] crates ...
 [DOWNLOADED] [..]
@@ -383,14 +383,14 @@ fn override_adds_some_deps() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            baz = "0.1"
-        "#,
+                [dependencies]
+                baz = "0.1"
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -400,17 +400,17 @@ fn override_adds_some_deps() {
             "Cargo.toml",
             &format!(
                 r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                    [package]
+                    name = "foo"
+                    version = "0.0.1"
+                    authors = []
 
-            [dependencies]
-            bar = "0.1"
+                    [dependencies]
+                    bar = "0.1"
 
-            [replace]
-            "bar:0.1.0" = {{ git = '{}' }}
-        "#,
+                    [replace]
+                    "bar:0.1.0" = {{ git = '{}' }}
+                "#,
                 foo.url()
             ),
         )
@@ -420,7 +420,7 @@ fn override_adds_some_deps() {
     p.cargo("build")
         .with_stderr(
             "\
-[UPDATING] `[ROOT][..]` index
+[UPDATING] `dummy-registry` index
 [UPDATING] git repository `[..]`
 [DOWNLOADING] crates ...
 [DOWNLOADED] baz v0.1.1 (registry [..])
@@ -440,14 +440,14 @@ fn override_adds_some_deps() {
         .with_stderr(
             "\
 [UPDATING] git repository `file://[..]`
-[UPDATING] `[ROOT][..]` index
+[UPDATING] `dummy-registry` index
 ",
         )
         .run();
     p.cargo("update -p https://github.com/rust-lang/crates.io-index#bar")
         .with_stderr(
             "\
-[UPDATING] `[ROOT][..]` index
+[UPDATING] `dummy-registry` index
 ",
         )
         .run();
@@ -466,14 +466,14 @@ fn locked_means_locked_yes_no_seriously_i_mean_locked() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            baz = "*"
-        "#,
+                [dependencies]
+                baz = "*"
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -483,18 +483,18 @@ fn locked_means_locked_yes_no_seriously_i_mean_locked() {
             "Cargo.toml",
             &format!(
                 r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                    [package]
+                    name = "foo"
+                    version = "0.0.1"
+                    authors = []
 
-            [dependencies]
-            bar = "0.1"
-            baz = "0.1"
+                    [dependencies]
+                    bar = "0.1"
+                    baz = "0.1"
 
-            [replace]
-            "bar:0.1.0" = {{ git = '{}' }}
-        "#,
+                    [replace]
+                    "bar:0.1.0" = {{ git = '{}' }}
+                "#,
                 foo.url()
             ),
         )
@@ -521,17 +521,17 @@ fn override_wrong_name() {
             "Cargo.toml",
             &format!(
                 r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                    [package]
+                    name = "foo"
+                    version = "0.0.1"
+                    authors = []
 
-            [dependencies]
-            baz = "0.1"
+                    [dependencies]
+                    baz = "0.1"
 
-            [replace]
-            "baz:0.1.0" = {{ git = '{}' }}
-        "#,
+                    [replace]
+                    "baz:0.1.0" = {{ git = '{}' }}
+                "#,
                 foo.url()
             ),
         )
@@ -544,9 +544,12 @@ fn override_wrong_name() {
             "\
 [UPDATING] [..] index
 [UPDATING] git repository [..]
-error: no matching package for override `[..]baz:0.1.0` found
-location searched: file://[..]
-version required: = 0.1.0
+[ERROR] failed to get `baz` as a dependency of package `foo v0.0.1 ([..])`
+
+Caused by:
+  no matching package for override `[..]baz:0.1.0` found
+  location searched: file://[..]
+  version required: =0.1.0
 ",
         )
         .run();
@@ -565,17 +568,17 @@ fn override_with_nothing() {
             "Cargo.toml",
             &format!(
                 r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                    [package]
+                    name = "foo"
+                    version = "0.0.1"
+                    authors = []
 
-            [dependencies]
-            bar = "0.1"
+                    [dependencies]
+                    bar = "0.1"
 
-            [replace]
-            "bar:0.1.0" = {{ git = '{}' }}
-        "#,
+                    [replace]
+                    "bar:0.1.0" = {{ git = '{}' }}
+                "#,
                 foo.url()
             ),
         )
@@ -588,7 +591,10 @@ fn override_with_nothing() {
             "\
 [UPDATING] [..] index
 [UPDATING] git repository [..]
-[ERROR] failed to load source for a dependency on `bar`
+[ERROR] failed to get `bar` as a dependency of package `foo v0.0.1 ([..])`
+
+Caused by:
+  failed to load source for dependency `bar`
 
 Caused by:
   Unable to update file://[..]
@@ -606,14 +612,14 @@ fn override_wrong_version() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [replace]
-            "bar:0.1.0" = { git = 'https://example.com', version = '0.2.0' }
-        "#,
+                [replace]
+                "bar:0.1.0" = { git = 'https://example.com', version = '0.2.0' }
+            "#,
         )
         .file("src/lib.rs", "")
         .build();
@@ -645,20 +651,20 @@ fn multiple_specs() {
             "Cargo.toml",
             &format!(
                 r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                    [package]
+                    name = "foo"
+                    version = "0.0.1"
+                    authors = []
 
-            [dependencies]
-            bar = "0.1.0"
+                    [dependencies]
+                    bar = "0.1.0"
 
-            [replace]
-            "bar:0.1.0" = {{ git = '{0}' }}
+                    [replace]
+                    "bar:0.1.0" = {{ git = '{0}' }}
 
-            [replace."https://github.com/rust-lang/crates.io-index#bar:0.1.0"]
-            git = '{0}'
-        "#,
+                    [replace."https://github.com/rust-lang/crates.io-index#bar:0.1.0"]
+                    git = '{0}'
+                "#,
                 bar.url()
             ),
         )
@@ -671,12 +677,15 @@ fn multiple_specs() {
             "\
 [UPDATING] [..] index
 [UPDATING] git repository [..]
-error: overlapping replacement specifications found:
+[ERROR] failed to get `bar` as a dependency of package `foo v0.0.1 ([..])`
 
-  * [..]
-  * [..]
+Caused by:
+  overlapping replacement specifications found:
 
-both specifications match: bar v0.1.0
+    * [..]
+    * [..]
+
+  both specifications match: bar v0.1.0
 ",
         )
         .run();
@@ -696,17 +705,17 @@ fn test_override_dep() {
             "Cargo.toml",
             &format!(
                 r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                    [package]
+                    name = "foo"
+                    version = "0.0.1"
+                    authors = []
 
-            [dependencies]
-            bar = "0.1.0"
+                    [dependencies]
+                    bar = "0.1.0"
 
-            [replace]
-            "bar:0.1.0" = {{ git = '{0}' }}
-        "#,
+                    [replace]
+                    "bar:0.1.0" = {{ git = '{0}' }}
+                "#,
                 bar.url()
             ),
         )
@@ -740,17 +749,17 @@ fn update() {
             "Cargo.toml",
             &format!(
                 r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                    [package]
+                    name = "foo"
+                    version = "0.0.1"
+                    authors = []
 
-            [dependencies]
-            bar = "0.1.0"
+                    [dependencies]
+                    bar = "0.1.0"
 
-            [replace]
-            "bar:0.1.0" = {{ git = '{0}' }}
-        "#,
+                    [replace]
+                    "bar:0.1.0" = {{ git = '{0}' }}
+                "#,
                 bar.url()
             ),
         )
@@ -778,14 +787,14 @@ fn no_override_self() {
         .file(
             "near/Cargo.toml",
             r#"
-            [package]
-            name = "near"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "near"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            far = { path = "../far" }
-        "#,
+                [dependencies]
+                far = { path = "../far" }
+            "#,
         )
         .file("near/src/lib.rs", "#![no_std] pub extern crate far;")
         .build();
@@ -795,17 +804,17 @@ fn no_override_self() {
             "Cargo.toml",
             &format!(
                 r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                    [package]
+                    name = "foo"
+                    version = "0.0.1"
+                    authors = []
 
-            [dependencies]
-            near = {{ git = '{0}' }}
+                    [dependencies]
+                    near = {{ git = '{0}' }}
 
-            [replace]
-            "near:0.1.0" = {{ git = '{0}' }}
-        "#,
+                    [replace]
+                    "near:0.1.0" = {{ git = '{0}' }}
+                "#,
                 deps.url()
             ),
         )
@@ -831,59 +840,59 @@ fn override_an_override() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            chrono = "0.2"
-            serde = "0.8"
+                [dependencies]
+                chrono = "0.2"
+                serde = "0.8"
 
-            [replace]
-            "chrono:0.2.0" = { path = "chrono" }
-            "serde:0.8.0" = { path = "serde" }
-        "#,
+                [replace]
+                "chrono:0.2.0" = { path = "chrono" }
+                "serde:0.8.0" = { path = "serde" }
+            "#,
         )
         .file(
             "Cargo.lock",
             r#"
-            [[package]]
-            name = "foo"
-            version = "0.0.1"
-            dependencies = [
-             "chrono 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
-             "serde 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
-            ]
+                [[package]]
+                name = "foo"
+                version = "0.0.1"
+                dependencies = [
+                 "chrono 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+                 "serde 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+                ]
 
-            [[package]]
-            name = "chrono"
-            version = "0.2.0"
-            source = "registry+https://github.com/rust-lang/crates.io-index"
-            replace = "chrono 0.2.0"
+                [[package]]
+                name = "chrono"
+                version = "0.2.0"
+                source = "registry+https://github.com/rust-lang/crates.io-index"
+                replace = "chrono 0.2.0"
 
-            [[package]]
-            name = "chrono"
-            version = "0.2.0"
-            dependencies = [
-             "serde 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
-            ]
+                [[package]]
+                name = "chrono"
+                version = "0.2.0"
+                dependencies = [
+                 "serde 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
+                ]
 
-            [[package]]
-            name = "serde"
-            version = "0.7.0"
-            source = "registry+https://github.com/rust-lang/crates.io-index"
+                [[package]]
+                name = "serde"
+                version = "0.7.0"
+                source = "registry+https://github.com/rust-lang/crates.io-index"
 
-            [[package]]
-            name = "serde"
-            version = "0.8.0"
-            source = "registry+https://github.com/rust-lang/crates.io-index"
-            replace = "serde 0.8.0"
+                [[package]]
+                name = "serde"
+                version = "0.8.0"
+                source = "registry+https://github.com/rust-lang/crates.io-index"
+                replace = "serde 0.8.0"
 
-            [[package]]
-            name = "serde"
-            version = "0.8.0"
-        "#,
+                [[package]]
+                name = "serde"
+                version = "0.8.0"
+            "#,
         )
         .file(
             "src/lib.rs",
@@ -900,14 +909,14 @@ fn override_an_override() {
         .file(
             "chrono/Cargo.toml",
             r#"
-            [package]
-            name = "chrono"
-            version = "0.2.0"
-            authors = []
+                [package]
+                name = "chrono"
+                version = "0.2.0"
+                authors = []
 
-            [dependencies]
-            serde = "< 0.9"
-        "#,
+                [dependencies]
+                serde = "< 0.9"
+            "#,
         )
         .file(
             "chrono/src/lib.rs",
@@ -934,14 +943,14 @@ fn overriding_nonexistent_no_spurious() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            baz = { path = "baz" }
-        "#,
+                [dependencies]
+                baz = { path = "baz" }
+            "#,
         )
         .file("src/lib.rs", "pub fn bar() {}")
         .file("baz/Cargo.toml", &basic_manifest("baz", "0.1.0"))
@@ -953,18 +962,18 @@ fn overriding_nonexistent_no_spurious() {
             "Cargo.toml",
             &format!(
                 r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                    [package]
+                    name = "foo"
+                    version = "0.0.1"
+                    authors = []
 
-            [dependencies]
-            bar = "0.1.0"
+                    [dependencies]
+                    bar = "0.1.0"
 
-            [replace]
-            "bar:0.1.0" = {{ git = '{url}' }}
-            "baz:0.1.0" = {{ git = '{url}' }}
-        "#,
+                    [replace]
+                    "bar:0.1.0" = {{ git = '{url}' }}
+                    "baz:0.1.0" = {{ git = '{url}' }}
+                "#,
                 url = bar.url()
             ),
         )
@@ -996,18 +1005,19 @@ fn no_warnings_when_replace_is_used_in_another_workspace_member() {
             members = [ "first_crate", "second_crate"]
 
             [replace]
-            "bar:0.1.0" = { path = "local_bar" }"#,
+            "bar:0.1.0" = { path = "local_bar" }
+            "#,
         )
         .file(
             "first_crate/Cargo.toml",
             r#"
-            [package]
-            name = "first_crate"
-            version = "0.1.0"
+                [package]
+                name = "first_crate"
+                version = "0.1.0"
 
-            [dependencies]
-            bar = "0.1.0"
-        "#,
+                [dependencies]
+                bar = "0.1.0"
+            "#,
         )
         .file("first_crate/src/lib.rs", "")
         .file(
@@ -1051,30 +1061,30 @@ fn replace_to_path_dep() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            bar = "0.1.0"
+                [dependencies]
+                bar = "0.1.0"
 
-            [replace]
-            "bar:0.1.0" = { path = "bar" }
-        "#,
+                [replace]
+                "bar:0.1.0" = { path = "bar" }
+            "#,
         )
         .file("src/lib.rs", "extern crate bar;")
         .file(
             "bar/Cargo.toml",
             r#"
-            [package]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            baz = { path = "baz" }
-        "#,
+                [dependencies]
+                baz = { path = "baz" }
+            "#,
         )
         .file(
             "bar/src/lib.rs",
@@ -1097,51 +1107,51 @@ fn override_with_default_feature() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            bar = { path = "bar", default-features = false }
-            another = "0.1"
-            another2 = { path = "another2" }
+                [dependencies]
+                bar = { path = "bar", default-features = false }
+                another = "0.1"
+                another2 = { path = "another2" }
 
-            [replace]
-            'bar:0.1.0' = { path = "bar" }
-        "#,
+                [replace]
+                'bar:0.1.0' = { path = "bar" }
+            "#,
         )
         .file("src/main.rs", "extern crate bar; fn main() { bar::bar(); }")
         .file(
             "bar/Cargo.toml",
             r#"
-            [package]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
 
-            [features]
-            default = []
-        "#,
+                [features]
+                default = []
+            "#,
         )
         .file(
             "bar/src/lib.rs",
             r#"
-            #[cfg(feature = "default")]
-            pub fn bar() {}
-        "#,
+                #[cfg(feature = "default")]
+                pub fn bar() {}
+            "#,
         )
         .file(
             "another2/Cargo.toml",
             r#"
-            [package]
-            name = "another2"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "another2"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            bar = { version = "0.1", default-features = false }
-        "#,
+                [dependencies]
+                bar = { version = "0.1", default-features = false }
+            "#,
         )
         .file("another2/src/lib.rs", "")
         .build();
@@ -1157,30 +1167,30 @@ fn override_plus_dep() {
         .file(
             "Cargo.toml",
             r#"
-            [package]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [package]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [dependencies]
-            bar = "0.1"
+                [dependencies]
+                bar = "0.1"
 
-            [replace]
-            'bar:0.1.0' = { path = "bar" }
-        "#,
+                [replace]
+                'bar:0.1.0' = { path = "bar" }
+            "#,
         )
         .file("src/lib.rs", "")
         .file(
             "bar/Cargo.toml",
             r#"
-            [package]
-            name = "bar"
-            version = "0.1.0"
-            authors = []
+                [package]
+                name = "bar"
+                version = "0.1.0"
+                authors = []
 
-            [dependencies]
-            foo = { path = ".." }
-        "#,
+                [dependencies]
+                foo = { path = ".." }
+            "#,
         )
         .file("bar/src/lib.rs", "")
         .build();

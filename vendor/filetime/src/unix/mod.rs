@@ -8,12 +8,14 @@ cfg_if::cfg_if! {
         mod utimes;
         mod linux;
         pub use self::linux::*;
+    } else if #[cfg(target_os = "android")] {
+        mod android;
+        pub use self::android::*;
     } else if #[cfg(target_os = "macos")] {
         mod utimes;
         mod macos;
         pub use self::macos::*;
-    } else if #[cfg(any(target_os = "android",
-                        target_os = "solaris",
+    } else if #[cfg(any(target_os = "solaris",
                         target_os = "illumos",
                         target_os = "emscripten",
                         target_os = "freebsd",
@@ -31,10 +33,22 @@ cfg_if::cfg_if! {
 #[allow(dead_code)]
 fn to_timespec(ft: &Option<FileTime>) -> timespec {
     cfg_if::cfg_if! {
-        if #[cfg(target_os = "macos")] {
+        if #[cfg(any(target_os = "macos",
+                     target_os = "illumos",
+                     target_os = "freebsd"))] {
             // https://github.com/apple/darwin-xnu/blob/a449c6a3b8014d9406c2ddbdc81795da24aa7443/bsd/sys/stat.h#L541
+            // https://github.com/illumos/illumos-gate/blob/master/usr/src/boot/sys/sys/stat.h#L312
+            // https://svnweb.freebsd.org/base/head/sys/sys/stat.h?view=markup#l359
             const UTIME_OMIT: i64 = -2;
+        } else if #[cfg(target_os = "openbsd")] {
+            // https://github.com/openbsd/src/blob/master/sys/sys/stat.h#L189
+            const UTIME_OMIT: i64 = -1;
+        } else if #[cfg(target_os = "haiku")] {
+            // https://git.haiku-os.org/haiku/tree/headers/posix/sys/stat.h?#n106
+            const UTIME_OMIT: i64 = 1000000001;
         } else {
+            // http://cvsweb.netbsd.org/bsdweb.cgi/src/sys/sys/stat.h?annotate=1.68.30.1
+            // https://github.com/emscripten-core/emscripten/blob/master/system/include/libc/sys/stat.h#L71
             const UTIME_OMIT: i64 = 1_073_741_822;
         }
     }

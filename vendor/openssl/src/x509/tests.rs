@@ -1,18 +1,21 @@
-use hex::{self, FromHex};
-
-use asn1::Asn1Time;
-use bn::{BigNum, MsbOption};
-use hash::MessageDigest;
-use nid::Nid;
-use pkey::{PKey, Private};
-use rsa::Rsa;
-use stack::Stack;
-use x509::extension::{
+use crate::asn1::Asn1Time;
+use crate::bn::{BigNum, MsbOption};
+use crate::hash::MessageDigest;
+use crate::nid::Nid;
+use crate::pkey::{PKey, Private};
+use crate::rsa::Rsa;
+use crate::stack::Stack;
+use crate::x509::extension::{
     AuthorityKeyIdentifier, BasicConstraints, ExtendedKeyUsage, KeyUsage, SubjectAlternativeName,
     SubjectKeyIdentifier,
 };
-use x509::store::X509StoreBuilder;
-use x509::{X509Name, X509Req, X509StoreContext, X509VerifyResult, X509};
+use crate::x509::store::X509StoreBuilder;
+#[cfg(any(ossl102, libressl261))]
+use crate::x509::verify::X509VerifyFlags;
+#[cfg(ossl110)]
+use crate::x509::X509Builder;
+use crate::x509::{X509Name, X509Req, X509StoreContext, X509VerifyResult, X509};
+use hex::{self, FromHex};
 
 fn pkey() -> PKey<Private> {
     let rsa = Rsa::generate(2048).unwrap();
@@ -22,7 +25,7 @@ fn pkey() -> PKey<Private> {
 #[test]
 fn test_cert_loading() {
     let cert = include_bytes!("../../test/cert.pem");
-    let cert = X509::from_pem(cert).ok().expect("Failed to load PEM");
+    let cert = X509::from_pem(cert).unwrap();
     let fingerprint = cert.digest(MessageDigest::sha1()).unwrap();
 
     let hash_str = "59172d9313e84459bcff27f967e79e6e9217e584";
@@ -32,9 +35,22 @@ fn test_cert_loading() {
 }
 
 #[test]
+fn test_debug() {
+    let cert = include_bytes!("../../test/cert.pem");
+    let cert = X509::from_pem(cert).unwrap();
+    let debugged = format!("{:#?}", cert);
+    assert!(debugged.contains(r#"serial_number: "8771F7BDEE982FA5""#));
+    assert!(debugged.contains(r#"signature_algorithm: sha256WithRSAEncryption"#));
+    assert!(debugged.contains(r#"countryName = "AU""#));
+    assert!(debugged.contains(r#"stateOrProvinceName = "Some-State""#));
+    assert!(debugged.contains(r#"not_before: Aug 14 17:00:03 2016 GMT"#));
+    assert!(debugged.contains(r#"not_after: Aug 12 17:00:03 2026 GMT"#));
+}
+
+#[test]
 fn test_cert_issue_validity() {
     let cert = include_bytes!("../../test/cert.pem");
-    let cert = X509::from_pem(cert).ok().expect("Failed to load PEM");
+    let cert = X509::from_pem(cert).unwrap();
     let not_before = cert.not_before().to_string();
     let not_after = cert.not_after().to_string();
 
@@ -45,7 +61,7 @@ fn test_cert_issue_validity() {
 #[test]
 fn test_save_der() {
     let cert = include_bytes!("../../test/cert.pem");
-    let cert = X509::from_pem(cert).ok().expect("Failed to load PEM");
+    let cert = X509::from_pem(cert).unwrap();
 
     let der = cert.to_der().unwrap();
     assert!(!der.is_empty());
@@ -101,8 +117,8 @@ fn test_nameref_iterator() {
     assert_eq!(friendly.object().nid().as_raw(), Nid::FRIENDLYNAME.as_raw());
     assert_eq!(&**friendly.data().as_utf8().unwrap(), "Example");
 
-    if let Some(_) = all_entries.next() {
-        assert!(false);
+    if all_entries.next().is_some() {
+        panic!();
     }
 }
 
@@ -136,7 +152,7 @@ fn test_subject_alt_name() {
 #[test]
 fn test_subject_alt_name_iter() {
     let cert = include_bytes!("../../test/alt_name_cert.pem");
-    let cert = X509::from_pem(cert).ok().expect("Failed to load PEM");
+    let cert = X509::from_pem(cert).unwrap();
 
     let subject_alt_names = cert.subject_alt_names().unwrap();
     let mut subject_alt_names_iter = subject_alt_names.iter();
@@ -161,6 +177,24 @@ fn test_subject_alt_name_iter() {
         Some("http://www.example.com")
     );
     assert!(subject_alt_names_iter.next().is_none());
+}
+
+#[test]
+fn test_aia_ca_issuer() {
+    // With AIA
+    let cert = include_bytes!("../../test/aia_test_cert.pem");
+    let cert = X509::from_pem(cert).unwrap();
+    let authority_info = cert.authority_info().unwrap();
+    assert_eq!(authority_info.len(), 1);
+    assert_eq!(authority_info[0].method().to_string(), "CA Issuers");
+    assert_eq!(
+        authority_info[0].location().uri(),
+        Some("http://www.example.com/cert.pem")
+    );
+    // Without AIA
+    let cert = include_bytes!("../../test/cert.pem");
+    let cert = X509::from_pem(cert).unwrap();
+    assert!(cert.authority_info().is_none());
 }
 
 #[test]
@@ -232,7 +266,7 @@ fn x509_builder() {
         .entries_by_nid(Nid::COMMONNAME)
         .next()
         .unwrap();
-    assert_eq!("foobar.com".as_bytes(), cn.data().as_slice());
+    assert_eq!(cn.data().as_slice(), b"foobar.com");
     assert_eq!(serial, x509.serial_number().to_bn().unwrap());
 }
 
@@ -320,6 +354,7 @@ fn signature() {
 }
 
 #[test]
+#[allow(clippy::redundant_clone)]
 fn clone_x509() {
     let cert = include_bytes!("../../test/cert.pem");
     let cert = X509::from_pem(cert).unwrap();
@@ -363,4 +398,58 @@ fn test_verify_fails() {
     assert!(!context
         .init(&store, &cert, &chain, |c| c.verify_cert())
         .unwrap());
+}
+
+#[test]
+#[cfg(any(ossl102, libressl261))]
+fn test_verify_fails_with_crl_flag_set_and_no_crl() {
+    let cert = include_bytes!("../../test/cert.pem");
+    let cert = X509::from_pem(cert).unwrap();
+    let ca = include_bytes!("../../test/root-ca.pem");
+    let ca = X509::from_pem(ca).unwrap();
+    let chain = Stack::new().unwrap();
+
+    let mut store_bldr = X509StoreBuilder::new().unwrap();
+    store_bldr.add_cert(ca).unwrap();
+    store_bldr.set_flags(X509VerifyFlags::CRL_CHECK).unwrap();
+    let store = store_bldr.build();
+
+    let mut context = X509StoreContext::new().unwrap();
+    assert_eq!(
+        context
+            .init(&store, &cert, &chain, |c| {
+                c.verify_cert()?;
+                Ok(c.error())
+            })
+            .unwrap()
+            .error_string(),
+        "unable to get certificate CRL"
+    )
+}
+
+#[cfg(ossl110)]
+#[test]
+fn x509_ref_version() {
+    let mut builder = X509Builder::new().unwrap();
+    let expected_version = 2;
+    builder
+        .set_version(expected_version)
+        .expect("Failed to set certificate version");
+    let cert = builder.build();
+    let actual_version = cert.version();
+    assert_eq!(
+        expected_version, actual_version,
+        "Obtained certificate version is incorrect",
+    );
+}
+
+#[cfg(ossl110)]
+#[test]
+fn x509_ref_version_no_version_set() {
+    let cert = X509Builder::new().unwrap().build();
+    let actual_version = cert.version();
+    assert_eq!(
+        0, actual_version,
+        "Default certificate version is incorrect",
+    );
 }

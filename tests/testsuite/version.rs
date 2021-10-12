@@ -1,6 +1,5 @@
 //! Tests for displaying the cargo version.
 
-use cargo;
 use cargo_test_support::project;
 
 #[cargo_test]
@@ -8,11 +7,11 @@ fn simple() {
     let p = project().build();
 
     p.cargo("version")
-        .with_stdout(&format!("{}\n", cargo::version()))
+        .with_stdout(&format!("cargo {}\n", cargo::version()))
         .run();
 
     p.cargo("--version")
-        .with_stdout(&format!("{}\n", cargo::version()))
+        .with_stdout(&format!("cargo {}\n", cargo::version()))
         .run();
 }
 
@@ -35,9 +34,9 @@ fn version_works_with_bad_target_dir() {
         .file(
             ".cargo/config",
             r#"
-            [build]
-            target-dir = 4
-        "#,
+                [build]
+                target-dir = 4
+            "#,
         )
         .build();
     p.cargo("version").run();

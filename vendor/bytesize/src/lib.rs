@@ -27,12 +27,14 @@
 //!  assert_eq!("518 GB".to_string(), ByteSize::gb(518).to_string(false));
 //! ```
 
+mod parse;
+
 #[cfg(feature = "serde")]
 #[macro_use]
 extern crate serde;
 
 use std::fmt::{Debug, Display, Formatter, Result};
-use std::ops::{Add, Mul};
+use std::ops::{Add, AddAssign, Mul, MulAssign};
 
 /// byte size for 1 byte
 pub const B: u64 = 1;
@@ -58,8 +60,8 @@ pub const TIB: u64 = 1_099_511_627_776;
 /// bytes size for 1 pebibyte
 pub const PIB: u64 = 1_125_899_906_842_624;
 
-static UNITS: &'static str = "KMGTPE";
-static UNITS_SI: &'static str = "kMGTPE";
+static UNITS: &str = "KMGTPE";
+static UNITS_SI: &str = "kMGTPE";
 static LN_KB: f64 = 6.931471806; // ln 1024
 static LN_KIB: f64 = 6.907755279; // ln 1000
 
@@ -104,63 +106,63 @@ pub fn pib<V: Into<u64>>(size: V) -> u64 {
 }
 
 /// Byte size representation
-#[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Default)]
+#[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct ByteSize(pub u64);
 
 impl ByteSize {
     #[inline(always)]
-    pub fn b(size: u64) -> ByteSize {
+    pub const fn b(size: u64) -> ByteSize {
         ByteSize(size)
     }
 
     #[inline(always)]
-    pub fn kb(size: u64) -> ByteSize {
+    pub const fn kb(size: u64) -> ByteSize {
         ByteSize(size * KB)
     }
 
     #[inline(always)]
-    pub fn kib(size: u64) -> ByteSize {
+    pub const fn kib(size: u64) -> ByteSize {
         ByteSize(size * KIB)
     }
 
     #[inline(always)]
-    pub fn mb(size: u64) -> ByteSize {
+    pub const fn mb(size: u64) -> ByteSize {
         ByteSize(size * MB)
     }
 
     #[inline(always)]
-    pub fn mib(size: u64) -> ByteSize {
+    pub const fn mib(size: u64) -> ByteSize {
         ByteSize(size * MIB)
     }
 
     #[inline(always)]
-    pub fn gb(size: u64) -> ByteSize {
+    pub const fn gb(size: u64) -> ByteSize {
         ByteSize(size * GB)
     }
 
     #[inline(always)]
-    pub fn gib(size: u64) -> ByteSize {
+    pub const fn gib(size: u64) -> ByteSize {
         ByteSize(size * GIB)
     }
 
     #[inline(always)]
-    pub fn tb(size: u64) -> ByteSize {
+    pub const fn tb(size: u64) -> ByteSize {
         ByteSize(size * TB)
     }
 
     #[inline(always)]
-    pub fn tib(size: u64) -> ByteSize {
+    pub const fn tib(size: u64) -> ByteSize {
         ByteSize(size * TIB)
     }
 
     #[inline(always)]
-    pub fn pb(size: u64) -> ByteSize {
+    pub const fn pb(size: u64) -> ByteSize {
         ByteSize(size * PB)
     }
 
     #[inline(always)]
-    pub fn pib(size: u64) -> ByteSize {
+    pub const fn pib(size: u64) -> ByteSize {
         ByteSize(size * PIB)
     }
 
@@ -205,7 +207,7 @@ pub fn to_string(bytes: u64, si_prefix: bool) -> String {
 
 impl Display for ByteSize {
     fn fmt(&self, f: &mut Formatter) -> Result {
-        write!(f, "{}", to_string(self.0, false))
+        f.pad(&to_string(self.0, false))
     }
 }
 
@@ -217,27 +219,11 @@ impl Debug for ByteSize {
 
 macro_rules! commutative_op {
     ($t:ty) => {
-        impl Add<$t> for ByteSize {
-            type Output = ByteSize;
-            #[inline(always)]
-            fn add(self, rhs: $t) -> ByteSize {
-                ByteSize(self.0 + (rhs as u64))
-            }
-        }
-
         impl Add<ByteSize> for $t {
             type Output = ByteSize;
             #[inline(always)]
             fn add(self, rhs: ByteSize) -> ByteSize {
                 ByteSize(rhs.0 + (self as u64))
-            }
-        }
-
-        impl Mul<$t> for ByteSize {
-            type Output = ByteSize;
-            #[inline(always)]
-            fn mul(self, rhs: $t) -> ByteSize {
-                ByteSize(self.0 * (rhs as u64))
             }
         }
 
@@ -265,13 +251,54 @@ impl Add<ByteSize> for ByteSize {
     }
 }
 
+impl AddAssign<ByteSize> for ByteSize {
+    #[inline(always)]
+    fn add_assign(&mut self, rhs: ByteSize) {
+        self.0 += rhs.0
+    }
+}
+
+impl<T> Add<T> for ByteSize
+    where T: Into<u64> {
+    type Output = ByteSize;
+    #[inline(always)]
+    fn add(self, rhs: T) -> ByteSize {
+        ByteSize(self.0 + (rhs.into() as u64))
+    }
+}
+
+impl<T> AddAssign<T> for ByteSize
+    where T: Into<u64> {
+    #[inline(always)]
+    fn add_assign(&mut self, rhs: T) {
+        self.0 += rhs.into() as u64;
+    }
+}
+
+impl<T> Mul<T> for ByteSize
+    where T: Into<u64> {
+    type Output = ByteSize;
+    #[inline(always)]
+    fn mul(self, rhs: T) -> ByteSize {
+        ByteSize(self.0 * (rhs.into() as u64))
+    }
+}
+
+impl<T> MulAssign<T> for ByteSize
+    where T: Into<u64> {
+    #[inline(always)]
+    fn mul_assign(&mut self, rhs: T) {
+        self.0 *= rhs.into() as u64;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_arithmetic_op() {
-        let x = ByteSize::mb(1);
+        let mut x = ByteSize::mb(1);
         let y = ByteSize::kb(100);
 
         assert_eq!((x + y).as_u64(), 1_100_000u64);
@@ -279,11 +306,16 @@ mod tests {
         assert_eq!((x + (100 * 1000) as u64).as_u64(), 1_100_000);
 
         assert_eq!((x * 2u64).as_u64(), 2_000_000);
+
+        x += y;
+        assert_eq!(x.as_u64(), 1_100_000);
+        x *= 2u64;
+        assert_eq!(x.as_u64(), 2_200_000);
     }
 
     #[test]
     fn test_arithmetic_primitives() {
-        let x = ByteSize::mb(1);
+        let mut x = ByteSize::mb(1);
 
         assert_eq!((x + MB as u64).as_u64(), 2_000_000);
 
@@ -292,6 +324,12 @@ mod tests {
         assert_eq!((x + KB as u16).as_u64(), 1_001_000);
 
         assert_eq!((x + B as u8).as_u64(), 1_000_001);
+
+        x += MB as u64;
+        x += MB as u32;
+        x += 10 as u16;
+        x += 1 as u8;
+        assert_eq!(x.as_u64(), 3_000_011);
     }
 
     #[test]
@@ -316,6 +354,18 @@ mod tests {
         assert_display("518.0 GB", ByteSize::gb(518));
         assert_display("815.0 TB", ByteSize::tb(815));
         assert_display("609.0 PB", ByteSize::pb(609));
+    }
+
+    #[test]
+    fn test_display_alignment() {
+        assert_eq!("|357 B     |", format!("|{:10}|", ByteSize(357)));
+        assert_eq!("|     357 B|", format!("|{:>10}|", ByteSize(357)));
+        assert_eq!("|357 B     |", format!("|{:<10}|", ByteSize(357)));
+        assert_eq!("|  357 B   |", format!("|{:^10}|", ByteSize(357)));
+
+        assert_eq!("|-----357 B|", format!("|{:->10}|", ByteSize(357)));
+        assert_eq!("|357 B-----|", format!("|{:-<10}|", ByteSize(357)));
+        assert_eq!("|--357 B---|", format!("|{:-^10}|", ByteSize(357)));
     }
 
     fn assert_to_string(expected: &str, b: ByteSize, si: bool) {

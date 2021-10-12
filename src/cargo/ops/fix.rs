@@ -41,48 +41,51 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
 use std::ffi::OsString;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, ExitStatus};
 use std::str;
 
-use anyhow::{Context, Error};
+use anyhow::{bail, Context, Error};
+use cargo_util::{paths, ProcessBuilder};
 use log::{debug, trace, warn};
 use rustfix::diagnostics::Diagnostic;
 use rustfix::{self, CodeFix};
 
-use crate::core::Workspace;
+use crate::core::compiler::RustcTargetData;
+use crate::core::resolver::features::{FeatureOpts, FeatureResolver};
+use crate::core::resolver::{HasDevUnits, Resolve, ResolveBehavior};
+use crate::core::{Edition, MaybePackage, Workspace};
 use crate::ops::{self, CompileOptions};
 use crate::util::diagnostic_server::{Message, RustfixDiagnosticServer};
 use crate::util::errors::CargoResult;
-use crate::util::{self, paths};
+use crate::util::Config;
 use crate::util::{existing_vcs_repo, LockServer, LockServerClient};
+use crate::{drop_eprint, drop_eprintln};
 
 const FIX_ENV: &str = "__CARGO_FIX_PLZ";
 const BROKEN_CODE_ENV: &str = "__CARGO_FIX_BROKEN_CODE";
-const PREPARE_FOR_ENV: &str = "__CARGO_FIX_PREPARE_FOR";
 const EDITION_ENV: &str = "__CARGO_FIX_EDITION";
 const IDIOMS_ENV: &str = "__CARGO_FIX_IDIOMS";
-const CLIPPY_FIX_ARGS: &str = "__CARGO_FIX_CLIPPY_ARGS";
 
-pub struct FixOptions<'a> {
+pub struct FixOptions {
     pub edition: bool,
-    pub prepare_for: Option<&'a str>,
     pub idioms: bool,
-    pub compile_opts: CompileOptions<'a>,
+    pub compile_opts: CompileOptions,
     pub allow_dirty: bool,
     pub allow_no_vcs: bool,
     pub allow_staged: bool,
     pub broken_code: bool,
-    pub clippy_args: Option<Vec<String>>,
 }
 
-pub fn fix(ws: &Workspace<'_>, opts: &mut FixOptions<'_>) -> CargoResult<()> {
-    check_version_control(opts)?;
+pub fn fix(ws: &Workspace<'_>, opts: &mut FixOptions) -> CargoResult<()> {
+    check_version_control(ws.config(), opts)?;
+    if opts.edition {
+        check_resolver_change(ws, opts)?;
+    }
 
     // Spin up our lock server, which our subprocesses will use to synchronize fixes.
     let lock_server = LockServer::new()?;
-    let mut wrapper = util::process(env::current_exe()?);
+    let mut wrapper = ProcessBuilder::new(env::current_exe()?);
     wrapper.env(FIX_ENV, lock_server.addr().to_string());
     let _started = lock_server.start()?;
 
@@ -94,24 +97,9 @@ pub fn fix(ws: &Workspace<'_>, opts: &mut FixOptions<'_>) -> CargoResult<()> {
 
     if opts.edition {
         wrapper.env(EDITION_ENV, "1");
-    } else if let Some(edition) = opts.prepare_for {
-        wrapper.env(PREPARE_FOR_ENV, edition);
     }
     if opts.idioms {
         wrapper.env(IDIOMS_ENV, "1");
-    }
-
-    if opts.clippy_args.is_some() {
-        if let Err(e) = util::process("clippy-driver").arg("-V").exec_with_output() {
-            eprintln!("Warning: clippy-driver not found: {:?}", e);
-        }
-
-        let clippy_args = opts
-            .clippy_args
-            .as_ref()
-            .map_or_else(String::new, |args| serde_json::to_string(&args).unwrap());
-
-        wrapper.env(CLIPPY_FIX_ARGS, clippy_args);
     }
 
     *opts
@@ -130,7 +118,7 @@ pub fn fix(ws: &Workspace<'_>, opts: &mut FixOptions<'_>) -> CargoResult<()> {
         server.configure(&mut wrapper);
     }
 
-    let rustc = opts.compile_opts.config.load_global_rustc(Some(ws))?;
+    let rustc = ws.config().load_global_rustc(Some(ws))?;
     wrapper.arg(&rustc.path);
 
     // primary crates are compiled using a cargo subprocess to do extra work of applying fixes and
@@ -141,13 +129,12 @@ pub fn fix(ws: &Workspace<'_>, opts: &mut FixOptions<'_>) -> CargoResult<()> {
     Ok(())
 }
 
-fn check_version_control(opts: &FixOptions<'_>) -> CargoResult<()> {
+fn check_version_control(config: &Config, opts: &FixOptions) -> CargoResult<()> {
     if opts.allow_no_vcs {
         return Ok(());
     }
-    let config = opts.compile_opts.config;
     if !existing_vcs_repo(config.cwd(), config.cwd()) {
-        anyhow::bail!(
+        bail!(
             "no VCS found for this package and `cargo fix` can potentially \
              perform destructive changes; if you'd like to suppress this \
              error pass `--allow-no-vcs`"
@@ -202,7 +189,7 @@ fn check_version_control(opts: &FixOptions<'_>) -> CargoResult<()> {
         files_list.push_str(" (staged)\n");
     }
 
-    anyhow::bail!(
+    bail!(
         "the working directory of this package has uncommitted changes, and \
          `cargo fix` can potentially perform destructive changes; if you'd \
          like to suppress this error pass `--allow-dirty`, `--allow-staged`, \
@@ -214,21 +201,138 @@ fn check_version_control(opts: &FixOptions<'_>) -> CargoResult<()> {
     );
 }
 
-pub fn fix_maybe_exec_rustc() -> CargoResult<bool> {
+fn check_resolver_change(ws: &Workspace<'_>, opts: &FixOptions) -> CargoResult<()> {
+    let root = ws.root_maybe();
+    match root {
+        MaybePackage::Package(root_pkg) => {
+            if root_pkg.manifest().resolve_behavior().is_some() {
+                // If explicitly specified by the user, no need to check.
+                return Ok(());
+            }
+            // Only trigger if updating the root package from 2018.
+            let pkgs = opts.compile_opts.spec.get_packages(ws)?;
+            if !pkgs.iter().any(|&pkg| pkg == root_pkg) {
+                // The root is not being migrated.
+                return Ok(());
+            }
+            if root_pkg.manifest().edition() != Edition::Edition2018 {
+                // V1 to V2 only happens on 2018 to 2021.
+                return Ok(());
+            }
+        }
+        MaybePackage::Virtual(_vm) => {
+            // Virtual workspaces don't have a global edition to set (yet).
+            return Ok(());
+        }
+    }
+    // 2018 without `resolver` set must be V1
+    assert_eq!(ws.resolve_behavior(), ResolveBehavior::V1);
+    let specs = opts.compile_opts.spec.to_package_id_specs(ws)?;
+    let target_data = RustcTargetData::new(ws, &opts.compile_opts.build_config.requested_kinds)?;
+    // HasDevUnits::No because that may uncover more differences.
+    // This is not the same as what `cargo fix` is doing, since it is doing
+    // `--all-targets` which includes dev dependencies.
+    let ws_resolve = ops::resolve_ws_with_opts(
+        ws,
+        &target_data,
+        &opts.compile_opts.build_config.requested_kinds,
+        &opts.compile_opts.cli_features,
+        &specs,
+        HasDevUnits::No,
+        crate::core::resolver::features::ForceAllTargets::No,
+    )?;
+
+    let feature_opts = FeatureOpts::new_behavior(ResolveBehavior::V2, HasDevUnits::No);
+    let v2_features = FeatureResolver::resolve(
+        ws,
+        &target_data,
+        &ws_resolve.targeted_resolve,
+        &ws_resolve.pkg_set,
+        &opts.compile_opts.cli_features,
+        &specs,
+        &opts.compile_opts.build_config.requested_kinds,
+        feature_opts,
+    )?;
+
+    let differences = v2_features.compare_legacy(&ws_resolve.resolved_features);
+    if differences.is_empty() {
+        // Nothing is different, nothing to report.
+        return Ok(());
+    }
+    let config = ws.config();
+    config.shell().note(
+        "Switching to Edition 2021 will enable the use of the version 2 feature resolver in Cargo.",
+    )?;
+    drop_eprintln!(
+        config,
+        "This may cause some dependencies to be built with fewer features enabled than previously."
+    );
+    drop_eprintln!(
+        config,
+        "More information about the resolver changes may be found \
+         at https://doc.rust-lang.org/nightly/edition-guide/rust-2021/default-cargo-resolver.html"
+    );
+    drop_eprintln!(
+        config,
+        "When building the following dependencies, \
+         the given features will no longer be used:\n"
+    );
+    for ((pkg_id, for_host), removed) in differences {
+        drop_eprint!(config, "  {}", pkg_id);
+        if for_host {
+            drop_eprint!(config, " (as host dependency)");
+        }
+        drop_eprint!(config, ": ");
+        let joined: Vec<_> = removed.iter().map(|s| s.as_str()).collect();
+        drop_eprintln!(config, "{}", joined.join(", "));
+    }
+    drop_eprint!(config, "\n");
+    report_maybe_diesel(config, &ws_resolve.targeted_resolve)?;
+    Ok(())
+}
+
+fn report_maybe_diesel(config: &Config, resolve: &Resolve) -> CargoResult<()> {
+    if resolve
+        .iter()
+        .any(|pid| pid.name() == "diesel" && pid.version().major == 1)
+        && resolve.iter().any(|pid| pid.name() == "diesel_migrations")
+    {
+        config.shell().note(
+            "\
+This project appears to use both diesel and diesel_migrations. These packages have
+a known issue where the build may fail due to the version 2 resolver preventing
+feature unification between those two packages. See
+<https://github.com/rust-lang/cargo/issues/9450> for some potential workarounds.
+",
+        )?;
+    }
+    Ok(())
+}
+
+/// Entry point for `cargo` running as a proxy for `rustc`.
+///
+/// This is called every time `cargo` is run to check if it is in proxy mode.
+///
+/// Returns `false` if `fix` is not being run (not in proxy mode). Returns
+/// `true` if in `fix` proxy mode, and the fix was complete without any
+/// warnings or errors. If there are warnings or errors, this does not return,
+/// and the process exits with the corresponding `rustc` exit code.
+pub fn fix_maybe_exec_rustc(config: &Config) -> CargoResult<bool> {
     let lock_addr = match env::var(FIX_ENV) {
         Ok(s) => s,
         Err(_) => return Ok(false),
     };
 
-    let args = FixArgs::get();
+    let args = FixArgs::get()?;
     trace!("cargo-fix as rustc got file {:?}", args.file);
-    let rustc = args.rustc.as_ref().expect("fix wrapper rustc was not set");
 
-    let mut fixes = FixedCrate::default();
-    if let Some(path) = &args.file {
-        trace!("start rustfixing {:?}", path);
-        fixes = rustfix_crate(&lock_addr, rustc.as_ref(), path, &args)?;
-    }
+    let workspace_rustc = std::env::var("RUSTC_WORKSPACE_WRAPPER")
+        .map(PathBuf::from)
+        .ok();
+    let rustc = ProcessBuilder::new(&args.rustc).wrapped(workspace_rustc.as_ref());
+
+    trace!("start rustfixing {:?}", args.file);
+    let fixes = rustfix_crate(&lock_addr, &rustc, &args.file, &args, config)?;
 
     // Ok now we have our final goal of testing out the changes that we applied.
     // If these changes went awry and actually started to cause the crate to
@@ -239,14 +343,14 @@ pub fn fix_maybe_exec_rustc() -> CargoResult<bool> {
     // new rustc, and otherwise we capture the output to hide it in the scenario
     // that we have to back it all out.
     if !fixes.files.is_empty() {
-        let mut cmd = Command::new(&rustc);
-        args.apply(&mut cmd);
+        let mut cmd = rustc.build_command();
+        args.apply(&mut cmd, config);
         cmd.arg("--error-format=json");
         let output = cmd.output().context("failed to spawn rustc")?;
 
         if output.status.success() {
             for (path, file) in fixes.files.iter() {
-                Message::Fixing {
+                Message::Fixed {
                     file: path.clone(),
                     fixes: file.fixes_applied,
                 }
@@ -267,8 +371,7 @@ pub fn fix_maybe_exec_rustc() -> CargoResult<bool> {
         if !output.status.success() {
             if env::var_os(BROKEN_CODE_ENV).is_none() {
                 for (path, file) in fixes.files.iter() {
-                    fs::write(path, &file.original_code)
-                        .with_context(|| format!("failed to write file `{}`", path))?;
+                    paths::write(path, &file.original_code)?;
                 }
             }
             log_failed_fix(&output.stderr)?;
@@ -279,8 +382,8 @@ pub fn fix_maybe_exec_rustc() -> CargoResult<bool> {
     // - If the fix failed, show the original warnings and suggestions.
     // - If `--broken-code`, show the error messages.
     // - If the fix succeeded, show any remaining warnings.
-    let mut cmd = Command::new(&rustc);
-    args.apply(&mut cmd);
+    let mut cmd = rustc.build_command();
+    args.apply(&mut cmd, config);
     for arg in args.format_args {
         // Add any json/error format arguments that Cargo wants. This allows
         // things like colored output to work correctly.
@@ -300,22 +403,29 @@ struct FixedFile {
     original_code: String,
 }
 
+/// Attempts to apply fixes to a single crate.
+///
+/// This runs `rustc` (possibly multiple times) to gather suggestions from the
+/// compiler and applies them to the files on disk.
 fn rustfix_crate(
     lock_addr: &str,
-    rustc: &Path,
+    rustc: &ProcessBuilder,
     filename: &Path,
     args: &FixArgs,
+    config: &Config,
 ) -> Result<FixedCrate, Error> {
-    args.verify_not_preparing_for_enabled_edition()?;
+    args.check_edition_and_send_status(config)?;
 
     // First up, we want to make sure that each crate is only checked by one
     // process at a time. If two invocations concurrently check a crate then
     // it's likely to corrupt it.
     //
-    // We currently do this by assigning the name on our lock to the manifest
-    // directory.
-    let dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is missing?");
-    let _lock = LockServerClient::lock(&lock_addr.parse()?, dir)?;
+    // Historically this used per-source-file locking, then per-package
+    // locking. It now uses a single, global lock as some users do things like
+    // #[path] or include!() of shared files between packages. Serializing
+    // makes it slower, but is the only safe way to prevent concurrent
+    // modification.
+    let _lock = LockServerClient::lock(&lock_addr.parse()?, "global")?;
 
     // Next up, this is a bit suspicious, but we *iteratively* execute rustc and
     // collect suggestions to feed to rustfix. Once we hit our limit of times to
@@ -363,7 +473,7 @@ fn rustfix_crate(
             // We'll generate new errors below.
             file.errors_applying_fixes.clear();
         }
-        rustfix_and_fix(&mut fixes, rustc, filename, args)?;
+        rustfix_and_fix(&mut fixes, rustc, filename, args, config)?;
         let mut progress_yet_to_be_made = false;
         for (path, file) in fixes.files.iter_mut() {
             if file.errors_applying_fixes.is_empty() {
@@ -402,20 +512,24 @@ fn rustfix_crate(
 /// and any errors encountered while fixing files.
 fn rustfix_and_fix(
     fixes: &mut FixedCrate,
-    rustc: &Path,
+    rustc: &ProcessBuilder,
     filename: &Path,
     args: &FixArgs,
+    config: &Config,
 ) -> Result<(), Error> {
     // If not empty, filter by these lints.
     // TODO: implement a way to specify this.
     let only = HashSet::new();
 
-    let mut cmd = Command::new(rustc);
+    let mut cmd = rustc.build_command();
     cmd.arg("--error-format=json");
-    args.apply(&mut cmd);
-    let output = cmd
-        .output()
-        .with_context(|| format!("failed to execute `{}`", rustc.display()))?;
+    args.apply(&mut cmd, config);
+    let output = cmd.output().with_context(|| {
+        format!(
+            "failed to execute `{}`",
+            rustc.get_program().to_string_lossy()
+        )
+    })?;
 
     // If rustc didn't succeed for whatever reasons then we're very likely to be
     // looking at otherwise broken code. Let's not make things accidentally
@@ -525,7 +639,7 @@ fn rustfix_and_fix(
             }
         }
         let new_code = fixed.finish()?;
-        fs::write(&file, new_code).with_context(|| format!("failed to write file `{}`", file))?;
+        paths::write(&file, new_code)?;
     }
 
     Ok(())
@@ -534,9 +648,14 @@ fn rustfix_and_fix(
 fn exit_with(status: ExitStatus) -> ! {
     #[cfg(unix)]
     {
+        use std::io::Write;
         use std::os::unix::prelude::*;
         if let Some(signal) = status.signal() {
-            eprintln!("child failed with signal `{}`", signal);
+            drop(writeln!(
+                std::io::stderr().lock(),
+                "child failed with signal `{}`",
+                signal
+            ));
             process::exit(2);
         }
     }
@@ -583,144 +702,152 @@ fn log_failed_fix(stderr: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-#[derive(Default)]
+/// Various command-line options and settings used when `cargo` is running as
+/// a proxy for `rustc` during the fix operation.
 struct FixArgs {
-    file: Option<PathBuf>,
-    prepare_for_edition: PrepareFor,
+    /// This is the `.rs` file that is being fixed.
+    file: PathBuf,
+    /// If `--edition` is used to migrate to the next edition, this is the
+    /// edition we are migrating towards.
+    prepare_for_edition: Option<Edition>,
+    /// `true` if `--edition-idioms` is enabled.
     idioms: bool,
-    enabled_edition: Option<String>,
+    /// The current edition.
+    ///
+    /// `None` if on 2015.
+    enabled_edition: Option<Edition>,
+    /// Other command-line arguments not reflected by other fields in
+    /// `FixArgs`.
     other: Vec<OsString>,
-    rustc: Option<PathBuf>,
-    clippy_args: Vec<String>,
+    /// Path to the `rustc` executable.
+    rustc: PathBuf,
+    /// Console output flags (`--error-format`, `--json`, etc.).
+    ///
+    /// The normal fix procedure always uses `--json`, so it overrides what
+    /// Cargo normally passes when applying fixes. When displaying warnings or
+    /// errors, it will use these flags.
     format_args: Vec<String>,
 }
 
-enum PrepareFor {
-    Next,
-    Edition(String),
-    None,
-}
-
-impl Default for PrepareFor {
-    fn default() -> PrepareFor {
-        PrepareFor::None
-    }
-}
-
 impl FixArgs {
-    fn get() -> FixArgs {
-        let mut ret = FixArgs::default();
-
-        if let Ok(clippy_args) = env::var(CLIPPY_FIX_ARGS) {
-            ret.clippy_args = serde_json::from_str(&clippy_args).unwrap();
-            ret.rustc = Some(util::config::clippy_driver());
-        } else {
-            ret.rustc = env::args_os().nth(1).map(PathBuf::from);
-        }
+    fn get() -> Result<FixArgs, Error> {
+        let rustc = env::args_os()
+            .nth(1)
+            .map(PathBuf::from)
+            .ok_or_else(|| anyhow::anyhow!("expected rustc as first argument"))?;
+        let mut file = None;
+        let mut enabled_edition = None;
+        let mut other = Vec::new();
+        let mut format_args = Vec::new();
 
         for arg in env::args_os().skip(2) {
             let path = PathBuf::from(arg);
             if path.extension().and_then(|s| s.to_str()) == Some("rs") && path.exists() {
-                ret.file = Some(path);
+                file = Some(path);
                 continue;
             }
             if let Some(s) = path.to_str() {
-                let prefix = "--edition=";
-                if s.starts_with(prefix) {
-                    ret.enabled_edition = Some(s[prefix.len()..].to_string());
+                if let Some(edition) = s.strip_prefix("--edition=") {
+                    enabled_edition = Some(edition.parse()?);
                     continue;
                 }
                 if s.starts_with("--error-format=") || s.starts_with("--json=") {
                     // Cargo may add error-format in some cases, but `cargo
                     // fix` wants to add its own.
-                    ret.format_args.push(s.to_string());
+                    format_args.push(s.to_string());
                     continue;
                 }
             }
-            ret.other.push(path.into());
+            other.push(path.into());
         }
-        if let Ok(s) = env::var(PREPARE_FOR_ENV) {
-            ret.prepare_for_edition = PrepareFor::Edition(s);
-        } else if env::var(EDITION_ENV).is_ok() {
-            ret.prepare_for_edition = PrepareFor::Next;
-        }
+        let file = file.ok_or_else(|| anyhow::anyhow!("could not find .rs file in rustc args"))?;
+        let idioms = env::var(IDIOMS_ENV).is_ok();
 
-        ret.idioms = env::var(IDIOMS_ENV).is_ok();
-        ret
+        let prepare_for_edition = env::var(EDITION_ENV).ok().map(|_| {
+            enabled_edition
+                .unwrap_or(Edition::Edition2015)
+                .saturating_next()
+        });
+
+        Ok(FixArgs {
+            file,
+            prepare_for_edition,
+            idioms,
+            enabled_edition,
+            other,
+            rustc,
+            format_args,
+        })
     }
 
-    fn apply(&self, cmd: &mut Command) {
-        if let Some(path) = &self.file {
-            cmd.arg(path);
-        }
-
-        if !self.clippy_args.is_empty() {
-            cmd.args(&self.clippy_args);
-        }
-
+    fn apply(&self, cmd: &mut Command, config: &Config) {
+        cmd.arg(&self.file);
         cmd.args(&self.other).arg("--cap-lints=warn");
-        if let Some(edition) = &self.enabled_edition {
-            cmd.arg("--edition").arg(edition);
-            if self.idioms && edition == "2018" {
-                cmd.arg("-Wrust-2018-idioms");
+        if let Some(edition) = self.enabled_edition {
+            cmd.arg("--edition").arg(edition.to_string());
+            if self.idioms && edition.supports_idiom_lint() {
+                cmd.arg(format!("-Wrust-{}-idioms", edition));
             }
         }
 
-        if let Some(edition) = self.prepare_for_edition_resolve() {
-            cmd.arg("-W").arg(format!("rust-{}-compatibility", edition));
+        if let Some(edition) = self.prepare_for_edition {
+            if edition.supports_compat_lint() {
+                if config.nightly_features_allowed {
+                    cmd.arg("--force-warn")
+                        .arg(format!("rust-{}-compatibility", edition))
+                        .arg("-Zunstable-options");
+                } else {
+                    cmd.arg("-W").arg(format!("rust-{}-compatibility", edition));
+                }
+            }
         }
     }
 
-    /// Verifies that we're not both preparing for an enabled edition and enabling
-    /// the edition.
-    ///
-    /// This indicates that `cargo fix --prepare-for` is being executed out of
-    /// order with enabling the edition itself, meaning that we wouldn't
-    /// actually be able to fix anything! If it looks like this is happening
-    /// then yield an error to the user, indicating that this is happening.
-    fn verify_not_preparing_for_enabled_edition(&self) -> CargoResult<()> {
-        let edition = match self.prepare_for_edition_resolve() {
+    /// Validates the edition, and sends a message indicating what is being
+    /// done.
+    fn check_edition_and_send_status(&self, config: &Config) -> CargoResult<()> {
+        let to_edition = match self.prepare_for_edition {
             Some(s) => s,
-            None => return Ok(()),
+            None => {
+                return Message::Fixing {
+                    file: self.file.display().to_string(),
+                }
+                .post();
+            }
         };
-        let enabled = match &self.enabled_edition {
-            Some(s) => s,
-            None => return Ok(()),
-        };
-        if edition != enabled {
-            return Ok(());
+        // Unfortunately determining which cargo targets are being built
+        // isn't easy, and each target can be a different edition. The
+        // cargo-as-rustc fix wrapper doesn't know anything about the
+        // workspace, so it can't check for the `cargo-features` unstable
+        // opt-in. As a compromise, this just restricts to the nightly
+        // toolchain.
+        //
+        // Unfortunately this results in a pretty poor error message when
+        // multiple jobs run in parallel (the error appears multiple
+        // times). Hopefully this doesn't happen often in practice.
+        if !to_edition.is_stable() && !config.nightly_features_allowed {
+            bail!(
+                "cannot migrate {} to edition {to_edition}\n\
+                 Edition {to_edition} is unstable and not allowed in this release, \
+                 consider trying the nightly release channel.",
+                self.file.display(),
+                to_edition = to_edition
+            );
         }
-        let path = match &self.file {
-            Some(s) => s,
-            None => return Ok(()),
-        };
-
-        Message::EditionAlreadyEnabled {
-            file: path.display().to_string(),
-            edition: edition.to_string(),
-        }
-        .post()?;
-
-        process::exit(1);
-    }
-
-    fn prepare_for_edition_resolve(&self) -> Option<&str> {
-        match &self.prepare_for_edition {
-            PrepareFor::Edition(s) => Some(s),
-            PrepareFor::Next => Some(self.next_edition()),
-            PrepareFor::None => None,
-        }
-    }
-
-    fn next_edition(&self) -> &str {
-        match self.enabled_edition.as_ref().map(|s| &**s) {
-            // 2015 -> 2018,
-            None | Some("2015") => "2018",
-
-            // This'll probably be wrong in 2020, but that's future Cargo's
-            // problem. Eventually though we'll just add more editions here as
-            // necessary.
-            _ => "2018",
+        let from_edition = self.enabled_edition.unwrap_or(Edition::Edition2015);
+        if from_edition == to_edition {
+            Message::EditionAlreadyEnabled {
+                file: self.file.display().to_string(),
+                edition: to_edition,
+            }
+            .post()
+        } else {
+            Message::Migrating {
+                file: self.file.display().to_string(),
+                from_edition,
+                to_edition,
+            }
+            .post()
         }
     }
 }

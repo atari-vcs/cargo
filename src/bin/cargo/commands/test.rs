@@ -1,7 +1,6 @@
 use crate::command_prelude::*;
 use anyhow::Error;
 use cargo::ops::{self, CompileFilter, FilterRule, LibRule};
-use cargo::util::errors;
 
 pub fn cli() -> App {
     subcommand("test")
@@ -53,49 +52,11 @@ pub fn cli() -> App {
         .arg_target_triple("Build for the target triple")
         .arg_target_dir()
         .arg_manifest_path()
+        .arg_ignore_rust_version()
         .arg_message_format()
-        .after_help(
-            "\
-The test filtering argument TESTNAME and all the arguments following the
-two dashes (`--`) are passed to the test binaries and thus to libtest
-(rustc's built in unit-test and micro-benchmarking framework). If you're
-passing arguments to both Cargo and the binary, the ones after `--` go to the
-binary, the ones before go to Cargo. For details about libtest's arguments see
-the output of `cargo test -- --help`. As an example, this will run all
-tests with `foo` in their name on 3 threads in parallel:
-
-    cargo test foo -- --test-threads 3
-
-If the `--package` argument is given, then SPEC is a package ID specification
-which indicates which package should be tested. If it is not given, then the
-current package is tested. For more information on SPEC and its format, see the
-`cargo help pkgid` command.
-
-All packages in the workspace are tested if the `--workspace` flag is supplied. The
-`--workspace` flag is automatically assumed for a virtual manifest.
-Note that `--exclude` has to be specified in conjunction with the `--workspace` flag.
-
-The `--jobs` argument affects the building of the test executable but does
-not affect how many jobs are used when running the tests. The default value
-for the `--jobs` argument is the number of CPUs. If you want to control the
-number of simultaneous running test cases, pass the `--test-threads` option
-to the test binaries:
-
-    cargo test -- --test-threads=1
-
-Compilation can be configured via the `test` profile in the manifest.
-
-By default the rust test harness hides output from test execution to
-keep results readable. Test output can be recovered (e.g., for debugging)
-by passing `--nocapture` to the test binaries:
-
-    cargo test -- --nocapture
-
-To get the list of all options available for the test binaries use this:
-
-    cargo test -- --help
-",
-        )
+        .arg_unit_graph()
+        .arg_future_incompat_report()
+        .after_help("Run `cargo help test` for more detailed information.\n")
 }
 
 pub fn exec(config: &mut Config, args: &ArgMatches<'_>) -> CliResult {
@@ -105,11 +66,11 @@ pub fn exec(config: &mut Config, args: &ArgMatches<'_>) -> CliResult {
         config,
         CompileMode::Test,
         Some(&ws),
-        ProfileChecking::Checked,
+        ProfileChecking::Custom,
     )?;
 
     compile_opts.build_config.requested_profile =
-        args.get_profile_name(config, "test", ProfileChecking::Checked)?;
+        args.get_profile_name(config, "test", ProfileChecking::Custom)?;
 
     // `TESTNAME` is actually an argument of the test binary, but it's
     // important, so we explicitly mention it and reconfigure.
@@ -164,9 +125,9 @@ pub fn exec(config: &mut Config, args: &ArgMatches<'_>) -> CliResult {
         None => Ok(()),
         Some(err) => {
             let context = anyhow::format_err!("{}", err.hint(&ws, &ops.compile_opts));
-            let e = match err.exit.as_ref().and_then(|e| e.code()) {
+            let e = match err.code {
                 // Don't show "process didn't exit successfully" for simple errors.
-                Some(i) if errors::is_simple_exit_code(i) => CliError::new(context, i),
+                Some(i) if cargo_util::is_simple_exit_code(i) => CliError::new(context, i),
                 Some(i) => CliError::new(Error::from(err).context(context), i),
                 None => CliError::new(Error::from(err).context(context), 101),
             };

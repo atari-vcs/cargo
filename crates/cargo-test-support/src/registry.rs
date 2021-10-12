@@ -1,13 +1,15 @@
 use crate::git::repo;
 use crate::paths;
-use cargo::sources::CRATES_IO_INDEX;
-use cargo::util::Sha256;
+use cargo_util::{registry::make_dep_path, Sha256};
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::fs::{self, File};
-use std::io::prelude::*;
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::thread;
 use tar::{Builder, Header};
 use url::Url;
 
@@ -68,6 +70,178 @@ pub fn generate_url(name: &str) -> Url {
 pub fn generate_alt_dl_url(name: &str) -> String {
     let base = Url::from_file_path(generate_path(name)).ok().unwrap();
     format!("{}/{{crate}}/{{version}}/{{crate}}-{{version}}.crate", base)
+}
+
+/// A builder for initializing registries.
+pub struct RegistryBuilder {
+    /// If `true`, adds source replacement for crates.io to a registry on the filesystem.
+    replace_crates_io: bool,
+    /// If `true`, configures a registry named "alternative".
+    alternative: bool,
+    /// If set, sets the API url for the "alternative" registry.
+    /// This defaults to a directory on the filesystem.
+    alt_api_url: Option<String>,
+    /// If `true`, configures `.cargo/credentials` with some tokens.
+    add_tokens: bool,
+}
+
+impl RegistryBuilder {
+    pub fn new() -> RegistryBuilder {
+        RegistryBuilder {
+            replace_crates_io: true,
+            alternative: false,
+            alt_api_url: None,
+            add_tokens: true,
+        }
+    }
+
+    /// Sets whether or not to replace crates.io with a registry on the filesystem.
+    /// Default is `true`.
+    pub fn replace_crates_io(&mut self, replace: bool) -> &mut Self {
+        self.replace_crates_io = replace;
+        self
+    }
+
+    /// Sets whether or not to initialize an alternative registry named "alternative".
+    /// Default is `false`.
+    pub fn alternative(&mut self, alt: bool) -> &mut Self {
+        self.alternative = alt;
+        self
+    }
+
+    /// Sets the API url for the "alternative" registry.
+    /// Defaults to a path on the filesystem ([`alt_api_path`]).
+    pub fn alternative_api_url(&mut self, url: &str) -> &mut Self {
+        self.alternative = true;
+        self.alt_api_url = Some(url.to_string());
+        self
+    }
+
+    /// Sets whether or not to initialize `.cargo/credentials` with some tokens.
+    /// Defaults to `true`.
+    pub fn add_tokens(&mut self, add: bool) -> &mut Self {
+        self.add_tokens = add;
+        self
+    }
+
+    /// Initializes the registries.
+    pub fn build(&self) {
+        let config_path = paths::home().join(".cargo/config");
+        if config_path.exists() {
+            panic!(
+                "{} already exists, the registry may only be initialized once, \
+                and must be done before the config file is created",
+                config_path.display()
+            );
+        }
+        t!(fs::create_dir_all(config_path.parent().unwrap()));
+        let mut config = String::new();
+        if self.replace_crates_io {
+            write!(
+                &mut config,
+                "
+                    [source.crates-io]
+                    replace-with = 'dummy-registry'
+
+                    [source.dummy-registry]
+                    registry = '{}'
+                ",
+                registry_url()
+            )
+            .unwrap();
+        }
+        if self.alternative {
+            write!(
+                config,
+                "
+                    [registries.alternative]
+                    index = '{}'
+                ",
+                alt_registry_url()
+            )
+            .unwrap();
+        }
+        t!(fs::write(&config_path, config));
+
+        if self.add_tokens {
+            let credentials = paths::home().join(".cargo/credentials");
+            t!(fs::write(
+                &credentials,
+                r#"
+                    [registry]
+                    token = "api-token"
+
+                    [registries.alternative]
+                    token = "api-token"
+                "#
+            ));
+        }
+
+        if self.replace_crates_io {
+            init_registry(registry_path(), dl_url().into(), api_url(), api_path());
+        }
+
+        if self.alternative {
+            init_registry(
+                alt_registry_path(),
+                alt_dl_url(),
+                self.alt_api_url
+                    .as_ref()
+                    .map_or_else(alt_api_url, |url| Url::parse(url).expect("valid url")),
+                alt_api_path(),
+            );
+        }
+    }
+
+    /// Initializes the registries, and sets up an HTTP server for the
+    /// "alternative" registry.
+    ///
+    /// The given callback takes a `Vec` of headers when a request comes in.
+    /// The first entry should be the HTTP command, such as
+    /// `PUT /api/v1/crates/new HTTP/1.1`.
+    ///
+    /// The callback should return the HTTP code for the response, and the
+    /// response body.
+    ///
+    /// This method returns a `JoinHandle` which you should call
+    /// `.join().unwrap()` on before exiting the test.
+    pub fn build_api_server<'a>(
+        &mut self,
+        handler: &'static (dyn (Fn(Vec<String>) -> (u32, &'a dyn AsRef<[u8]>)) + Sync),
+    ) -> thread::JoinHandle<()> {
+        let server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = server.local_addr().unwrap();
+        let api_url = format!("http://{}", addr);
+
+        self.replace_crates_io(false)
+            .alternative_api_url(&api_url)
+            .build();
+
+        let t = thread::spawn(move || {
+            let mut conn = BufReader::new(server.accept().unwrap().0);
+            let headers: Vec<_> = (&mut conn)
+                .lines()
+                .map(|s| s.unwrap())
+                .take_while(|s| s.len() > 2)
+                .map(|s| s.trim().to_string())
+                .collect();
+            let (code, response) = handler(headers);
+            let response = response.as_ref();
+            let stream = conn.get_mut();
+            write!(
+                stream,
+                "HTTP/1.1 {}\r\n\
+                  Content-Length: {}\r\n\
+                  \r\n",
+                code,
+                response.len()
+            )
+            .unwrap();
+            stream.write_all(response).unwrap();
+        });
+
+        t
+    }
 }
 
 /// A builder for creating a new package in a registry.
@@ -137,14 +311,20 @@ pub struct Package {
     name: String,
     vers: String,
     deps: Vec<Dependency>,
-    files: Vec<(String, String)>,
-    extra_files: Vec<(String, String)>,
+    files: Vec<PackageFile>,
     yanked: bool,
-    features: HashMap<String, Vec<String>>,
+    features: FeatureMap,
     local: bool,
     alternative: bool,
     invalid_json: bool,
+    proc_macro: bool,
+    links: Option<String>,
+    rust_version: Option<String>,
+    cargo_features: Vec<String>,
+    v: Option<u32>,
 }
+
+type FeatureMap = BTreeMap<String, Vec<String>>;
 
 #[derive(Clone)]
 pub struct Dependency {
@@ -158,69 +338,42 @@ pub struct Dependency {
     optional: bool,
 }
 
-pub fn init() {
-    let config = paths::home().join(".cargo/config");
-    t!(fs::create_dir_all(config.parent().unwrap()));
-    if fs::metadata(&config).is_ok() {
-        return;
-    }
-    t!(t!(File::create(&config)).write_all(
-        format!(
-            r#"
-        [source.crates-io]
-        registry = 'https://wut'
-        replace-with = 'dummy-registry'
-
-        [source.dummy-registry]
-        registry = '{reg}'
-
-        [registries.alternative]
-        index = '{alt}'
-    "#,
-            reg = registry_url(),
-            alt = alt_registry_url()
-        )
-        .as_bytes()
-    ));
-    let credentials = paths::home().join(".cargo/credentials");
-    t!(t!(File::create(&credentials)).write_all(
-        br#"
-        [registry]
-        token = "api-token"
-
-        [registries.alternative]
-        token = "api-token"
-    "#
-    ));
-
-    // Initialize a new registry.
-    init_registry(
-        registry_path(),
-        dl_url().into_string(),
-        api_url(),
-        api_path(),
-    );
-
-    // Initialize an alternative registry.
-    init_registry(
-        alt_registry_path(),
-        alt_dl_url(),
-        alt_api_url(),
-        alt_api_path(),
-    );
+/// A file to be created in a package.
+struct PackageFile {
+    path: String,
+    contents: String,
+    /// The Unix mode for the file. Note that when extracted on Windows, this
+    /// is mostly ignored since it doesn't have the same style of permissions.
+    mode: u32,
+    /// If `true`, the file is created in the root of the tarfile, used for
+    /// testing invalid packages.
+    extra: bool,
 }
 
+const DEFAULT_MODE: u32 = 0o644;
+
+/// Initializes the on-disk registry and sets up the config so that crates.io
+/// is replaced with the one on disk.
+pub fn init() {
+    let config = paths::home().join(".cargo/config");
+    if config.exists() {
+        return;
+    }
+    RegistryBuilder::new().build();
+}
+
+/// Variant of `init` that initializes the "alternative" registry.
+pub fn alt_init() {
+    RegistryBuilder::new().alternative(true).build();
+}
+
+/// Creates a new on-disk registry.
 pub fn init_registry(registry_path: PathBuf, dl_url: String, api_url: Url, api_path: PathBuf) {
     // Initialize a new registry.
     repo(&registry_path)
         .file(
             "config.json",
-            &format!(
-                r#"
-            {{"dl":"{}","api":"{}"}}
-        "#,
-                dl_url, api_url
-            ),
+            &format!(r#"{{"dl":"{}","api":"{}"}}"#, dl_url, api_url),
         )
         .build();
     fs::create_dir_all(api_path.join("api/v1/crates")).unwrap();
@@ -236,12 +389,16 @@ impl Package {
             vers: vers.to_string(),
             deps: Vec::new(),
             files: Vec::new(),
-            extra_files: Vec::new(),
             yanked: false,
-            features: HashMap::new(),
+            features: BTreeMap::new(),
             local: false,
             alternative: false,
             invalid_json: false,
+            proc_macro: false,
+            links: None,
+            rust_version: None,
+            cargo_features: Vec::new(),
+            v: None,
         }
     }
 
@@ -269,7 +426,17 @@ impl Package {
 
     /// Adds a file to the package.
     pub fn file(&mut self, name: &str, contents: &str) -> &mut Package {
-        self.files.push((name.to_string(), contents.to_string()));
+        self.file_with_mode(name, DEFAULT_MODE, contents)
+    }
+
+    /// Adds a file with a specific Unix mode.
+    pub fn file_with_mode(&mut self, path: &str, mode: u32, contents: &str) -> &mut Package {
+        self.files.push(PackageFile {
+            path: path.to_string(),
+            contents: contents.to_string(),
+            mode,
+            extra: false,
+        });
         self
     }
 
@@ -278,9 +445,13 @@ impl Package {
     /// Normal files are automatically placed within a directory named
     /// `$PACKAGE-$VERSION`. This allows you to override that behavior,
     /// typically for testing invalid behavior.
-    pub fn extra_file(&mut self, name: &str, contents: &str) -> &mut Package {
-        self.extra_files
-            .push((name.to_string(), contents.to_string()));
+    pub fn extra_file(&mut self, path: &str, contents: &str) -> &mut Package {
+        self.files.push(PackageFile {
+            path: path.to_string(),
+            contents: contents.to_string(),
+            mode: DEFAULT_MODE,
+            extra: true,
+        });
         self
     }
 
@@ -345,6 +516,12 @@ impl Package {
         self
     }
 
+    /// Specifies whether or not this is a proc macro.
+    pub fn proc_macro(&mut self, proc_macro: bool) -> &mut Package {
+        self.proc_macro = proc_macro;
+        self
+    }
+
     /// Adds an entry in the `[features]` section.
     pub fn feature(&mut self, name: &str, deps: &[&str]) -> &mut Package {
         let deps = deps.iter().map(|s| s.to_string()).collect();
@@ -352,10 +529,34 @@ impl Package {
         self
     }
 
+    /// Specify a minimal Rust version.
+    pub fn rust_version(&mut self, rust_version: &str) -> &mut Package {
+        self.rust_version = Some(rust_version.into());
+        self
+    }
+
     /// Causes the JSON line emitted in the index to be invalid, presumably
     /// causing Cargo to skip over this version.
     pub fn invalid_json(&mut self, invalid: bool) -> &mut Package {
         self.invalid_json = invalid;
+        self
+    }
+
+    pub fn links(&mut self, links: &str) -> &mut Package {
+        self.links = Some(links.to_string());
+        self
+    }
+
+    pub fn cargo_feature(&mut self, feature: &str) -> &mut Package {
+        self.cargo_features.push(feature.to_owned());
+        self
+    }
+
+    /// Sets the index schema version for this package.
+    ///
+    /// See `cargo::sources::registry::RegistryPackage` for more information.
+    pub fn schema_version(&mut self, version: u32) -> &mut Package {
+        self.v = Some(version);
         self
     }
 
@@ -375,14 +576,15 @@ impl Package {
             .map(|dep| {
                 // In the index, the `registry` is null if it is from the same registry.
                 // In Cargo.toml, it is None if it is from crates.io.
-                let registry_url =
-                    match (self.alternative, dep.registry.as_ref().map(|s| s.as_ref())) {
-                        (false, None) => None,
-                        (false, Some("alternative")) => Some(alt_registry_url().to_string()),
-                        (true, None) => Some(CRATES_IO_INDEX.to_string()),
-                        (true, Some("alternative")) => None,
-                        _ => panic!("registry_dep currently only supports `alternative`"),
-                    };
+                let registry_url = match (self.alternative, dep.registry.as_deref()) {
+                    (false, None) => None,
+                    (false, Some("alternative")) => Some(alt_registry_url().to_string()),
+                    (true, None) => {
+                        Some("https://github.com/rust-lang/crates.io-index".to_string())
+                    }
+                    (true, Some("alternative")) => None,
+                    _ => panic!("registry_dep currently only supports `alternative`"),
+                };
                 serde_json::json!({
                     "name": dep.name,
                     "req": dep.vers,
@@ -397,8 +599,7 @@ impl Package {
             })
             .collect::<Vec<_>>();
         let cksum = {
-            let mut c = Vec::new();
-            t!(t!(File::open(&self.archive_dst())).read_to_end(&mut c));
+            let c = t!(fs::read(&self.archive_dst()));
             cksum(&c)
         };
         let name = if self.invalid_json {
@@ -406,22 +607,27 @@ impl Package {
         } else {
             serde_json::json!(self.name)
         };
-        let line = serde_json::json!({
+        // This emulates what crates.io may do in the future.
+        let (features, features2) = split_index_features(self.features.clone());
+        let mut json = serde_json::json!({
             "name": name,
             "vers": self.vers,
             "deps": deps,
             "cksum": cksum,
-            "features": self.features,
+            "features": features,
             "yanked": self.yanked,
-        })
-        .to_string();
+            "links": self.links,
+        });
+        if let Some(f2) = &features2 {
+            json["features2"] = serde_json::json!(f2);
+            json["v"] = serde_json::json!(2);
+        }
+        if let Some(v) = self.v {
+            json["v"] = serde_json::json!(v);
+        }
+        let line = json.to_string();
 
-        let file = match self.name.len() {
-            1 => format!("1/{}", self.name),
-            2 => format!("2/{}", self.name),
-            3 => format!("3/{}/{}", &self.name[..1], self.name),
-            _ => format!("{}/{}/{}", &self.name[0..2], &self.name[2..4], self.name),
-        };
+        let file = make_dep_path(&self.name, false);
 
         let registry_path = if self.alternative {
             alt_registry_path()
@@ -435,10 +641,9 @@ impl Package {
         } else {
             registry_path.join(&file)
         };
-        let mut prev = String::new();
-        let _ = File::open(&dst).and_then(|mut f| f.read_to_string(&mut prev));
+        let prev = fs::read_to_string(&dst).unwrap_or_default();
         t!(fs::create_dir_all(dst.parent().unwrap()));
-        t!(t!(File::create(&dst)).write_all((prev + &line[..] + "\n").as_bytes()));
+        t!(fs::write(&dst, prev + &line[..] + "\n"));
 
         // Add the new file to the index.
         if !self.local {
@@ -467,7 +672,48 @@ impl Package {
     }
 
     fn make_archive(&self) {
-        let mut manifest = format!(
+        let dst = self.archive_dst();
+        t!(fs::create_dir_all(dst.parent().unwrap()));
+        let f = t!(File::create(&dst));
+        let mut a = Builder::new(GzEncoder::new(f, Compression::default()));
+
+        if !self
+            .files
+            .iter()
+            .any(|PackageFile { path, .. }| path == "Cargo.toml")
+        {
+            self.append_manifest(&mut a);
+        }
+        if self.files.is_empty() {
+            self.append(&mut a, "src/lib.rs", DEFAULT_MODE, "");
+        } else {
+            for PackageFile {
+                path,
+                contents,
+                mode,
+                extra,
+            } in &self.files
+            {
+                if *extra {
+                    self.append_raw(&mut a, path, *mode, contents);
+                } else {
+                    self.append(&mut a, path, *mode, contents);
+                }
+            }
+        }
+    }
+
+    fn append_manifest<W: Write>(&self, ar: &mut Builder<W>) {
+        let mut manifest = String::new();
+
+        if !self.cargo_features.is_empty() {
+            manifest.push_str(&format!(
+                "cargo-features = {}\n\n",
+                toml::to_string(&self.cargo_features).unwrap()
+            ));
+        }
+
+        manifest.push_str(&format!(
             r#"
             [package]
             name = "{}"
@@ -475,7 +721,12 @@ impl Package {
             authors = []
         "#,
             self.name, self.vers
-        );
+        ));
+
+        if let Some(version) = &self.rust_version {
+            manifest.push_str(&format!("rust-version = \"{}\"", version));
+        }
+
         for dep in self.deps.iter() {
             let target = match dep.target {
                 None => String::new(),
@@ -498,36 +749,27 @@ impl Package {
                 manifest.push_str(&format!("registry-index = \"{}\"", alt_registry_url()));
             }
         }
+        if self.proc_macro {
+            manifest.push_str("[lib]\nproc-macro = true\n");
+        }
 
-        let dst = self.archive_dst();
-        t!(fs::create_dir_all(dst.parent().unwrap()));
-        let f = t!(File::create(&dst));
-        let mut a = Builder::new(GzEncoder::new(f, Compression::default()));
-        self.append(&mut a, "Cargo.toml", &manifest);
-        if self.files.is_empty() {
-            self.append(&mut a, "src/lib.rs", "");
-        } else {
-            for &(ref name, ref contents) in self.files.iter() {
-                self.append(&mut a, name, contents);
-            }
-        }
-        for &(ref name, ref contents) in self.extra_files.iter() {
-            self.append_extra(&mut a, name, contents);
-        }
+        self.append(ar, "Cargo.toml", DEFAULT_MODE, &manifest);
     }
 
-    fn append<W: Write>(&self, ar: &mut Builder<W>, file: &str, contents: &str) {
-        self.append_extra(
+    fn append<W: Write>(&self, ar: &mut Builder<W>, file: &str, mode: u32, contents: &str) {
+        self.append_raw(
             ar,
             &format!("{}-{}/{}", self.name, self.vers, file),
+            mode,
             contents,
         );
     }
 
-    fn append_extra<W: Write>(&self, ar: &mut Builder<W>, path: &str, contents: &str) {
+    fn append_raw<W: Write>(&self, ar: &mut Builder<W>, path: &str, mode: u32, contents: &str) {
         let mut header = Header::new_ustar();
         header.set_size(contents.len() as u64);
         t!(header.set_path(path));
+        header.set_mode(mode);
         header.set_cksum();
         t!(ar.append(&header, contents.as_bytes()));
     }
@@ -605,5 +847,23 @@ impl Dependency {
     pub fn optional(&mut self, optional: bool) -> &mut Self {
         self.optional = optional;
         self
+    }
+}
+
+fn split_index_features(mut features: FeatureMap) -> (FeatureMap, Option<FeatureMap>) {
+    let mut features2 = FeatureMap::new();
+    for (feat, values) in features.iter_mut() {
+        if values
+            .iter()
+            .any(|value| value.starts_with("dep:") || value.contains("?/"))
+        {
+            let new_values = values.drain(..).collect();
+            features2.insert(feat.clone(), new_values);
+        }
+    }
+    if features2.is_empty() {
+        (features, None)
+    } else {
+        (features, Some(features2))
     }
 }

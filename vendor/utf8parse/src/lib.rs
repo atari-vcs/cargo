@@ -3,20 +3,19 @@
 //! This module implements a table-driven UTF-8 parser which should
 //! theoretically contain the minimal number of branches (1). The only branch is
 //! on the `Action` returned from unpacking a transition.
+#![cfg_attr(all(feature = "nightly", test), feature(test))]
 #![no_std]
 
 use core::char;
 
 mod types;
-use self::types::{State, Action, unpack};
 
-mod table;
-use self::table::TRANSITIONS;
+use types::{Action, State};
 
 /// Handles codepoint and invalid sequence events from the parser.
 pub trait Receiver {
     /// Called whenever a codepoint is parsed successfully
-    fn codepoint(&mut self, char);
+    fn codepoint(&mut self, _: char);
 
     /// Called when an invalid_sequence is detected
     fn invalid_sequence(&mut self);
@@ -25,6 +24,7 @@ pub trait Receiver {
 /// A parser for Utf8 Characters
 ///
 /// Repeatedly call `advance` with bytes to emit Utf8 characters
+#[derive(Default)]
 pub struct Parser {
     point: u32,
     state: State,
@@ -36,10 +36,7 @@ const CONTINUATION_MASK: u8 = 0b0011_1111;
 impl Parser {
     /// Create a new Parser
     pub fn new() -> Parser {
-        Parser {
-            point: 0,
-            state: State::Ground,
-        }
+        Parser { point: 0, state: State::Ground }
     }
 
     /// Advance the parser
@@ -47,18 +44,17 @@ impl Parser {
     /// The provider receiver will be called whenever a codepoint is completed or an invalid
     /// sequence is detected.
     pub fn advance<R>(&mut self, receiver: &mut R, byte: u8)
-        where R: Receiver
+    where
+        R: Receiver,
     {
-        let cur = self.state as usize;
-        let change = TRANSITIONS[cur][byte as usize];
-        let (state, action) = unsafe { unpack(change) };
-
+        let (state, action) = self.state.advance(byte);
         self.perform_action(receiver, byte, action);
         self.state = state;
     }
 
     fn perform_action<R>(&mut self, receiver: &mut R, byte: u8, action: Action)
-        where R: Receiver
+    where
+        R: Receiver,
     {
         match action {
             Action::InvalidSequence => {
@@ -94,46 +90,42 @@ impl Parser {
     }
 }
 
-#[cfg(test)]
-#[macro_use]
-extern crate std;
+#[cfg(all(feature = "nightly", test))]
+mod benches {
+    extern crate std;
+    extern crate test;
 
-#[cfg(test)]
-mod tests {
-    use std::io::Read;
-    use std::fs::File;
-    use std::string::String;
-    use Receiver;
-    use Parser;
+    use super::{Parser, Receiver};
 
-    impl Receiver for String {
+    use self::test::{black_box, Bencher};
+
+    static UTF8_DEMO: &[u8] = include_bytes!("../tests/UTF-8-demo.txt");
+
+    impl Receiver for () {
         fn codepoint(&mut self, c: char) {
-            self.push(c);
+            black_box(c);
         }
 
-        fn invalid_sequence(&mut self) {
-        }
+        fn invalid_sequence(&mut self) {}
     }
 
-    #[test]
-    fn utf8parse_test() {
-        let mut buffer = String::new();
-        let mut file = File::open("src/UTF-8-demo.txt").unwrap();
+    #[bench]
+    fn parse_bench_utf8_demo(b: &mut Bencher) {
         let mut parser = Parser::new();
 
-        // read the file to a buffer
-        file.read_to_string(&mut buffer).expect("Reading file to string");
+        b.iter(|| {
+            for byte in UTF8_DEMO {
+                parser.advance(&mut (), *byte);
+            }
+        })
+    }
 
-        // standard library implementation
-        let expected = String::from_utf8(buffer.as_bytes().to_vec()).unwrap();
-
-        // utf8parse implementation
-        let mut actual = String::new();
-
-        for byte in buffer.as_bytes().to_vec() {
-            parser.advance(&mut actual, byte)
-        }
-
-        assert_eq!(actual, expected);
+    #[bench]
+    fn std_string_parse_utf8(b: &mut Bencher) {
+        b.iter(|| {
+            for c in std::str::from_utf8(UTF8_DEMO).unwrap().chars() {
+                black_box(c);
+            }
+        });
     }
 }

@@ -8,7 +8,7 @@ use std::path::Path;
 use std::ptr;
 use std::str;
 
-use crate::util::{c_cmp_to_ordering, Binding, IntoCString};
+use crate::util::{c_cmp_to_ordering, path_to_repo_path, Binding};
 use crate::{panic, raw, Error, Object, ObjectType, Oid, Repository};
 
 /// A structure to represent a git [tree][1]
@@ -132,7 +132,7 @@ impl<'repo> Tree<'repo> {
             raw::git_tree_walk(
                 self.raw(),
                 mode.into(),
-                treewalk_cb::<T>,
+                Some(treewalk_cb::<T>),
                 &mut data as *mut _ as *mut c_void,
             );
             Ok(())
@@ -179,7 +179,7 @@ impl<'repo> Tree<'repo> {
     /// Retrieve a tree entry contained in a tree or in any of its subtrees,
     /// given its relative path.
     pub fn get_path(&self, path: &Path) -> Result<TreeEntry<'static>, Error> {
-        let path = path.into_c_string()?;
+        let path = path_to_repo_path(path)?;
         let mut ret = ptr::null_mut();
         unsafe {
             try_call!(raw::git_tree_entry_bypath(&mut ret, &*self.raw(), path));

@@ -1,4 +1,4 @@
-// Copyright ⓒ 2015-2016 Kevin B. Knapp and [`clap-rs` contributors](https://github.com/clap-rs/clap/blob/master/CONTRIBUTORS.md).
+// Copyright ⓒ 2015-2016 Kevin B. Knapp and [`clap-rs` contributors](https://github.com/clap-rs/clap/blob/v2.33.1/CONTRIBUTORS.md).
 // Licensed under the MIT license
 // (see LICENSE or <http://opensource.org/licenses/MIT>) All files in the project carrying such
 // notice may not be copied, modified, or distributed except according to those terms.
@@ -14,7 +14,7 @@
 //! arguments.
 //!
 //! `clap` also provides the traditional version and help switches (or flags) 'for free' meaning
-//! automatically with no configuration. It does this by checking list of valid possibilities you
+//! automatically with no configuration. It does this by checking the list of valid possibilities you
 //! supplied and adding only the ones you haven't already defined. If you are using subcommands,
 //! `clap` will also auto-generate a `help` subcommand for you in addition to the traditional flags.
 //!
@@ -366,7 +366,7 @@
 //!  * **Red** Color: **NOT** included by default (must use cargo `features` to enable)
 //!  * **Blue** Color: Dev dependency, only used while developing.
 //!
-//! ![clap dependencies](https://raw.githubusercontent.com/clap-rs/clap/master/clap_dep_graph.png)
+//! ![clap dependencies](https://github.com/clap-rs/clap/blob/v2.33.1/clap_dep_graph.png)
 //!
 //! ### More Information
 //!
@@ -391,7 +391,7 @@
 //! `clap`. You can either add it to the [examples/] directory, or file an issue and tell
 //! me. I'm all about giving credit where credit is due :)
 //!
-//! Please read [CONTRIBUTING.md](https://raw.githubusercontent.com/clap-rs/clap/master/.github/CONTRIBUTING.md) before you start contributing.
+//! Please read [CONTRIBUTING.md](https://github.com/clap-rs/clap/blob/v2.33.1/.github/CONTRIBUTING.md) before you start contributing.
 //!
 //!
 //! ### Testing Code
@@ -512,18 +512,27 @@
 //! `clap` is licensed under the MIT license. Please read the [LICENSE-MIT][license] file in
 //! this repository for more information.
 //!
-//! [examples/]: https://github.com/clap-rs/clap/tree/master/examples
+//! [examples/]: https://github.com/clap-rs/clap/tree/v2.33.1/examples
 //! [video tutorials]: https://www.youtube.com/playlist?list=PLza5oFLQGTl2Z5T8g1pRkIynR3E0_pc7U
-//! [license]: https://raw.githubusercontent.com/clap-rs/clap/master/LICENSE-MIT
+//! [license]: https://github.com/clap-rs/clap/blob/v2.33.1/LICENSE-MIT
 
 #![crate_type = "lib"]
-#![doc(html_root_url = "https://docs.rs/clap/2.33.0")]
-#![deny(missing_docs, missing_debug_implementations, missing_copy_implementations, trivial_casts,
-        unused_import_braces, unused_allocation)]
+#![doc(html_root_url = "https://docs.rs/clap/2.33.3")]
+#![deny(
+    missing_docs,
+    missing_debug_implementations,
+    missing_copy_implementations,
+    trivial_casts,
+    unused_import_braces,
+    unused_allocation
+)]
 // Lints we'd like to deny but are currently failing for upstream crates
 //      unused_qualifications       (bitflags, clippy)
 //      trivial_numeric_casts       (bitflags)
-#![cfg_attr(not(any(feature = "lints", feature = "nightly")), forbid(unstable_features))]
+#![cfg_attr(
+    not(any(feature = "lints", feature = "nightly")),
+    forbid(unstable_features)
+)]
 #![cfg_attr(feature = "lints", feature(plugin))]
 #![cfg_attr(feature = "lints", plugin(clippy))]
 // Need to disable deny(warnings) while deprecations are active
@@ -549,26 +558,26 @@ extern crate vec_map;
 #[cfg(feature = "yaml")]
 extern crate yaml_rust;
 
+pub use app::{App, AppSettings};
+pub use args::{Arg, ArgGroup, ArgMatches, ArgSettings, OsValues, SubCommand, Values};
+pub use completions::Shell;
+pub use errors::{Error, ErrorKind, Result};
+pub use fmt::Format;
 #[cfg(feature = "yaml")]
 pub use yaml_rust::YamlLoader;
-pub use args::{Arg, ArgGroup, ArgMatches, ArgSettings, OsValues, SubCommand, Values};
-pub use app::{App, AppSettings};
-pub use fmt::Format;
-pub use errors::{Error, ErrorKind, Result};
-pub use completions::Shell;
 
 #[macro_use]
 mod macros;
 mod app;
 mod args;
-mod usage_parser;
-mod fmt;
-mod suggestions;
+mod completions;
 mod errors;
+mod fmt;
+mod map;
 mod osstringext;
 mod strext;
-mod completions;
-mod map;
+mod suggestions;
+mod usage_parser;
 
 const INTERNAL_ERROR_MSG: &'static str = "Fatal internal error. Please consider filing a bug \
                                           report at https://github.com/clap-rs/clap/issues";
@@ -582,7 +591,9 @@ mod derive {
     /// @TODO @release @docs
     pub trait ClapApp: IntoApp + FromArgMatches + Sized {
         /// @TODO @release @docs
-        fn parse() -> Self { Self::from_argmatches(Self::into_app().get_matches()) }
+        fn parse() -> Self {
+            Self::from_argmatches(Self::into_app().get_matches())
+        }
 
         /// @TODO @release @docs
         fn parse_from<I, T>(argv: I) -> Self
@@ -597,7 +608,6 @@ mod derive {
         fn try_parse() -> Result<Self, clap::Error> {
             Self::try_from_argmatches(Self::into_app().get_matches_safe()?)
         }
-
 
         /// @TODO @release @docs
         fn try_parse_from<I, T>(argv: I) -> Result<Self, clap::Error>

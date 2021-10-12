@@ -12,14 +12,14 @@ all parent directories. If, for example, Cargo were invoked in
 `/projects/foo/bar/baz`, then the following configuration files would be
 probed for and unified in this order:
 
-* `/projects/foo/bar/baz/.cargo/config`
-* `/projects/foo/bar/.cargo/config`
-* `/projects/foo/.cargo/config`
-* `/projects/.cargo/config`
-* `/.cargo/config`
-* `$CARGO_HOME/config` which defaults to:
-    * Windows: `%USERPROFILE%\.cargo\config`
-    * Unix: `$HOME/.cargo/config`
+* `/projects/foo/bar/baz/.cargo/config.toml`
+* `/projects/foo/bar/.cargo/config.toml`
+* `/projects/foo/.cargo/config.toml`
+* `/projects/.cargo/config.toml`
+* `/.cargo/config.toml`
+* `$CARGO_HOME/config.toml` which defaults to:
+    * Windows: `%USERPROFILE%\.cargo\config.toml`
+    * Unix: `$HOME/.cargo/config.toml`
 
 With this structure, you can specify configuration per-package, and even
 possibly check it into version control. You can also specify personal defaults
@@ -29,6 +29,19 @@ If a key is specified in multiple config files, the values will get merged
 together. Numbers, strings, and booleans will use the value in the deeper
 config directory taking precedence over ancestor directories, where the
 home directory is the lowest priority. Arrays will be joined together.
+
+At present, when being invoked from a workspace, Cargo does not read config
+files from crates within the workspace. i.e. if a workspace has two crates in
+it, named `/projects/foo/bar/baz/mylib` and `/projects/foo/bar/baz/mybin`, and
+there are Cargo configs at `/projects/foo/bar/baz/mylib/.cargo/config.toml`
+and `/projects/foo/bar/baz/mybin/.cargo/config.toml`, Cargo does not read
+those configuration files if it is invoked from the workspace root
+(`/projects/foo/bar/baz/`).
+
+> **Note:** Cargo also reads config files without the `.toml` extension, such as
+> `.cargo/config`. Support for the `.toml` extension was added in version 1.39
+> and is the preferred form. If both files exist, Cargo will use the file
+> without the extension.
 
 ### Configuration format
 
@@ -49,21 +62,24 @@ rr = "run --release"
 space_example = ["run", "--release", "--", "\"command list\""]
 
 [build]
-jobs = 1                  # number of parallel jobs, defaults to # of CPUs
-rustc = "rustc"           # the rust compiler tool
-rustc-wrapper = "…"       # run this wrapper instead of `rustc`
-rustdoc = "rustdoc"       # the doc generator tool
-target = "triple"         # build for the target triple (ignored by `cargo install`)
-target-dir = "target"     # path of where to place all generated artifacts
-rustflags = ["…", "…"]    # custom flags to pass to all compiler invocations
-rustdocflags = ["…", "…"] # custom flags to pass to rustdoc
-incremental = true        # whether or not to enable incremental compilation
-dep-info-basedir = "…"    # path for the base directory for targets in depfiles
-pipelining = true         # rustc pipelining
+jobs = 1                      # number of parallel jobs, defaults to # of CPUs
+rustc = "rustc"               # the rust compiler tool
+rustc-wrapper = "…"           # run this wrapper instead of `rustc`
+rustc-workspace-wrapper = "…" # run this wrapper instead of `rustc` for workspace members
+rustdoc = "rustdoc"           # the doc generator tool
+target = "triple"             # build for the target triple (ignored by `cargo install`)
+target-dir = "target"         # path of where to place all generated artifacts
+rustflags = ["…", "…"]        # custom flags to pass to all compiler invocations
+rustdocflags = ["…", "…"]     # custom flags to pass to rustdoc
+incremental = true            # whether or not to enable incremental compilation
+dep-info-basedir = "…"        # path for the base directory for targets in depfiles
+pipelining = true             # rustc pipelining
+
+[doc]
+browser = "chromium"          # browser to use with `cargo doc --open`,
+                              # overrides the `BROWSER` environment variable
 
 [cargo-new]
-name = "Your Name"        # name to use in `authors` field
-email = "you@example.com" # email address to use in `authors` field
 vcs = "none"              # VCS to use ('git', 'hg', 'pijul', 'fossil', 'none')
 
 [http]
@@ -86,6 +102,22 @@ root = "/some/path"         # `cargo install` destination directory
 retry = 2                   # network retries
 git-fetch-with-cli = true   # use the `git` executable for git operations
 offline = false             # do not access the network
+
+[profile.<name>]         # Modify profile settings via config.
+opt-level = 0            # Optimization level.
+debug = true             # Include debug info.
+split-debuginfo = '...'  # Debug info splitting behavior.
+debug-assertions = true  # Enables debug assertions.
+overflow-checks = true   # Enables runtime integer overflow checks.
+lto = false              # Sets link-time optimization.
+panic = 'unwind'         # The panic strategy.
+incremental = true       # Incremental compilation.
+codegen-units = 16       # Number of code generation units.
+rpath = false            # Sets the rpath linking option.
+[profile.<name>.build-override]  # Overrides build-script settings.
+# Same keys for a normal profile.
+[profile.<name>.package.<name>]  # Override profile for a package.
+# Same keys for a normal profile (minus `panic`, `lto`, and `rpath`).
 
 [registries.<name>]  # registries other than crates.io
 index = "…"          # URL of the registry index
@@ -127,6 +159,8 @@ metadata_key2 = "value"
 [term]
 verbose = false        # whether cargo provides verbose output
 color = 'auto'         # whether cargo colorizes output
+progress.when = 'auto' # whether cargo shows progress bar
+progress.width = 80    # width of progress bar
 ```
 
 ### Environment variables
@@ -164,15 +198,15 @@ relative to the current working directory.
 runner = "foo"  # Searches `PATH` for `foo`.
 
 [source.vendored-sources]
-# Directory is relative to the parent where `.cargo/config` is located.
-# For example, `/my/project/.cargo/config` would result in `/my/project/vendor`.
+# Directory is relative to the parent where `.cargo/config.toml` is located.
+# For example, `/my/project/.cargo/config.toml` would result in `/my/project/vendor`.
 directory = "vendor"
 ```
 
 ### Credentials
 
 Configuration values with sensitive information are stored in the
-`$CARGO_HOME/credentials` file. This file is automatically created and updated
+`$CARGO_HOME/credentials.toml` file. This file is automatically created and updated
 by [`cargo login`]. It follows the same format as Cargo config files.
 
 ```toml
@@ -226,6 +260,7 @@ subcommand and arguments. The following aliases are built-in to Cargo:
 [alias]
 b = "build"
 c = "check"
+d = "doc"
 t = "test"
 r = "run"
 ```
@@ -259,6 +294,15 @@ Sets the executable to use for `rustc`.
 
 Sets a wrapper to execute instead of `rustc`. The first argument passed to the
 wrapper is the path to the actual `rustc`.
+
+##### `build.rustc-workspace-wrapper`
+* Type: string (program path)
+* Default: none
+* Environment: `CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER` or `RUSTC_WORKSPACE_WRAPPER`
+
+Sets a wrapper to execute instead of `rustc`, for workspace members only.
+The first argument passed to the wrapper is the path to the actual `rustc`.
+It affects the filename hash so that artifacts produced by the wrapper are cached separately.
 
 ##### `build.rustdoc`
 * Type: string (program path)
@@ -314,6 +358,16 @@ Without `--target`, the flags will be passed to all compiler invocations
 you have args that you do not want to pass to build scripts or proc macros and
 are building for the host, pass `--target` with the host triple.
 
+It is not recommended to pass in flags that Cargo itself usually manages. For
+example, the flags driven by [profiles] are best handled by setting the
+appropriate profile setting.
+
+> **Caution**: Due to the low-level nature of passing flags directly to the
+> compiler, this may cause a conflict with future versions of Cargo which may
+> issue the same or similar flags on its own which may interfere with the
+> flags you specify. This is an area where Cargo may not always be backwards
+> compatible.
+
 ##### `build.rustdocflags`
 * Type: string or array of strings
 * Default: none
@@ -365,30 +419,27 @@ directory.
 Controls whether or not build pipelining is used. This allows Cargo to
 schedule overlapping invocations of `rustc` in parallel when possible.
 
+#### `[doc]`
+
+The `[doc]` table defines options for the [`cargo doc`] command.
+
+##### `doc.browser`
+
+This option sets the browser to be used by [`cargo doc`], overriding the
+`BROWSER` environment variable when opening documentation with the `--open`
+option.
+
 #### `[cargo-new]`
 
 The `[cargo-new]` table defines defaults for the [`cargo new`] command.
 
 ##### `cargo-new.name`
-* Type: string
-* Default: from environment
-* Environment: `CARGO_NAME` or `CARGO_CARGO_NEW_NAME`
 
-Defines the name to use in the `authors` field when creating a new
-`Cargo.toml` file. If not specified in the config, Cargo searches the
-environment or your `git` configuration as described in the [`cargo new`]
-documentation.
+This option is deprecated and unused.
 
 ##### `cargo-new.email`
-* Type: string
-* Default: from environment
-* Environment: `CARGO_EMAIL` or `CARGO_CARGO_NEW_EMAIL`
 
-Defines the email address used in the `authors` field when creating a new
-`Cargo.toml` file. If not specified in the config, Cargo searches the
-environment or your `git` configuration as described in the [`cargo new`]
-documentation. The `email` value may be set to an empty string to prevent
-Cargo from placing an address in the authors field.
+This option is deprecated and unused.
 
 ##### `cargo-new.vcs`
 * Type: string
@@ -549,6 +600,100 @@ needed, and generate an error if it encounters a network error.
 
 Can be overridden with the `--offline` command-line option.
 
+#### `[profile]`
+
+The `[profile]` table can be used to globally change profile settings, and
+override settings specified in `Cargo.toml`. It has the same syntax and
+options as profiles specified in `Cargo.toml`. See the [Profiles chapter] for
+details about the options.
+
+[Profiles chapter]: profiles.md
+
+##### `[profile.<name>.build-override]`
+* Environment: `CARGO_PROFILE_<name>_BUILD_OVERRIDE_<key>`
+
+The build-override table overrides settings for build scripts, proc macros,
+and their dependencies. It has the same keys as a normal profile. See the
+[overrides section](profiles.md#overrides) for more details.
+
+##### `[profile.<name>.package.<name>]`
+* Environment: not supported
+
+The package table overrides settings for specific packages. It has the same
+keys as a normal profile, minus the `panic`, `lto`, and `rpath` settings. See
+the [overrides section](profiles.md#overrides) for more details.
+
+##### `profile.<name>.codegen-units`
+* Type: integer
+* Default: See profile docs.
+* Environment: `CARGO_PROFILE_<name>_CODEGEN_UNITS`
+
+See [codegen-units](profiles.md#codegen-units).
+
+##### `profile.<name>.debug`
+* Type: integer or boolean
+* Default: See profile docs.
+* Environment: `CARGO_PROFILE_<name>_DEBUG`
+
+See [debug](profiles.md#debug).
+
+##### `profile.<name>.split-debuginfo`
+* Type: string
+* Default: See profile docs.
+* Environment: `CARGO_PROFILE_<name>_SPLIT_DEBUGINFO`
+
+See [split-debuginfo](profiles.md#split-debuginfo).
+
+##### `profile.<name>.debug-assertions`
+* Type: boolean
+* Default: See profile docs.
+* Environment: `CARGO_PROFILE_<name>_DEBUG_ASSERTIONS`
+
+See [debug-assertions](profiles.md#debug-assertions).
+
+##### `profile.<name>.incremental`
+* Type: boolean
+* Default: See profile docs.
+* Environment: `CARGO_PROFILE_<name>_INCREMENTAL`
+
+See [incremental](profiles.md#incremental).
+
+##### `profile.<name>.lto`
+* Type: string or boolean
+* Default: See profile docs.
+* Environment: `CARGO_PROFILE_<name>_LTO`
+
+See [lto](profiles.md#lto).
+
+##### `profile.<name>.overflow-checks`
+* Type: boolean
+* Default: See profile docs.
+* Environment: `CARGO_PROFILE_<name>_OVERFLOW_CHECKS`
+
+See [overflow-checks](profiles.md#overflow-checks).
+
+##### `profile.<name>.opt-level`
+* Type: integer or string
+* Default: See profile docs.
+* Environment: `CARGO_PROFILE_<name>_OPT_LEVEL`
+
+See [opt-level](profiles.md#opt-level).
+
+##### `profile.<name>.panic`
+* Type: string
+* default: See profile docs.
+* Environment: `CARGO_PROFILE_<name>_PANIC`
+
+See [panic](profiles.md#panic).
+
+##### `profile.<name>.rpath`
+* Type: boolean
+* default: See profile docs.
+* Environment: `CARGO_PROFILE_<name>_RPATH`
+
+See [rpath](profiles.md#rpath).
+
+
 #### `[registries]`
 
 The `[registries]` table is used for specifying additional [registries]. It
@@ -579,7 +724,7 @@ specified.
 
 ##### `registry.index`
 
-This value is deprecated and should not be used.
+This value is no longer accepted and should not be used.
 
 ##### `registry.default`
 * Type: string
@@ -796,9 +941,27 @@ Controls whether or not colored output is used in the terminal. Possible values:
 
 Can be overridden with the `--color` command-line option.
 
+##### `term.progress.when`
+* Type: string
+* Default: "auto"
+* Environment: `CARGO_TERM_PROGRESS_WHEN`
+
+Controls whether or not progress bar is shown in the terminal. Possible values:
+
+* `auto` (default): Intelligently guess whether to show progress bar.
+* `always`: Always show progress bar.
+* `never`: Never show progress bar.
+
+##### `term.progress.width`
+* Type: integer
+* Default: none
+* Environment: `CARGO_TERM_PROGRESS_WIDTH`
+
+Sets the width for progress bar.
 
 [`cargo bench`]: ../commands/cargo-bench.md
 [`cargo login`]: ../commands/cargo-login.md
+[`cargo doc`]: ../commands/cargo-doc.md
 [`cargo new`]: ../commands/cargo-new.md
 [`cargo publish`]: ../commands/cargo-publish.md
 [`cargo run`]: ../commands/cargo-run.md
@@ -811,7 +974,7 @@ Can be overridden with the `--color` command-line option.
 [build scripts]: build-scripts.md
 [`-C linker`]: ../../rustc/codegen-options/index.md#linker
 [override a build script]: build-scripts.md#overriding-build-scripts
-[toml]: https://github.com/toml-lang/toml
+[toml]: https://toml.io/
 [incremental compilation]: profiles.md#incremental
 [profile]: profiles.md
 [libcurl format]: https://ec.haxx.se/usingcurl-proxies.html

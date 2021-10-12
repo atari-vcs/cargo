@@ -32,44 +32,20 @@ pub fn cli() -> App {
         .arg_target_triple("Check for the target triple")
         .arg_target_dir()
         .arg_manifest_path()
+        .arg_ignore_rust_version()
         .arg_message_format()
-        .after_help(
-            "\
-If the `--package` argument is given, then SPEC is a package ID specification
-which indicates which package should be built. If it is not given, then the
-current package is built. For more information on SPEC and its format, see the
-`cargo help pkgid` command.
-
-All packages in the workspace are checked if the `--workspace` flag is supplied. The
-`--workspace` flag is automatically assumed for a virtual manifest.
-Note that `--exclude` has to be specified in conjunction with the `--workspace` flag.
-
-Compilation can be configured via the use of profiles which are configured in
-the manifest. The default profile for this command is `dev`, but passing
-the `--release` flag will use the `release` profile instead.
-
-The `--profile test` flag can be used to check unit tests with the
-`#[cfg(test)]` attribute.
-",
-        )
+        .arg_unit_graph()
+        .arg_future_incompat_report()
+        .after_help("Run `cargo help check` for more detailed information.\n")
 }
 
 pub fn exec(config: &mut Config, args: &ArgMatches<'_>) -> CliResult {
     let ws = args.workspace(config)?;
-    let test = match args.value_of("profile") {
-        Some("test") => true,
-        None => false,
-        Some(profile) => {
-            let err = anyhow::format_err!(
-                "unknown profile: `{}`, only `test` is \
-                 currently supported",
-                profile
-            );
-            return Err(CliError::new(err, 101));
-        }
-    };
+    // This is a legacy behavior that causes `cargo check` to pass `--test`.
+    let test = matches!(args.value_of("profile"), Some("test"));
     let mode = CompileMode::Check { test };
-    let compile_opts = args.compile_options(config, mode, Some(&ws), ProfileChecking::Unchecked)?;
+    let compile_opts =
+        args.compile_options(config, mode, Some(&ws), ProfileChecking::LegacyTestOnly)?;
 
     ops::compile(&ws, &compile_opts)?;
     Ok(())

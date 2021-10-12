@@ -1,4 +1,4 @@
-use std::ffi::{CStr, CString, OsString};
+use std::ffi::{CStr, CString};
 use std::marker;
 use std::ops::Range;
 use std::path::Path;
@@ -7,7 +7,7 @@ use std::slice;
 
 use libc::{c_char, c_int, c_uint, c_void, size_t};
 
-use crate::util::{self, Binding};
+use crate::util::{self, path_to_repo_path, Binding};
 use crate::IntoCString;
 use crate::{panic, raw, Error, IndexAddOption, IndexTime, Oid, Repository, Tree};
 
@@ -66,6 +66,21 @@ pub struct IndexEntry {
     pub id: Oid,
     pub flags: u16,
     pub flags_extended: u16,
+
+    /// The path of this index entry as a byte vector. Regardless of the
+    /// current platform, the directory separator is an ASCII forward slash
+    /// (`0x2F`). There are no terminating or internal NUL characters, and no
+    /// trailing slashes. Most of the time, paths will be valid utf-8 — but
+    /// not always. For more information on the path storage format, see
+    /// [these git docs][git-index-docs]. Note that libgit2 will take care of
+    /// handling the prefix compression mentioned there.
+    ///
+    /// [git-index-docs]: https://github.com/git/git/blob/a08a83db2bf27f015bec9a435f6d73e223c21c5e/Documentation/technical/index-format.txt#L107-L124
+    ///
+    /// You can turn this value into a `std::ffi::CString` with
+    /// `CString::new(&entry.path[..]).unwrap()`. To turn a reference into a
+    /// `&std::path::Path`, see the `bytes2path()` function in the private,
+    /// internal `util` module in this crate’s source code.
     pub path: Vec<u8>,
 }
 
@@ -94,11 +109,33 @@ impl Index {
     pub fn open(index_path: &Path) -> Result<Index, Error> {
         crate::init();
         let mut raw = ptr::null_mut();
+        // Normal file path OK (does not need Windows conversion).
         let index_path = index_path.into_c_string()?;
         unsafe {
             try_call!(raw::git_index_open(&mut raw, index_path));
             Ok(Binding::from_raw(raw))
         }
+    }
+
+    /// Get index on-disk version.
+    ///
+    /// Valid return values are 2, 3, or 4.  If 3 is returned, an index
+    /// with version 2 may be written instead, if the extension data in
+    /// version 3 is not necessary.
+    pub fn version(&self) -> u32 {
+        unsafe { raw::git_index_version(self.raw) }
+    }
+
+    /// Set index on-disk version.
+    ///
+    /// Valid values are 2, 3, or 4.  If 2 is given, git_index_write may
+    /// write an index with version 3 instead, if necessary to accurately
+    /// represent the index.
+    pub fn set_version(&mut self, version: u32) -> Result<(), Error> {
+        unsafe {
+            try_call!(raw::git_index_set_version(self.raw, version));
+        }
+        Ok(())
     }
 
     /// Add or update an index entry from an in-memory struct
@@ -220,15 +257,7 @@ impl Index {
     /// no longer be marked as conflicting. The data about the conflict will be
     /// moved to the "resolve undo" (REUC) section.
     pub fn add_path(&mut self, path: &Path) -> Result<(), Error> {
-        // Git apparently expects '/' to be separators for paths
-        let mut posix_path = OsString::new();
-        for (i, comp) in path.components().enumerate() {
-            if i != 0 {
-                posix_path.push("/");
-            }
-            posix_path.push(comp.as_os_str());
-        }
-        let posix_path = posix_path.into_c_string()?;
+        let posix_path = path_to_repo_path(path)?;
         unsafe {
             try_call!(raw::git_index_add_bypath(self.raw, posix_path));
             Ok(())
@@ -268,6 +297,19 @@ impl Index {
     /// updated in the index. Returning zero will add the item to the index,
     /// greater than zero will skip the item, and less than zero will abort the
     /// scan an return an error to the caller.
+    ///
+    /// # Example
+    ///
+    /// Emulate `git add *`:
+    ///
+    /// ```no_run
+    /// use git2::{Index, IndexAddOption, Repository};
+    ///
+    /// let repo = Repository::open("/path/to/a/repo").expect("failed to open");
+    /// let mut index = repo.index().expect("cannot get the Index file");
+    /// index.add_all(["*"].iter(), IndexAddOption::DEFAULT, None);
+    /// index.write();
+    /// ```
     pub fn add_all<T, I>(
         &mut self,
         pathspecs: I,
@@ -278,11 +320,11 @@ impl Index {
         T: IntoCString,
         I: IntoIterator<Item = T>,
     {
-        let (_a, _b, raw_strarray) = crate::util::iter2cstrs(pathspecs)?;
+        let (_a, _b, raw_strarray) = crate::util::iter2cstrs_paths(pathspecs)?;
         let ptr = cb.as_mut();
         let callback = ptr
             .as_ref()
-            .map(|_| index_matched_path_cb as raw::git_index_matched_path_cb);
+            .map(|_| index_matched_path_cb as extern "C" fn(_, _, _) -> _);
         unsafe {
             try_call!(raw::git_index_add_all(
                 self.raw,
@@ -351,7 +393,7 @@ impl Index {
 
     /// Get one of the entries in the index by its path.
     pub fn get_path(&self, path: &Path, stage: i32) -> Option<IndexEntry> {
-        let path = path.into_c_string().unwrap();
+        let path = path_to_repo_path(path).unwrap();
         unsafe {
             let ptr = call!(raw::git_index_get_bypath(self.raw, path, stage as c_int));
             if ptr.is_null() {
@@ -406,7 +448,7 @@ impl Index {
 
     /// Remove an entry from the index
     pub fn remove(&mut self, path: &Path, stage: i32) -> Result<(), Error> {
-        let path = path.into_c_string()?;
+        let path = path_to_repo_path(path)?;
         unsafe {
             try_call!(raw::git_index_remove(self.raw, path, stage as c_int));
         }
@@ -422,7 +464,7 @@ impl Index {
     /// no longer be marked as conflicting. The data about the conflict will be
     /// moved to the "resolve undo" (REUC) section.
     pub fn remove_path(&mut self, path: &Path) -> Result<(), Error> {
-        let path = path.into_c_string()?;
+        let path = path_to_repo_path(path)?;
         unsafe {
             try_call!(raw::git_index_remove_bypath(self.raw, path));
         }
@@ -431,7 +473,7 @@ impl Index {
 
     /// Remove all entries from the index under a given directory.
     pub fn remove_dir(&mut self, path: &Path, stage: i32) -> Result<(), Error> {
-        let path = path.into_c_string()?;
+        let path = path_to_repo_path(path)?;
         unsafe {
             try_call!(raw::git_index_remove_directory(
                 self.raw,
@@ -456,11 +498,11 @@ impl Index {
         T: IntoCString,
         I: IntoIterator<Item = T>,
     {
-        let (_a, _b, raw_strarray) = crate::util::iter2cstrs(pathspecs)?;
+        let (_a, _b, raw_strarray) = crate::util::iter2cstrs_paths(pathspecs)?;
         let ptr = cb.as_mut();
         let callback = ptr
             .as_ref()
-            .map(|_| index_matched_path_cb as raw::git_index_matched_path_cb);
+            .map(|_| index_matched_path_cb as extern "C" fn(_, _, _) -> _);
         unsafe {
             try_call!(raw::git_index_remove_all(
                 self.raw,
@@ -494,11 +536,11 @@ impl Index {
         T: IntoCString,
         I: IntoIterator<Item = T>,
     {
-        let (_a, _b, raw_strarray) = crate::util::iter2cstrs(pathspecs)?;
+        let (_a, _b, raw_strarray) = crate::util::iter2cstrs_paths(pathspecs)?;
         let ptr = cb.as_mut();
         let callback = ptr
             .as_ref()
-            .map(|_| index_matched_path_cb as raw::git_index_matched_path_cb);
+            .map(|_| index_matched_path_cb as extern "C" fn(_, _, _) -> _);
         unsafe {
             try_call!(raw::git_index_update_all(
                 self.raw,

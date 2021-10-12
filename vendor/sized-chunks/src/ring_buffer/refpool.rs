@@ -1,4 +1,4 @@
-use std::mem::MaybeUninit;
+use core::mem::MaybeUninit;
 
 use ::refpool::{PoolClone, PoolDefault};
 
@@ -12,7 +12,7 @@ where
 {
     unsafe fn default_uninit(target: &mut MaybeUninit<Self>) {
         let ptr = target.as_mut_ptr();
-        let origin_ptr: *mut RawIndex<A, N> = &mut (*ptr).origin;
+        let origin_ptr: *mut RawIndex<N> = &mut (*ptr).origin;
         let length_ptr: *mut usize = &mut (*ptr).length;
         origin_ptr.write(0.into());
         length_ptr.write(0);
@@ -26,7 +26,7 @@ where
 {
     unsafe fn clone_uninit(&self, target: &mut MaybeUninit<Self>) {
         let ptr = target.as_mut_ptr();
-        let origin_ptr: *mut RawIndex<A, N> = &mut (*ptr).origin;
+        let origin_ptr: *mut RawIndex<N> = &mut (*ptr).origin;
         let length_ptr: *mut usize = &mut (*ptr).length;
         let data_ptr: *mut _ = &mut (*ptr).data;
         let data_ptr: *mut A = (*data_ptr).as_mut_ptr().cast();
@@ -56,7 +56,7 @@ mod test {
             chunk.push_back(2);
             chunk.push_back(3);
         }
-        let ref2 = ref1.cloned(&pool);
+        let ref2 = PoolRef::cloned(&pool, &ref1);
         let ref3 = PoolRef::clone_from(&pool, &RingBuffer::from_iter(1..=3));
         assert_eq!(RingBuffer::<usize>::from_iter(1..=3), *ref1);
         assert_eq!(RingBuffer::<usize>::from_iter(1..=3), *ref2);

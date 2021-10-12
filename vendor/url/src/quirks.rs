@@ -11,8 +11,8 @@
 //! Unless you need to be interoperable with web browsers,
 //! you probably want to use `Url` method instead.
 
-use parser::{default_port, Context, Input, Parser, SchemeType};
-use {idna, Host, ParseError, Position, Url};
+use crate::parser::{default_port, Context, Input, Parser, SchemeType};
+use crate::{Host, ParseError, Position, Url};
 
 /// https://url.spec.whatwg.org/#dom-url-domaintoascii
 pub fn domain_to_ascii(domain: &str) -> String {
@@ -56,6 +56,7 @@ pub fn protocol(url: &Url) -> &str {
 }
 
 /// Setter for https://url.spec.whatwg.org/#dom-url-protocol
+#[allow(clippy::result_unit_err)]
 pub fn set_protocol(url: &mut Url, mut new_protocol: &str) -> Result<(), ()> {
     // The scheme state in the spec ignores everything after the first `:`,
     // but `set_scheme` errors if there is more.
@@ -72,6 +73,7 @@ pub fn username(url: &Url) -> &str {
 }
 
 /// Setter for https://url.spec.whatwg.org/#dom-url-username
+#[allow(clippy::result_unit_err)]
 pub fn set_username(url: &mut Url, new_username: &str) -> Result<(), ()> {
     url.set_username(new_username)
 }
@@ -83,6 +85,7 @@ pub fn password(url: &Url) -> &str {
 }
 
 /// Setter for https://url.spec.whatwg.org/#dom-url-password
+#[allow(clippy::result_unit_err)]
 pub fn set_password(url: &mut Url, new_password: &str) -> Result<(), ()> {
     url.set_password(if new_password.is_empty() {
         None
@@ -98,6 +101,7 @@ pub fn host(url: &Url) -> &str {
 }
 
 /// Setter for https://url.spec.whatwg.org/#dom-url-host
+#[allow(clippy::result_unit_err)]
 pub fn set_host(url: &mut Url, new_host: &str) -> Result<(), ()> {
     // If context object’s url’s cannot-be-a-base-URL flag is set, then return.
     if url.cannot_be_a_base() {
@@ -111,6 +115,11 @@ pub fn set_host(url: &mut Url, new_host: &str) -> Result<(), ()> {
     {
         let scheme = url.scheme();
         let scheme_type = SchemeType::from(scheme);
+        if scheme_type == SchemeType::File && new_host.is_empty() {
+            url.set_host_internal(Host::Domain(String::new()), None);
+            return Ok(());
+        }
+
         if let Ok((h, remaining)) = Parser::parse_host(input, scheme_type) {
             host = h;
             opt_port = if let Some(remaining) = remaining.split_prefix(':') {
@@ -132,13 +141,9 @@ pub fn set_host(url: &mut Url, new_host: &str) -> Result<(), ()> {
     if host == Host::Domain("".to_string()) {
         if !username(&url).is_empty() {
             return Err(());
-        }
-        if let Some(p) = opt_port {
-            if let Some(_) = p {
-                return Err(());
-            }
-        }
-        if url.port().is_some() {
+        } else if let Some(Some(_)) = opt_port {
+            return Err(());
+        } else if url.port().is_some() {
             return Err(());
         }
     }
@@ -153,6 +158,7 @@ pub fn hostname(url: &Url) -> &str {
 }
 
 /// Setter for https://url.spec.whatwg.org/#dom-url-hostname
+#[allow(clippy::result_unit_err)]
 pub fn set_hostname(url: &mut Url, new_hostname: &str) -> Result<(), ()> {
     if url.cannot_be_a_base() {
         return Err(());
@@ -160,6 +166,11 @@ pub fn set_hostname(url: &mut Url, new_hostname: &str) -> Result<(), ()> {
     // Host parsing rules are strict we don't want to trim the input
     let input = Input::no_trim(new_hostname);
     let scheme_type = SchemeType::from(url.scheme());
+    if scheme_type == SchemeType::File && new_hostname.is_empty() {
+        url.set_host_internal(Host::Domain(String::new()), None);
+        return Ok(());
+    }
+
     if let Ok((host, _remaining)) = Parser::parse_host(input, scheme_type) {
         if let Host::Domain(h) = &host {
             if h.is_empty() {
@@ -189,6 +200,7 @@ pub fn port(url: &Url) -> &str {
 }
 
 /// Setter for https://url.spec.whatwg.org/#dom-url-port
+#[allow(clippy::result_unit_err)]
 pub fn set_port(url: &mut Url, new_port: &str) -> Result<(), ()> {
     let result;
     {
@@ -222,10 +234,10 @@ pub fn set_pathname(url: &mut Url, new_pathname: &str) {
     if url.cannot_be_a_base() {
         return;
     }
-    if Some('/') == new_pathname.chars().nth(0)
+    if new_pathname.starts_with('/')
         || (SchemeType::from(url.scheme()).is_special()
             // \ is a segment delimiter for 'special' URLs"
-            && Some('\\') == new_pathname.chars().nth(0))
+            && new_pathname.starts_with('\\'))
     {
         url.set_path(new_pathname)
     } else {

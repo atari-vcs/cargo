@@ -1,11 +1,10 @@
 //! Tests for corrupt git repos.
 
-use std::fs;
-use std::path::{Path, PathBuf};
-
-use cargo::util::paths as cargopaths;
 use cargo_test_support::paths;
 use cargo_test_support::{basic_manifest, git, project};
+use cargo_util::paths as cargopaths;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 #[cargo_test]
 fn deleting_database_files() {
@@ -21,14 +20,14 @@ fn deleting_database_files() {
             "Cargo.toml",
             &format!(
                 r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
+                    [project]
+                    name = "foo"
+                    version = "0.5.0"
+                    authors = []
 
-            [dependencies]
-            bar = {{ git = '{}' }}
-        "#,
+                    [dependencies]
+                    bar = {{ git = '{}' }}
+                "#,
                 git_project.url()
             ),
         )
@@ -79,14 +78,14 @@ fn deleting_checkout_files() {
             "Cargo.toml",
             &format!(
                 r#"
-            [project]
-            name = "foo"
-            version = "0.5.0"
-            authors = []
+                    [project]
+                    name = "foo"
+                    version = "0.5.0"
+                    authors = []
 
-            [dependencies]
-            bar = {{ git = '{}' }}
-        "#,
+                    [dependencies]
+                    bar = {{ git = '{}' }}
+                "#,
                 git_project.url()
             ),
         )

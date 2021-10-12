@@ -3,33 +3,11 @@
 use crate::core::{TargetKind, Workspace};
 use crate::ops::CompileOptions;
 use anyhow::Error;
+use cargo_util::ProcessError;
 use std::fmt;
 use std::path::PathBuf;
-use std::process::{ExitStatus, Output};
-use std::str;
 
 pub type CargoResult<T> = anyhow::Result<T>;
-
-// TODO: should delete this trait and just use `with_context` instead
-pub trait CargoResultExt<T, E> {
-    fn chain_err<F, D>(self, f: F) -> CargoResult<T>
-    where
-        F: FnOnce() -> D,
-        D: fmt::Display + Send + Sync + 'static;
-}
-
-impl<T, E> CargoResultExt<T, E> for Result<T, E>
-where
-    E: Into<Error>,
-{
-    fn chain_err<F, D>(self, f: F) -> CargoResult<T>
-    where
-        F: FnOnce() -> D,
-        D: fmt::Display + Send + Sync + 'static,
-    {
-        self.map_err(|e| e.into().context(f()))
-    }
-}
 
 #[derive(Debug)]
 pub struct HttpNot200 {
@@ -49,33 +27,80 @@ impl fmt::Display for HttpNot200 {
 
 impl std::error::Error for HttpNot200 {}
 
-pub struct Internal {
+// =============================================================================
+// Verbose error
+
+/// An error wrapper for errors that should only be displayed with `--verbose`.
+///
+/// This should only be used in rare cases. When emitting this error, you
+/// should have a normal error higher up the error-cause chain (like "could
+/// not compile `foo`"), so at least *something* gets printed without
+/// `--verbose`.
+pub struct VerboseError {
     inner: Error,
 }
 
-impl Internal {
-    pub fn new(inner: Error) -> Internal {
-        Internal { inner }
+impl VerboseError {
+    pub fn new(inner: Error) -> VerboseError {
+        VerboseError { inner }
     }
 }
 
-impl std::error::Error for Internal {
+impl std::error::Error for VerboseError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.inner.source()
     }
 }
 
-impl fmt::Debug for Internal {
+impl fmt::Debug for VerboseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.inner.fmt(f)
     }
 }
 
-impl fmt::Display for Internal {
+impl fmt::Display for VerboseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.inner.fmt(f)
     }
 }
+
+// =============================================================================
+// Internal error
+
+/// An unexpected, internal error.
+///
+/// This should only be used for unexpected errors. It prints a message asking
+/// the user to file a bug report.
+pub struct InternalError {
+    inner: Error,
+}
+
+impl InternalError {
+    pub fn new(inner: Error) -> InternalError {
+        InternalError { inner }
+    }
+}
+
+impl std::error::Error for InternalError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.inner.source()
+    }
+}
+
+impl fmt::Debug for InternalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl fmt::Display for InternalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+// =============================================================================
+// Manifest error
 
 /// Error wrapper related to a particular manifest and providing it's path.
 ///
@@ -140,23 +165,6 @@ impl<'a> Iterator for ManifestCauses<'a> {
 impl<'a> ::std::iter::FusedIterator for ManifestCauses<'a> {}
 
 // =============================================================================
-// Process errors
-#[derive(Debug)]
-pub struct ProcessError {
-    pub desc: String,
-    pub exit: Option<ExitStatus>,
-    pub output: Option<Output>,
-}
-
-impl fmt::Display for ProcessError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.desc.fmt(f)
-    }
-}
-
-impl std::error::Error for ProcessError {}
-
-// =============================================================================
 // Cargo test errors.
 
 /// Error when testcases fail
@@ -164,7 +172,7 @@ impl std::error::Error for ProcessError {}
 pub struct CargoTestError {
     pub test: Test,
     pub desc: String,
-    pub exit: Option<ExitStatus>,
+    pub code: Option<i32>,
     pub causes: Vec<ProcessError>,
 }
 
@@ -200,12 +208,12 @@ impl CargoTestError {
         CargoTestError {
             test,
             desc,
-            exit: errors[0].exit,
+            code: errors[0].code,
             causes: errors,
         }
     }
 
-    pub fn hint(&self, ws: &Workspace<'_>, opts: &CompileOptions<'_>) -> String {
+    pub fn hint(&self, ws: &Workspace<'_>, opts: &CompileOptions) -> String {
         match self.test {
             Test::UnitTest {
                 ref kind,
@@ -247,22 +255,27 @@ impl CargoTestError {
 pub type CliResult = Result<(), CliError>;
 
 #[derive(Debug)]
+/// The CLI error is the error type used at Cargo's CLI-layer.
+///
+/// All errors from the lib side of Cargo will get wrapped with this error.
+/// Other errors (such as command-line argument validation) will create this
+/// directly.
 pub struct CliError {
+    /// The error to display. This can be `None` in rare cases to exit with a
+    /// code without displaying a message. For example `cargo run -q` where
+    /// the resulting process exits with a nonzero code (on Windows), or an
+    /// external subcommand that exits nonzero (we assume it printed its own
+    /// message).
     pub error: Option<anyhow::Error>,
-    pub unknown: bool,
+    /// The process exit code.
     pub exit_code: i32,
 }
 
 impl CliError {
     pub fn new(error: anyhow::Error, code: i32) -> CliError {
-        // Specifically deref the error to a standard library error to only
-        // check the top-level error to see if it's an `Internal`, we don't want
-        // `anyhow::Error`'s behavior of recursively checking.
-        let unknown = (&*error).downcast_ref::<Internal>().is_some();
         CliError {
             error: Some(error),
             exit_code: code,
-            unknown,
         }
     }
 
@@ -270,7 +283,6 @@ impl CliError {
         CliError {
             error: None,
             exit_code: code,
-            unknown: false,
         }
     }
 }
@@ -291,130 +303,6 @@ impl From<clap::Error> for CliError {
 // =============================================================================
 // Construction helpers
 
-pub fn process_error(
-    msg: &str,
-    status: Option<ExitStatus>,
-    output: Option<&Output>,
-) -> ProcessError {
-    let exit = match status {
-        Some(s) => status_to_string(s),
-        None => "never executed".to_string(),
-    };
-    let mut desc = format!("{} ({})", &msg, exit);
-
-    if let Some(out) = output {
-        match str::from_utf8(&out.stdout) {
-            Ok(s) if !s.trim().is_empty() => {
-                desc.push_str("\n--- stdout\n");
-                desc.push_str(s);
-            }
-            Ok(..) | Err(..) => {}
-        }
-        match str::from_utf8(&out.stderr) {
-            Ok(s) if !s.trim().is_empty() => {
-                desc.push_str("\n--- stderr\n");
-                desc.push_str(s);
-            }
-            Ok(..) | Err(..) => {}
-        }
-    }
-
-    return ProcessError {
-        desc,
-        exit: status,
-        output: output.cloned(),
-    };
-
-    #[cfg(unix)]
-    fn status_to_string(status: ExitStatus) -> String {
-        use std::os::unix::process::*;
-
-        if let Some(signal) = status.signal() {
-            let name = match signal as libc::c_int {
-                libc::SIGABRT => ", SIGABRT: process abort signal",
-                libc::SIGALRM => ", SIGALRM: alarm clock",
-                libc::SIGFPE => ", SIGFPE: erroneous arithmetic operation",
-                libc::SIGHUP => ", SIGHUP: hangup",
-                libc::SIGILL => ", SIGILL: illegal instruction",
-                libc::SIGINT => ", SIGINT: terminal interrupt signal",
-                libc::SIGKILL => ", SIGKILL: kill",
-                libc::SIGPIPE => ", SIGPIPE: write on a pipe with no one to read",
-                libc::SIGQUIT => ", SIGQUIT: terminal quite signal",
-                libc::SIGSEGV => ", SIGSEGV: invalid memory reference",
-                libc::SIGTERM => ", SIGTERM: termination signal",
-                libc::SIGBUS => ", SIGBUS: access to undefined memory",
-                #[cfg(not(target_os = "haiku"))]
-                libc::SIGSYS => ", SIGSYS: bad system call",
-                libc::SIGTRAP => ", SIGTRAP: trace/breakpoint trap",
-                _ => "",
-            };
-            format!("signal: {}{}", signal, name)
-        } else {
-            status.to_string()
-        }
-    }
-
-    #[cfg(windows)]
-    fn status_to_string(status: ExitStatus) -> String {
-        use winapi::shared::minwindef::DWORD;
-        use winapi::um::winnt::*;
-
-        let mut base = status.to_string();
-        let extra = match status.code().unwrap() as DWORD {
-            STATUS_ACCESS_VIOLATION => "STATUS_ACCESS_VIOLATION",
-            STATUS_IN_PAGE_ERROR => "STATUS_IN_PAGE_ERROR",
-            STATUS_INVALID_HANDLE => "STATUS_INVALID_HANDLE",
-            STATUS_INVALID_PARAMETER => "STATUS_INVALID_PARAMETER",
-            STATUS_NO_MEMORY => "STATUS_NO_MEMORY",
-            STATUS_ILLEGAL_INSTRUCTION => "STATUS_ILLEGAL_INSTRUCTION",
-            STATUS_NONCONTINUABLE_EXCEPTION => "STATUS_NONCONTINUABLE_EXCEPTION",
-            STATUS_INVALID_DISPOSITION => "STATUS_INVALID_DISPOSITION",
-            STATUS_ARRAY_BOUNDS_EXCEEDED => "STATUS_ARRAY_BOUNDS_EXCEEDED",
-            STATUS_FLOAT_DENORMAL_OPERAND => "STATUS_FLOAT_DENORMAL_OPERAND",
-            STATUS_FLOAT_DIVIDE_BY_ZERO => "STATUS_FLOAT_DIVIDE_BY_ZERO",
-            STATUS_FLOAT_INEXACT_RESULT => "STATUS_FLOAT_INEXACT_RESULT",
-            STATUS_FLOAT_INVALID_OPERATION => "STATUS_FLOAT_INVALID_OPERATION",
-            STATUS_FLOAT_OVERFLOW => "STATUS_FLOAT_OVERFLOW",
-            STATUS_FLOAT_STACK_CHECK => "STATUS_FLOAT_STACK_CHECK",
-            STATUS_FLOAT_UNDERFLOW => "STATUS_FLOAT_UNDERFLOW",
-            STATUS_INTEGER_DIVIDE_BY_ZERO => "STATUS_INTEGER_DIVIDE_BY_ZERO",
-            STATUS_INTEGER_OVERFLOW => "STATUS_INTEGER_OVERFLOW",
-            STATUS_PRIVILEGED_INSTRUCTION => "STATUS_PRIVILEGED_INSTRUCTION",
-            STATUS_STACK_OVERFLOW => "STATUS_STACK_OVERFLOW",
-            STATUS_DLL_NOT_FOUND => "STATUS_DLL_NOT_FOUND",
-            STATUS_ORDINAL_NOT_FOUND => "STATUS_ORDINAL_NOT_FOUND",
-            STATUS_ENTRYPOINT_NOT_FOUND => "STATUS_ENTRYPOINT_NOT_FOUND",
-            STATUS_CONTROL_C_EXIT => "STATUS_CONTROL_C_EXIT",
-            STATUS_DLL_INIT_FAILED => "STATUS_DLL_INIT_FAILED",
-            STATUS_FLOAT_MULTIPLE_FAULTS => "STATUS_FLOAT_MULTIPLE_FAULTS",
-            STATUS_FLOAT_MULTIPLE_TRAPS => "STATUS_FLOAT_MULTIPLE_TRAPS",
-            STATUS_REG_NAT_CONSUMPTION => "STATUS_REG_NAT_CONSUMPTION",
-            STATUS_HEAP_CORRUPTION => "STATUS_HEAP_CORRUPTION",
-            STATUS_STACK_BUFFER_OVERRUN => "STATUS_STACK_BUFFER_OVERRUN",
-            STATUS_ASSERTION_FAILURE => "STATUS_ASSERTION_FAILURE",
-            _ => return base,
-        };
-        base.push_str(", ");
-        base.push_str(extra);
-        base
-    }
-}
-
-pub fn is_simple_exit_code(code: i32) -> bool {
-    // Typical unix exit codes are 0 to 127.
-    // Windows doesn't have anything "typical", and is a
-    // 32-bit number (which appears signed here, but is really
-    // unsigned). However, most of the interesting NTSTATUS
-    // codes are very large. This is just a rough
-    // approximation of which codes are "normal" and which
-    // ones are abnormal termination.
-    code >= 0 && code <= 127
-}
-
 pub fn internal<S: fmt::Display>(error: S) -> anyhow::Error {
-    _internal(&error)
-}
-
-fn _internal(error: &dyn fmt::Display) -> anyhow::Error {
-    Internal::new(anyhow::format_err!("{}", error)).into()
+    InternalError::new(anyhow::format_err!("{}", error)).into()
 }

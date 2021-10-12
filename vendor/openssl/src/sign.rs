@@ -61,18 +61,18 @@
 //! # let target = hmac.clone();
 //! assert!(memcmp::eq(&hmac, &target));
 //! ```
-use ffi;
+use cfg_if::cfg_if;
 use foreign_types::ForeignTypeRef;
 use libc::c_int;
 use std::io::{self, Write};
 use std::marker::PhantomData;
 use std::ptr;
 
-use error::ErrorStack;
-use hash::MessageDigest;
-use pkey::{HasPrivate, HasPublic, PKeyRef};
-use rsa::Padding;
-use {cvt, cvt_p};
+use crate::error::ErrorStack;
+use crate::hash::MessageDigest;
+use crate::pkey::{HasPrivate, HasPublic, PKeyRef};
+use crate::rsa::Padding;
+use crate::{cvt, cvt_p};
 
 cfg_if! {
     if #[cfg(ossl110)] {
@@ -123,6 +123,7 @@ impl<'a> Drop for Signer<'a> {
     }
 }
 
+#[allow(clippy::len_without_is_empty)]
 impl<'a> Signer<'a> {
     /// Creates a new `Signer`.
     ///
@@ -342,7 +343,7 @@ impl<'a> Signer<'a> {
         Ok(buf)
     }
 
-    /// Signs the data in data_buf and writes the siganture into the buffer sig_buf, returning the
+    /// Signs the data in data_buf and writes the signature into the buffer sig_buf, returning the
     /// number of bytes written.
     ///
     /// For PureEdDSA (Ed25519 and Ed448 keys) this is the only way to sign data.
@@ -354,7 +355,11 @@ impl<'a> Signer<'a> {
     ///
     /// [`EVP_DigestSign`]: https://www.openssl.org/docs/man1.1.1/man3/EVP_DigestSign.html
     #[cfg(ossl111)]
-    pub fn sign_oneshot(&mut self, sig_buf: &mut [u8], data_buf: &[u8]) -> Result<usize, ErrorStack> {
+    pub fn sign_oneshot(
+        &mut self,
+        sig_buf: &mut [u8],
+        data_buf: &[u8],
+    ) -> Result<usize, ErrorStack> {
         unsafe {
             let mut sig_len = sig_buf.len();
             cvt(ffi::EVP_DigestSign(
@@ -634,19 +639,21 @@ mod test {
     use hex::{self, FromHex};
     use std::iter;
 
-    use ec::{EcGroup, EcKey};
-    use hash::MessageDigest;
-    use nid::Nid;
-    use pkey::PKey;
-    use rsa::{Padding, Rsa};
-    use sign::{RsaPssSaltlen, Signer, Verifier};
+    use crate::ec::{EcGroup, EcKey};
+    use crate::hash::MessageDigest;
+    use crate::nid::Nid;
+    use crate::pkey::PKey;
+    use crate::rsa::{Padding, Rsa};
+    #[cfg(ossl111)]
+    use crate::sign::RsaPssSaltlen;
+    use crate::sign::{Signer, Verifier};
 
-    const INPUT: &'static str =
+    const INPUT: &str =
         "65794a68624763694f694a53557a49314e694a392e65794a7063334d694f694a71623255694c41304b49434a6c\
          654841694f6a457a4d4441344d546b7a4f44417344516f67496d6830644841364c79396c654746746347786c4c\
          6d4e76625339706331397962323930496a7030636e566c6651";
 
-    const SIGNATURE: &'static str =
+    const SIGNATURE: &str =
         "702e218943e88fd11eb5d82dbf7845f34106ae1b81fff7731116add1717d83656d420afd3c96eedd73a2663e51\
          66687b000b87226e0187ed1073f945e582adfcef16d85a798ee8c66ddb3db8975b17d09402beedd5d9d9700710\
          8db28160d5f8040ca7445762b81fbe7ff9d92e0ae76f24f25b33bbe6f44ae61eb1040acb20044d3ef9128ed401\
@@ -796,8 +803,9 @@ mod test {
 
     #[test]
     #[cfg(ossl110)]
+    #[cfg_attr(ossl300, ignore)] // https://github.com/openssl/openssl/issues/11671
     fn test_cmac() {
-        let cipher = ::symm::Cipher::aes_128_cbc();
+        let cipher = crate::symm::Cipher::aes_128_cbc();
         let key = Vec::from_hex("9294727a3638bb1c13f48ef8158bfc9d").unwrap();
         let pkey = PKey::cmac(&cipher, &key).unwrap();
         let mut signer = Signer::new_without_digest(&pkey).unwrap();

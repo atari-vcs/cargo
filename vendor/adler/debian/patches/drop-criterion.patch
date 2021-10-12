@@ -1,0 +1,140 @@
+rust-criterion is not in debian yet, and has a huge tree of
+dependencies, many of which themselves are not in debian yet.
+
+By patching out the "bench" benchmarking target, we avoid this
+problem.
+
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -44,9 +44,6 @@
+ replace = "https://docs.rs/adler/{{version}}"
+ search = "https://docs.rs/adler/[a-z0-9\\.-]+"
+ 
+-[[bench]]
+-name = "bench"
+-harness = false
+ [dependencies.compiler_builtins]
+ version = "0.1.2"
+ optional = true
+@@ -55,8 +52,6 @@
+ version = "1.0.0"
+ optional = true
+ package = "rustc-std-workspace-core"
+-[dev-dependencies.criterion]
+-version = "0.3.2"
+ 
+ [features]
+ default = ["std"]
+diff -ruN benches/bench.rs benches.new/bench.rs
+--- a/benches/bench.rs
++++ b/benches/bench.rs
+@@ -1,109 +0,0 @@
+-extern crate adler;
+-extern crate criterion;
+-
+-use adler::{adler32_slice, Adler32};
+-use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+-
+-fn simple(c: &mut Criterion) {
+-    {
+-        const SIZE: usize = 100;
+-
+-        let mut group = c.benchmark_group("simple-100b");
+-        group.throughput(Throughput::Bytes(SIZE as u64));
+-        group.bench_function("zeroes-100", |bencher| {
+-            bencher.iter(|| {
+-                adler32_slice(&[0; SIZE]);
+-            });
+-        });
+-        group.bench_function("ones-100", |bencher| {
+-            bencher.iter(|| {
+-                adler32_slice(&[0xff; SIZE]);
+-            });
+-        });
+-    }
+-
+-    {
+-        const SIZE: usize = 1024;
+-
+-        let mut group = c.benchmark_group("simple-1k");
+-        group.throughput(Throughput::Bytes(SIZE as u64));
+-
+-        group.bench_function("zeroes-1k", |bencher| {
+-            bencher.iter(|| {
+-                adler32_slice(&[0; SIZE]);
+-            });
+-        });
+-
+-        group.bench_function("ones-1k", |bencher| {
+-            bencher.iter(|| {
+-                adler32_slice(&[0xff; SIZE]);
+-            });
+-        });
+-    }
+-
+-    {
+-        const SIZE: usize = 1024 * 1024;
+-
+-        let mut group = c.benchmark_group("simple-1m");
+-        group.throughput(Throughput::Bytes(SIZE as u64));
+-        group.bench_function("zeroes-1m", |bencher| {
+-            bencher.iter(|| {
+-                adler32_slice(&[0; SIZE]);
+-            });
+-        });
+-
+-        group.bench_function("ones-1m", |bencher| {
+-            bencher.iter(|| {
+-                adler32_slice(&[0xff; SIZE]);
+-            });
+-        });
+-    }
+-}
+-
+-fn chunked(c: &mut Criterion) {
+-    const SIZE: usize = 16 * 1024 * 1024;
+-
+-    let data = vec![0xAB; SIZE];
+-
+-    let mut group = c.benchmark_group("chunked-16m");
+-    group.throughput(Throughput::Bytes(SIZE as u64));
+-    group.bench_function("5552", |bencher| {
+-        bencher.iter(|| {
+-            let mut h = Adler32::new();
+-            for chunk in data.chunks(5552) {
+-                h.write_slice(chunk);
+-            }
+-            h.checksum()
+-        });
+-    });
+-    group.bench_function("8k", |bencher| {
+-        bencher.iter(|| {
+-            let mut h = Adler32::new();
+-            for chunk in data.chunks(8 * 1024) {
+-                h.write_slice(chunk);
+-            }
+-            h.checksum()
+-        });
+-    });
+-    group.bench_function("64k", |bencher| {
+-        bencher.iter(|| {
+-            let mut h = Adler32::new();
+-            for chunk in data.chunks(64 * 1024) {
+-                h.write_slice(chunk);
+-            }
+-            h.checksum()
+-        });
+-    });
+-    group.bench_function("1m", |bencher| {
+-        bencher.iter(|| {
+-            let mut h = Adler32::new();
+-            for chunk in data.chunks(1024 * 1024) {
+-                h.write_slice(chunk);
+-            }
+-            h.checksum()
+-        });
+-    });
+-}
+-
+-criterion_group!(benches, simple, chunked);
+-criterion_main!(benches);

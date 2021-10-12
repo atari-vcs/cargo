@@ -1,0 +1,14 @@
+Index: ppv-lite86/src/generic.rs
+===================================================================
+--- ppv-lite86.orig/src/generic.rs
++++ ppv-lite86/src/generic.rs
+@@ -326,7 +326,8 @@ fn rotate_u128_right(x: u128, i: u32) ->
+ #[test]
+ fn test_rotate_u128() {
+     const X: u128 = 0x0001_0203_0405_0607_0809_0a0b_0c0d_0e0f;
+-    assert_eq!(rotate_u128_right(X, 17), X.rotate_right(17));
++    const R: u128 = X.rotate_right(17);
++    assert_eq!(rotate_u128_right(X, 17), R);
+ }
+ 
+ impl RotateEachWord32 for u128x1_generic {

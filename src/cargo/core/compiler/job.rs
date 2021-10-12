@@ -12,13 +12,13 @@ pub struct Job {
 /// Each proc should send its description before starting.
 /// It should send either once or close immediately.
 pub struct Work {
-    inner: Box<dyn FnOnce(&JobState<'_>) -> CargoResult<()> + Send>,
+    inner: Box<dyn FnOnce(&JobState<'_, '_>) -> CargoResult<()> + Send>,
 }
 
 impl Work {
     pub fn new<F>(f: F) -> Work
     where
-        F: FnOnce(&JobState<'_>) -> CargoResult<()> + Send + 'static,
+        F: FnOnce(&JobState<'_, '_>) -> CargoResult<()> + Send + 'static,
     {
         Work { inner: Box::new(f) }
     }
@@ -27,7 +27,7 @@ impl Work {
         Work::new(|_| Ok(()))
     }
 
-    pub fn call(self, tx: &JobState<'_>) -> CargoResult<()> {
+    pub fn call(self, tx: &JobState<'_, '_>) -> CargoResult<()> {
         (self.inner)(tx)
     }
 
@@ -40,14 +40,25 @@ impl Work {
 }
 
 impl Job {
+    /// Creates a new job that does nothing.
+    pub fn new_fresh() -> Job {
+        Job {
+            work: Work::noop(),
+            fresh: Freshness::Fresh,
+        }
+    }
+
     /// Creates a new job representing a unit of work.
-    pub fn new(work: Work, fresh: Freshness) -> Job {
-        Job { work, fresh }
+    pub fn new_dirty(work: Work) -> Job {
+        Job {
+            work,
+            fresh: Freshness::Dirty,
+        }
     }
 
     /// Consumes this job by running it, returning the result of the
     /// computation.
-    pub fn run(self, state: &JobState<'_>) -> CargoResult<()> {
+    pub fn run(self, state: &JobState<'_, '_>) -> CargoResult<()> {
         self.work.call(state)
     }
 

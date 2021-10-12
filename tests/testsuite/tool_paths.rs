@@ -1,7 +1,8 @@
 //! Tests for configuration values that point to programs.
 
-use cargo_test_support::rustc_host;
-use cargo_test_support::{basic_lib_manifest, project};
+use cargo_test_support::{
+    basic_lib_manifest, no_such_file_err_msg, project, rustc_host, rustc_host_env,
+};
 
 #[cargo_test]
 fn pathless_tools() {
@@ -14,9 +15,9 @@ fn pathless_tools() {
             ".cargo/config",
             &format!(
                 r#"
-            [target.{}]
-            linker = "nonexistent-linker"
-        "#,
+                    [target.{}]
+                    linker = "nonexistent-linker"
+                "#,
                 target
             ),
         )
@@ -51,9 +52,9 @@ fn absolute_tools() {
             ".cargo/config",
             &format!(
                 r#"
-            [target.{target}]
-            linker = "{linker}"
-        "#,
+                    [target.{target}]
+                    linker = "{linker}"
+                "#,
                 target = target,
                 linker = linker
             ),
@@ -92,9 +93,9 @@ fn relative_tools() {
             ".cargo/config",
             &format!(
                 r#"
-            [target.{target}]
-            linker = "{linker}"
-        "#,
+                    [target.{target}]
+                    linker = "{linker}"
+                "#,
                 target = target,
                 linker = linker
             ),
@@ -128,9 +129,9 @@ fn custom_runner() {
             ".cargo/config",
             &format!(
                 r#"
-            [target.{}]
-            runner = "nonexistent-runner -r"
-        "#,
+                    [target.{}]
+                    runner = "nonexistent-runner -r"
+                "#,
                 target
             ),
         )
@@ -210,12 +211,12 @@ fn custom_runner_cfg_precedence() {
             ".cargo/config",
             &format!(
                 r#"
-            [target.'cfg(not(target_os = "none"))']
-            runner = "ignored-runner"
+                    [target.'cfg(not(target_os = "none"))']
+                    runner = "ignored-runner"
 
-            [target.{}]
-            runner = "nonexistent-runner -r"
-        "#,
+                    [target.{}]
+                    runner = "nonexistent-runner -r"
+                "#,
                 target
             ),
         )
@@ -263,35 +264,106 @@ second match `cfg(not(target_os = \"none\"))` located in [..]/foo/.cargo/config
 
 #[cargo_test]
 fn custom_runner_env() {
-    let target = rustc_host();
     let p = project().file("src/main.rs", "fn main() {}").build();
 
-    let key = format!(
-        "CARGO_TARGET_{}_RUNNER",
-        target.to_uppercase().replace('-', "_")
-    );
+    let key = format!("CARGO_TARGET_{}_RUNNER", rustc_host_env());
 
     p.cargo("run")
         .env(&key, "nonexistent-runner --foo")
         .with_status(101)
-        .with_stderr_contains("[RUNNING] `nonexistent-runner --foo target/debug/foo[EXE]`")
+        .with_stderr(&format!(
+            "\
+[COMPILING] foo [..]
+[FINISHED] dev [..]
+[RUNNING] `nonexistent-runner --foo target/debug/foo[EXE]`
+[ERROR] could not execute process `nonexistent-runner --foo target/debug/foo[EXE]` (never executed)
+
+Caused by:
+  {}
+",
+            no_such_file_err_msg()
+        ))
+        .run();
+}
+
+#[cargo_test]
+fn custom_runner_env_overrides_config() {
+    let target = rustc_host();
+    let p = project()
+        .file("src/main.rs", "fn main() {}")
+        .file(
+            ".cargo/config.toml",
+            &format!(
+                r#"
+                    [target.{}]
+                    runner = "should-not-run -r"
+                "#,
+                target
+            ),
+        )
+        .build();
+
+    let key = format!("CARGO_TARGET_{}_RUNNER", rustc_host_env());
+
+    p.cargo("run")
+        .env(&key, "should-run --foo")
+        .with_status(101)
+        .with_stderr_contains("[RUNNING] `should-run --foo target/debug/foo[EXE]`")
+        .run();
+}
+
+#[cargo_test]
+#[cfg(unix)] // Assumes `true` is in PATH.
+fn custom_runner_env_true() {
+    // Check for a bug where "true" was interpreted as a boolean instead of
+    // the executable.
+    let p = project().file("src/main.rs", "fn main() {}").build();
+
+    let key = format!("CARGO_TARGET_{}_RUNNER", rustc_host_env());
+
+    p.cargo("run")
+        .env(&key, "true")
+        .with_stderr_contains("[RUNNING] `true target/debug/foo[EXE]`")
         .run();
 }
 
 #[cargo_test]
 fn custom_linker_env() {
-    let target = rustc_host();
     let p = project().file("src/main.rs", "fn main() {}").build();
 
-    let key = format!(
-        "CARGO_TARGET_{}_LINKER",
-        target.to_uppercase().replace('-', "_")
-    );
+    let key = format!("CARGO_TARGET_{}_LINKER", rustc_host_env());
 
     p.cargo("build -v")
         .env(&key, "nonexistent-linker")
         .with_status(101)
         .with_stderr_contains("[RUNNING] `rustc [..]-C linker=nonexistent-linker [..]")
+        .run();
+}
+
+#[cargo_test]
+fn target_in_environment_contains_lower_case() {
+    if cfg!(windows) && !cargo_test_support::is_nightly() {
+        // Remove this check when 1.55 is stabilized.
+        // https://github.com/rust-lang/rust/pull/85270
+        return;
+    }
+    let p = project().file("src/main.rs", "fn main() {}").build();
+
+    let target = rustc_host();
+    let env_key = format!(
+        "CARGO_TARGET_{}_LINKER",
+        target.to_lowercase().replace('-', "_")
+    );
+
+    p.cargo("build -v --target")
+        .arg(target)
+        .env(&env_key, "nonexistent-linker")
+        .with_stderr_contains(format!(
+            "warning: Environment variables are expected to use uppercase \
+             letters and underscores, the variable `{}` will be ignored and \
+             have no effect",
+            env_key
+        ))
         .run();
 }
 

@@ -1,11 +1,10 @@
 //! Tests for --out-dir flag.
 
-use std::env;
-use std::fs::{self, File};
-use std::path::Path;
-
 use cargo_test_support::sleep_ms;
 use cargo_test_support::{basic_manifest, project};
+use std::env;
+use std::fs;
+use std::path::Path;
 
 #[cargo_test]
 fn binary_with_debug() {
@@ -15,12 +14,14 @@ fn binary_with_debug() {
 
     p.cargo("build -Z unstable-options --out-dir out")
         .masquerade_as_nightly_cargo()
+        .enable_mac_dsym()
         .run();
     check_dir_contents(
         &p.root().join("out"),
         &["foo"],
         &["foo", "foo.dSYM"],
         &["foo.exe", "foo.pdb"],
+        &["foo.exe"],
     );
 }
 
@@ -30,21 +31,21 @@ fn static_library_with_debug() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [lib]
-            crate-type = ["staticlib"]
-        "#,
+                [lib]
+                crate-type = ["staticlib"]
+            "#,
         )
         .file(
             "src/lib.rs",
             r#"
-            #[no_mangle]
-            pub extern "C" fn foo() { println!("Hello, World!") }
-        "#,
+                #[no_mangle]
+                pub extern "C" fn foo() { println!("Hello, World!") }
+            "#,
         )
         .build();
 
@@ -56,6 +57,7 @@ fn static_library_with_debug() {
         &["libfoo.a"],
         &["libfoo.a"],
         &["foo.lib"],
+        &["libfoo.a"],
     );
 }
 
@@ -65,32 +67,34 @@ fn dynamic_library_with_debug() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [lib]
-            crate-type = ["cdylib"]
-        "#,
+                [lib]
+                crate-type = ["cdylib"]
+            "#,
         )
         .file(
             "src/lib.rs",
             r#"
-            #[no_mangle]
-            pub extern "C" fn foo() { println!("Hello, World!") }
-        "#,
+                #[no_mangle]
+                pub extern "C" fn foo() { println!("Hello, World!") }
+            "#,
         )
         .build();
 
     p.cargo("build -Z unstable-options --out-dir out")
         .masquerade_as_nightly_cargo()
+        .enable_mac_dsym()
         .run();
     check_dir_contents(
         &p.root().join("out"),
         &["libfoo.so"],
-        &["libfoo.dylib"],
-        &["foo.dll", "foo.dll.lib"],
+        &["libfoo.dylib", "libfoo.dylib.dSYM"],
+        &["foo.dll", "foo.dll.exp", "foo.dll.lib", "foo.pdb"],
+        &["foo.dll", "libfoo.dll.a"],
     );
 }
 
@@ -100,20 +104,20 @@ fn rlib_with_debug() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [lib]
-            crate-type = ["rlib"]
-        "#,
+                [lib]
+                crate-type = ["rlib"]
+            "#,
         )
         .file(
             "src/lib.rs",
             r#"
-            pub fn foo() { println!("Hello, World!") }
-        "#,
+                pub fn foo() { println!("Hello, World!") }
+            "#,
         )
         .build();
 
@@ -122,6 +126,7 @@ fn rlib_with_debug() {
         .run();
     check_dir_contents(
         &p.root().join("out"),
+        &["libfoo.rlib"],
         &["libfoo.rlib"],
         &["libfoo.rlib"],
         &["libfoo.rlib"],
@@ -134,27 +139,27 @@ fn include_only_the_binary_from_the_current_package() {
         .file(
             "Cargo.toml",
             r#"
-            [project]
-            name = "foo"
-            version = "0.0.1"
-            authors = []
+                [project]
+                name = "foo"
+                version = "0.0.1"
+                authors = []
 
-            [workspace]
+                [workspace]
 
-            [dependencies]
-            utils = { path = "./utils" }
-        "#,
+                [dependencies]
+                utils = { path = "./utils" }
+            "#,
         )
         .file("src/lib.rs", "extern crate utils;")
         .file(
             "src/main.rs",
             r#"
-            extern crate foo;
-            extern crate utils;
-            fn main() {
-                println!("Hello, World!")
-            }
-        "#,
+                extern crate foo;
+                extern crate utils;
+                fn main() {
+                    println!("Hello, World!")
+                }
+            "#,
         )
         .file("utils/Cargo.toml", &basic_manifest("utils", "0.0.1"))
         .file("utils/src/lib.rs", "")
@@ -162,12 +167,14 @@ fn include_only_the_binary_from_the_current_package() {
 
     p.cargo("build -Z unstable-options --bin foo --out-dir out")
         .masquerade_as_nightly_cargo()
+        .enable_mac_dsym()
         .run();
     check_dir_contents(
         &p.root().join("out"),
         &["foo"],
         &["foo", "foo.dSYM"],
         &["foo.exe", "foo.pdb"],
+        &["foo.exe"],
     );
 }
 
@@ -175,8 +182,8 @@ fn include_only_the_binary_from_the_current_package() {
 fn out_dir_is_a_file() {
     let p = project()
         .file("src/main.rs", r#"fn main() { println!("Hello, World!") }"#)
+        .file("out", "")
         .build();
-    File::create(p.root().join("out")).unwrap();
 
     p.cargo("build -Z unstable-options --out-dir out")
         .masquerade_as_nightly_cargo()
@@ -235,6 +242,7 @@ fn avoid_build_scripts() {
 
     p.cargo("build -Z unstable-options --out-dir out -vv")
         .masquerade_as_nightly_cargo()
+        .enable_mac_dsym()
         .with_stdout_contains("[a 0.0.1] hello-build-a")
         .with_stdout_contains("[b 0.0.1] hello-build-b")
         .run();
@@ -243,6 +251,33 @@ fn avoid_build_scripts() {
         &["a", "b"],
         &["a", "a.dSYM", "b", "b.dSYM"],
         &["a.exe", "a.pdb", "b.exe", "b.pdb"],
+        &["a.exe", "b.exe"],
+    );
+}
+
+#[cargo_test]
+fn cargo_build_out_dir() {
+    let p = project()
+        .file("src/main.rs", r#"fn main() { println!("Hello, World!") }"#)
+        .file(
+            ".cargo/config",
+            r#"
+            [build]
+            out-dir = "out"
+            "#,
+        )
+        .build();
+
+    p.cargo("build -Z unstable-options")
+        .masquerade_as_nightly_cargo()
+        .enable_mac_dsym()
+        .run();
+    check_dir_contents(
+        &p.root().join("out"),
+        &["foo"],
+        &["foo", "foo.dSYM"],
+        &["foo.exe", "foo.pdb"],
+        &["foo.exe"],
     );
 }
 
@@ -250,10 +285,15 @@ fn check_dir_contents(
     out_dir: &Path,
     expected_linux: &[&str],
     expected_mac: &[&str],
-    expected_win: &[&str],
+    expected_win_msvc: &[&str],
+    expected_win_gnu: &[&str],
 ) {
     let expected = if cfg!(target_os = "windows") {
-        expected_win
+        if cfg!(target_env = "msvc") {
+            expected_win_msvc
+        } else {
+            expected_win_gnu
+        }
     } else if cfg!(target_os = "macos") {
         expected_mac
     } else {

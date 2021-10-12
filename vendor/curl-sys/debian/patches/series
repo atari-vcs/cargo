@@ -1,2 +1,3 @@
 disable-mesalink.patch
 disable-vendor.patch
+disable-libz-sys.patch

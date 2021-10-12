@@ -1,6 +1,16 @@
-#![allow(non_camel_case_types, non_upper_case_globals, non_snake_case)]
-#![allow(dead_code, overflowing_literals, unused_imports)]
+#![allow(
+    clippy::missing_safety_doc,
+    clippy::unreadable_literal,
+    clippy::upper_case_acronyms,
+    dead_code,
+    non_camel_case_types,
+    non_snake_case,
+    non_upper_case_globals,
+    overflowing_literals,
+    unused_imports
+)]
 #![doc(html_root_url = "https://docs.rs/openssl-sys/0.9")]
+#![recursion_limit = "128"] // configure fixed limit across all rust versions
 
 extern crate libc;
 
@@ -36,6 +46,7 @@ pub use ssl::*;
 pub use ssl3::*;
 pub use stack::*;
 pub use tls1::*;
+pub use types::*;
 pub use x509::*;
 pub use x509_vfy::*;
 pub use x509v3::*;
@@ -73,6 +84,7 @@ mod ssl;
 mod ssl3;
 mod stack;
 mod tls1;
+mod types;
 mod x509;
 mod x509_vfy;
 mod x509v3;
@@ -93,8 +105,13 @@ pub fn init() {
     // explicitly initialize to work around https://github.com/openssl/openssl/issues/3505
     static INIT: Once = Once::new();
 
+    #[cfg(not(ossl111b))]
+    let init_options = OPENSSL_INIT_LOAD_SSL_STRINGS;
+    #[cfg(ossl111b)]
+    let init_options = OPENSSL_INIT_LOAD_SSL_STRINGS | OPENSSL_INIT_NO_ATEXIT;
+
     INIT.call_once(|| unsafe {
-        OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS, ptr::null_mut());
+        OPENSSL_init_ssl(init_options, ptr::null_mut());
     })
 }
 

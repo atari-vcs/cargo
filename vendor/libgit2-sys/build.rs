@@ -1,15 +1,18 @@
 use std::env;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
     let https = env::var("CARGO_FEATURE_HTTPS").is_ok();
     let ssh = env::var("CARGO_FEATURE_SSH").is_ok();
+    let zlib_ng_compat = env::var("CARGO_FEATURE_ZLIB_NG_COMPAT").is_ok();
 
-    if true {
+    // To use zlib-ng in zlib-compat mode, we have to build libgit2 ourselves.
+    if !zlib_ng_compat {
         let mut cfg = pkg_config::Config::new();
-        if let Ok(lib) = cfg.atleast_version("0.28.0").probe("libgit2") {
+        if let Ok(lib) = cfg.atleast_version("1.1.0").probe("libgit2") {
             for include in &lib.include_paths {
                 println!("cargo:root={}", include.display());
             }
@@ -19,7 +22,7 @@ fn main() {
 
     if false {
         let _ = Command::new("git")
-            .args(&["submodule", "update", "--init"])
+            .args(&["submodule", "update", "--init", "libgit2"])
             .status();
     }
 
@@ -75,6 +78,7 @@ fn main() {
     // when when COMPILE_PCRE8 is not defined, which is the default.
     add_c_files(&mut cfg, "libgit2/deps/pcre");
 
+    cfg.file("libgit2/src/allocators/failalloc.c");
     cfg.file("libgit2/src/allocators/stdalloc.c");
 
     if windows {
@@ -93,7 +97,7 @@ fn main() {
         add_c_files(&mut cfg, "libgit2/src/unix");
         cfg.flag("-fvisibility=hidden");
     }
-    if target.contains("solaris") {
+    if target.contains("solaris") || target.contains("illumos") {
         cfg.define("_POSIX_C_SOURCE", "200112L");
         cfg.define("__EXTENSIONS__", None);
     }
@@ -103,6 +107,7 @@ fn main() {
     features.push_str("#ifndef INCLUDE_features_h\n");
     features.push_str("#define INCLUDE_features_h\n");
     features.push_str("#define GIT_THREADS 1\n");
+    features.push_str("#define GIT_TRACE 1\n");
 
     if !target.contains("android") {
         features.push_str("#define GIT_USE_NSEC 1\n");
@@ -179,6 +184,10 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=Security");
         println!("cargo:rustc-link-lib=framework=CoreFoundation");
     }
+
+    rerun_if(Path::new("libgit2/include"));
+    rerun_if(Path::new("libgit2/src"));
+    rerun_if(Path::new("libgit2/deps"));
 }
 
 fn cp_r(from: impl AsRef<Path>, to: impl AsRef<Path>) {
@@ -197,13 +206,27 @@ fn cp_r(from: impl AsRef<Path>, to: impl AsRef<Path>) {
 }
 
 fn add_c_files(build: &mut cc::Build, path: impl AsRef<Path>) {
-    for e in path.as_ref().read_dir().unwrap() {
-        let e = e.unwrap();
+    // sort the C files to ensure a deterministic build for reproducible builds
+    let dir = path.as_ref().read_dir().unwrap();
+    let mut paths = dir.collect::<io::Result<Vec<_>>>().unwrap();
+    paths.sort_by_key(|e| e.path());
+
+    for e in paths {
         let path = e.path();
         if e.file_type().unwrap().is_dir() {
             // skip dirs for now
         } else if path.extension().and_then(|s| s.to_str()) == Some("c") {
             build.file(&path);
         }
+    }
+}
+
+fn rerun_if(path: &Path) {
+    if path.is_dir() {
+        for entry in fs::read_dir(path).expect("read_dir") {
+            rerun_if(&entry.expect("entry").path());
+        }
+    } else {
+        println!("cargo:rerun-if-changed={}", path.display());
     }
 }

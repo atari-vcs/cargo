@@ -13,7 +13,7 @@
 [package]
 edition = "2018"
 name = "filetime"
-version = "0.2.9"
+version = "0.2.15"
 authors = ["Alex Crichton <alex@alexcrichton.com>"]
 description = "Platform-agnostic accessors of timestamps in File metadata\n"
 homepage = "https://github.com/alexcrichton/filetime"
@@ -23,11 +23,11 @@ keywords = ["timestamp", "mtime"]
 license = "MIT/Apache-2.0"
 repository = "https://github.com/alexcrichton/filetime"
 [dependencies.cfg-if]
-version = "0.1.6"
+version = "1.0.0"
 [dev-dependencies.tempfile]
 version = "3"
 [target."cfg(target_os = \"redox\")".dependencies.redox_syscall]
-version = "0.1"
+version = "0.2.9"
 [target."cfg(unix)".dependencies.libc]
 version = "0.2.27"
 [target."cfg(windows)".dependencies.winapi]

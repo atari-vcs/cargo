@@ -1,10 +1,8 @@
 //! Tests for caching compiler diagnostics.
 
-use cargo_test_support::{
-    basic_manifest, clippy_is_available, is_coarse_mtime, process, project, registry::Package,
-    sleep_ms,
-};
-use std::path::Path;
+use super::messages::raw_rustc_output;
+use cargo_test_support::tools;
+use cargo_test_support::{basic_manifest, is_coarse_mtime, project, registry::Package, sleep_ms};
 
 fn as_str(bytes: &[u8]) -> &str {
     std::str::from_utf8(bytes).expect("valid utf-8")
@@ -23,33 +21,23 @@ fn simple() {
         )
         .build();
 
-    let agnostic_path = Path::new("src").join("lib.rs");
-    let agnostic_path_s = agnostic_path.to_str().unwrap();
-
     // Capture what rustc actually emits. This is done to avoid relying on the
     // exact message formatting in rustc.
-    let rustc_output = process("rustc")
-        .cwd(p.root())
-        .args(&["--crate-type=lib", agnostic_path_s])
-        .exec_with_output()
-        .expect("rustc to run");
-
-    assert!(rustc_output.stdout.is_empty());
-    assert!(rustc_output.status.success());
+    let rustc_output = raw_rustc_output(&p, "src/lib.rs", &[]);
 
     // -q so the output is the same as rustc (no "Compiling" or "Finished").
     let cargo_output1 = p
         .cargo("check -q --color=never")
         .exec_with_output()
         .expect("cargo to run");
-    assert_eq!(as_str(&rustc_output.stderr), as_str(&cargo_output1.stderr));
+    assert_eq!(rustc_output, as_str(&cargo_output1.stderr));
     assert!(cargo_output1.stdout.is_empty());
     // Check that the cached version is exactly the same.
     let cargo_output2 = p
         .cargo("check -q")
         .exec_with_output()
         .expect("cargo to run");
-    assert_eq!(as_str(&rustc_output.stderr), as_str(&cargo_output2.stderr));
+    assert_eq!(rustc_output, as_str(&cargo_output2.stderr));
     assert!(cargo_output2.stdout.is_empty());
 }
 
@@ -66,30 +54,20 @@ fn simple_short() {
         )
         .build();
 
-    let agnostic_path = Path::new("src").join("lib.rs");
-    let agnostic_path_s = agnostic_path.to_str().unwrap();
-
-    let rustc_output = process("rustc")
-        .cwd(p.root())
-        .args(&["--crate-type=lib", agnostic_path_s, "--error-format=short"])
-        .exec_with_output()
-        .expect("rustc to run");
-
-    assert!(rustc_output.stdout.is_empty());
-    assert!(rustc_output.status.success());
+    let rustc_output = raw_rustc_output(&p, "src/lib.rs", &["--error-format=short"]);
 
     let cargo_output1 = p
         .cargo("check -q --color=never --message-format=short")
         .exec_with_output()
         .expect("cargo to run");
-    assert_eq!(as_str(&rustc_output.stderr), as_str(&cargo_output1.stderr));
+    assert_eq!(rustc_output, as_str(&cargo_output1.stderr));
     // assert!(cargo_output1.stdout.is_empty());
     let cargo_output2 = p
         .cargo("check -q --message-format=short")
         .exec_with_output()
         .expect("cargo to run");
     println!("{}", String::from_utf8_lossy(&cargo_output2.stdout));
-    assert_eq!(as_str(&rustc_output.stderr), as_str(&cargo_output2.stderr));
+    assert_eq!(rustc_output, as_str(&cargo_output2.stderr));
     assert!(cargo_output2.stdout.is_empty());
 }
 
@@ -106,31 +84,18 @@ fn color() {
         return s.replace("\x1b[0m\x1b[0m", "\x1b[0m");
         #[cfg(not(windows))]
         return s.to_string();
-    };
+    }
 
     let compare = |a, b| {
         assert_eq!(normalize(a), normalize(b));
     };
 
-    let agnostic_path = Path::new("src").join("lib.rs");
-    let agnostic_path_s = agnostic_path.to_str().unwrap();
     // Capture the original color output.
-    let rustc_output = process("rustc")
-        .cwd(p.root())
-        .args(&["--crate-type=lib", agnostic_path_s, "--color=always"])
-        .exec_with_output()
-        .expect("rustc to run");
-    assert!(rustc_output.status.success());
-    let rustc_color = as_str(&rustc_output.stderr);
+    let rustc_color = raw_rustc_output(&p, "src/lib.rs", &["--color=always"]);
     assert!(rustc_color.contains("\x1b["));
 
     // Capture the original non-color output.
-    let rustc_output = process("rustc")
-        .cwd(p.root())
-        .args(&["--crate-type=lib", agnostic_path_s])
-        .exec_with_output()
-        .expect("rustc to run");
-    let rustc_nocolor = as_str(&rustc_output.stderr);
+    let rustc_nocolor = raw_rustc_output(&p, "src/lib.rs", &[]);
     assert!(!rustc_nocolor.contains("\x1b["));
 
     // First pass, non-cached, with color, should be the same.
@@ -138,21 +103,21 @@ fn color() {
         .cargo("check -q --color=always")
         .exec_with_output()
         .expect("cargo to run");
-    compare(rustc_color, as_str(&cargo_output1.stderr));
+    compare(&rustc_color, as_str(&cargo_output1.stderr));
 
     // Replay cached, with color.
     let cargo_output2 = p
         .cargo("check -q --color=always")
         .exec_with_output()
         .expect("cargo to run");
-    compare(rustc_color, as_str(&cargo_output2.stderr));
+    compare(&rustc_color, as_str(&cargo_output2.stderr));
 
     // Replay cached, no color.
     let cargo_output_nocolor = p
         .cargo("check -q --color=never")
         .exec_with_output()
         .expect("cargo to run");
-    compare(rustc_nocolor, as_str(&cargo_output_nocolor.stderr));
+    compare(&rustc_nocolor, as_str(&cargo_output_nocolor.stderr));
 }
 
 #[cargo_test]
@@ -195,7 +160,7 @@ fn clears_cache_after_fix() {
     // Fill the cache.
     p.cargo("check").with_stderr_contains("[..]asdf[..]").run();
     let cpath = p
-        .glob("target/debug/.fingerprint/foo-*/output")
+        .glob("target/debug/.fingerprint/foo-*/output-*")
         .next()
         .unwrap()
         .unwrap();
@@ -216,7 +181,10 @@ fn clears_cache_after_fix() {
 ",
         )
         .run();
-    assert_eq!(p.glob("target/debug/.fingerprint/foo-*/output").count(), 0);
+    assert_eq!(
+        p.glob("target/debug/.fingerprint/foo-*/output-*").count(),
+        0
+    );
 
     // And again, check the cache is correct.
     p.cargo("check")
@@ -236,12 +204,8 @@ fn rustdoc() {
         .file(
             "src/lib.rs",
             "
-            #![warn(private_doc_tests)]
-            /// asdf
-            /// ```
-            /// let x = 1;
-            /// ```
-            fn f() {}
+            #![warn(missing_docs)]
+            pub fn f() {}
             ",
         )
         .build();
@@ -252,9 +216,12 @@ fn rustdoc() {
         .expect("rustdoc to run");
     assert!(rustdoc_output.status.success());
     let rustdoc_stderr = as_str(&rustdoc_output.stderr);
-    assert!(rustdoc_stderr.contains("private"));
+    assert!(rustdoc_stderr.contains("missing"));
     assert!(rustdoc_stderr.contains("\x1b["));
-    assert_eq!(p.glob("target/debug/.fingerprint/foo-*/output").count(), 1);
+    assert_eq!(
+        p.glob("target/debug/.fingerprint/foo-*/output-*").count(),
+        1
+    );
 
     // Check the cached output.
     let rustdoc_output = p
@@ -272,56 +239,6 @@ fn fix() {
     p.cargo("fix --edition --allow-no-vcs").run();
 
     assert_eq!(p.read_file("src/lib.rs"), "pub fn r#try() {}");
-}
-
-#[cargo_test]
-fn clippy() {
-    if !clippy_is_available() {
-        return;
-    }
-
-    // Caching clippy output.
-    // This is just a random clippy lint (assertions_on_constants) that
-    // hopefully won't change much in the future.
-    let p = project()
-        .file(
-            "src/lib.rs",
-            "pub fn f() { assert!(true); }\n\
-             fn unused_func() {}",
-        )
-        .build();
-
-    p.cargo("clippy-preview -Zunstable-options -v")
-        .masquerade_as_nightly_cargo()
-        .with_stderr_contains("[RUNNING] `clippy[..]")
-        .with_stderr_contains("[..]assert!(true)[..]")
-        .run();
-
-    // `check` should be separate from clippy.
-    p.cargo("check -v")
-        .with_stderr_contains(
-            "\
-[CHECKING] foo [..]
-[RUNNING] `rustc[..]
-[WARNING] [..]unused_func[..]
-",
-        )
-        .with_stderr_does_not_contain("[..]assert!(true)[..]")
-        .run();
-
-    // Again, reading from the cache.
-    p.cargo("clippy-preview -Zunstable-options -v")
-        .masquerade_as_nightly_cargo()
-        .with_stderr_contains("[FRESH] foo [..]")
-        .with_stderr_contains("[..]assert!(true)[..]")
-        .run();
-
-    // And `check` should also be fresh, reading from cache.
-    p.cargo("check -v")
-        .with_stderr_contains("[FRESH] foo [..]")
-        .with_stderr_contains("[WARNING] [..]unused_func[..]")
-        .with_stderr_does_not_contain("[..]assert!(true)[..]")
-        .run();
 }
 
 #[cargo_test]
@@ -382,14 +299,23 @@ fn doesnt_create_extra_files() {
 
     p.cargo("build").run();
 
-    assert_eq!(p.glob("target/debug/.fingerprint/foo-*/output").count(), 0);
-    assert_eq!(p.glob("target/debug/.fingerprint/dep-*/output").count(), 0);
+    assert_eq!(
+        p.glob("target/debug/.fingerprint/foo-*/output-*").count(),
+        0
+    );
+    assert_eq!(
+        p.glob("target/debug/.fingerprint/dep-*/output-*").count(),
+        0
+    );
     if is_coarse_mtime() {
         sleep_ms(1000);
     }
     p.change_file("src/lib.rs", "fn unused() {}");
     p.cargo("build").run();
-    assert_eq!(p.glob("target/debug/.fingerprint/foo-*/output").count(), 1);
+    assert_eq!(
+        p.glob("target/debug/.fingerprint/foo-*/output-*").count(),
+        1
+    );
 }
 
 #[cargo_test]
@@ -435,5 +361,128 @@ line 2
 [FINISHED] dev [..]
 ",
         )
+        .run();
+}
+
+#[cargo_test]
+fn caching_large_output() {
+    // Handles large number of messages.
+    // This is an arbitrary amount that is greater than the 100 used in
+    // job_queue. This is here to check for deadlocks or any other problems.
+    const COUNT: usize = 250;
+    let rustc = project()
+        .at("rustc")
+        .file("Cargo.toml", &basic_manifest("rustc_alt", "1.0.0"))
+        .file(
+            "src/main.rs",
+            &format!(
+                r#"
+                fn main() {{
+                    for i in 0..{} {{
+                        eprintln!("{{{{\"message\": \"test message {{}}\", \"level\": \"warning\", \
+                            \"spans\": [], \"children\": [], \"rendered\": \"test message {{}}\"}}}}",
+                            i, i);
+                    }}
+                    let r = std::process::Command::new("rustc")
+                        .args(std::env::args_os().skip(1))
+                        .status();
+                    std::process::exit(r.unwrap().code().unwrap_or(2));
+                }}
+                "#,
+                COUNT
+            ),
+        )
+        .build();
+
+    let mut expected = String::new();
+    for i in 0..COUNT {
+        expected.push_str(&format!("test message {}\n", i));
+    }
+
+    rustc.cargo("build").run();
+    let p = project().file("src/lib.rs", "").build();
+    p.cargo("check")
+        .env("RUSTC", rustc.bin("rustc_alt"))
+        .with_stderr(&format!(
+            "\
+[CHECKING] foo [..]
+{}warning: `foo` (lib) generated 250 warnings
+[FINISHED] dev [..]
+",
+            expected
+        ))
+        .run();
+
+    p.cargo("check")
+        .env("RUSTC", rustc.bin("rustc_alt"))
+        .with_stderr(&format!(
+            "\
+{}warning: `foo` (lib) generated 250 warnings
+[FINISHED] dev [..]
+",
+            expected
+        ))
+        .run();
+}
+
+#[cargo_test]
+fn rustc_workspace_wrapper() {
+    let p = project()
+        .file(
+            "src/lib.rs",
+            "pub fn f() { assert!(true); }\n\
+             fn unused_func() {}",
+        )
+        .build();
+
+    p.cargo("check -v")
+        .env("RUSTC_WORKSPACE_WRAPPER", tools::echo_wrapper())
+        .with_stderr_contains("WRAPPER CALLED: rustc --crate-name foo src/lib.rs [..]")
+        .run();
+
+    // Check without a wrapper should rebuild
+    p.cargo("check -v")
+        .with_stderr_contains(
+            "\
+[CHECKING] foo [..]
+[RUNNING] `rustc[..]
+[WARNING] [..]unused_func[..]
+",
+        )
+        .with_stdout_does_not_contain("WRAPPER CALLED: rustc --crate-name foo src/lib.rs [..]")
+        .run();
+
+    // Again, reading from the cache.
+    p.cargo("check -v")
+        .env("RUSTC_WORKSPACE_WRAPPER", tools::echo_wrapper())
+        .with_stderr_contains("[FRESH] foo [..]")
+        .with_stdout_does_not_contain("WRAPPER CALLED: rustc --crate-name foo src/lib.rs [..]")
+        .run();
+
+    // And `check` should also be fresh, reading from cache.
+    p.cargo("check -v")
+        .with_stderr_contains("[FRESH] foo [..]")
+        .with_stderr_contains("[WARNING] [..]unused_func[..]")
+        .with_stdout_does_not_contain("WRAPPER CALLED: rustc --crate-name foo src/lib.rs [..]")
+        .run();
+}
+
+#[cargo_test]
+fn wacky_hashless_fingerprint() {
+    // On Windows, executables don't have hashes. This checks for a bad
+    // assumption that caused bad caching.
+    let p = project()
+        .file("src/bin/a.rs", "fn main() { let unused = 1; }")
+        .file("src/bin/b.rs", "fn main() {}")
+        .build();
+    p.cargo("build --bin b")
+        .with_stderr_does_not_contain("[..]unused[..]")
+        .run();
+    p.cargo("build --bin a")
+        .with_stderr_contains("[..]unused[..]")
+        .run();
+    // This should not pick up the cache from `a`.
+    p.cargo("build --bin b")
+        .with_stderr_does_not_contain("[..]unused[..]")
         .run();
 }

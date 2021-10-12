@@ -1,6 +1,5 @@
-use libc::{c_char, c_int, c_uint, c_void};
+use libc::{c_char, c_int, c_uint, c_void, size_t};
 use std::ffi::{CStr, CString};
-use std::marker;
 use std::mem;
 use std::ptr;
 use std::slice;
@@ -8,7 +7,9 @@ use std::str;
 
 use crate::cert::Cert;
 use crate::util::Binding;
-use crate::{panic, raw, Cred, CredentialType, Error, Oid};
+use crate::{
+    panic, raw, Cred, CredentialType, Error, IndexerProgress, Oid, PackBuilderStage, Progress,
+};
 
 /// A structure to contain the callbacks which are invoked when a repository is
 /// being updated or downloaded.
@@ -16,23 +17,14 @@ use crate::{panic, raw, Cred, CredentialType, Error, Oid};
 /// These callbacks are used to manage facilities such as authentication,
 /// transfer progress, etc.
 pub struct RemoteCallbacks<'a> {
-    progress: Option<Box<TransferProgress<'a>>>,
+    push_progress: Option<Box<PushTransferProgress<'a>>>,
+    progress: Option<Box<IndexerProgress<'a>>>,
+    pack_progress: Option<Box<PackProgress<'a>>>,
     credentials: Option<Box<Credentials<'a>>>,
     sideband_progress: Option<Box<TransportMessage<'a>>>,
     update_tips: Option<Box<UpdateTips<'a>>>,
     certificate_check: Option<Box<CertificateCheck<'a>>>,
     push_update_reference: Option<Box<PushUpdateReference<'a>>>,
-}
-
-/// Struct representing the progress by an in-flight transfer.
-pub struct Progress<'a> {
-    raw: ProgressState,
-    _marker: marker::PhantomData<&'a raw::git_transfer_progress>,
-}
-
-enum ProgressState {
-    Borrowed(*const raw::git_transfer_progress),
-    Owned(raw::git_transfer_progress),
 }
 
 /// Callback used to acquire credentials for when a remote is fetched.
@@ -43,15 +35,6 @@ enum ProgressState {
 /// * `allowed_types` - a bitmask stating which cred types are ok to return.
 pub type Credentials<'a> =
     dyn FnMut(&str, Option<&str>, CredentialType) -> Result<Cred, Error> + 'a;
-
-/// Callback to be invoked while a transfer is in progress.
-///
-/// This callback will be periodically called with updates to the progress of
-/// the transfer so far. The return value indicates whether the transfer should
-/// continue. A return value of `false` will cancel the transfer.
-///
-/// * `progress` - the progress being made so far.
-pub type TransferProgress<'a> = dyn FnMut(Progress<'_>) -> bool + 'a;
 
 /// Callback for receiving messages delivered by the transport.
 ///
@@ -77,6 +60,22 @@ pub type CertificateCheck<'a> = dyn FnMut(&Cert<'_>, &str) -> bool + 'a;
 /// was rejected by the remote server with a reason why.
 pub type PushUpdateReference<'a> = dyn FnMut(&str, Option<&str>) -> Result<(), Error> + 'a;
 
+/// Callback for push transfer progress
+///
+/// Parameters:
+///     * current
+///     * total
+///     * bytes
+pub type PushTransferProgress<'a> = dyn FnMut(usize, usize, usize) + 'a;
+
+/// Callback for pack progress
+///
+/// Parameters:
+///     * stage
+///     * current
+///     * total
+pub type PackProgress<'a> = dyn FnMut(PackBuilderStage, usize, usize) + 'a;
+
 impl<'a> Default for RemoteCallbacks<'a> {
     fn default() -> Self {
         Self::new()
@@ -89,14 +88,36 @@ impl<'a> RemoteCallbacks<'a> {
         RemoteCallbacks {
             credentials: None,
             progress: None,
+            pack_progress: None,
             sideband_progress: None,
             update_tips: None,
             certificate_check: None,
             push_update_reference: None,
+            push_progress: None,
         }
     }
 
     /// The callback through which to fetch credentials if required.
+    ///
+    /// # Example
+    ///
+    /// Prepare a callback to authenticate using the `$HOME/.ssh/id_rsa` SSH key, and
+    /// extracting the username from the URL (i.e. git@github.com:rust-lang/git2-rs.git):
+    ///
+    /// ```no_run
+    /// use git2::{Cred, RemoteCallbacks};
+    /// use std::env;
+    ///
+    /// let mut callbacks = RemoteCallbacks::new();
+    /// callbacks.credentials(|_url, username_from_url, _allowed_types| {
+    ///   Cred::ssh_key(
+    ///     username_from_url.unwrap(),
+    ///     None,
+    ///     std::path::Path::new(&format!("{}/.ssh/id_rsa", env::var("HOME").unwrap())),
+    ///     None,
+    ///   )
+    /// });
+    /// ```
     pub fn credentials<F>(&mut self, cb: F) -> &mut RemoteCallbacks<'a>
     where
         F: FnMut(&str, Option<&str>, CredentialType) -> Result<Cred, Error> + 'a,
@@ -110,7 +131,7 @@ impl<'a> RemoteCallbacks<'a> {
     where
         F: FnMut(Progress<'_>) -> bool + 'a,
     {
-        self.progress = Some(Box::new(cb) as Box<TransferProgress<'a>>);
+        self.progress = Some(Box::new(cb) as Box<IndexerProgress<'a>>);
         self
     }
 
@@ -159,6 +180,26 @@ impl<'a> RemoteCallbacks<'a> {
         self.push_update_reference = Some(Box::new(cb) as Box<PushUpdateReference<'a>>);
         self
     }
+
+    /// The callback through which progress of push transfer is monitored
+    pub fn push_transfer_progress<F>(&mut self, cb: F) -> &mut RemoteCallbacks<'a>
+    where
+        F: FnMut(usize, usize, usize) + 'a,
+    {
+        self.push_progress = Some(Box::new(cb) as Box<PushTransferProgress<'a>>);
+        self
+    }
+
+    /// Function to call with progress information during pack building.
+    /// Be aware that this is called inline with pack building operations,
+    /// so performance may be affected.
+    pub fn pack_progress<F>(&mut self, cb: F) -> &mut RemoteCallbacks<'a>
+    where
+        F: FnMut(PackBuilderStage, usize, usize) + 'a,
+    {
+        self.pack_progress = Some(Box::new(cb) as Box<PackProgress<'a>>);
+        self
+    }
 }
 
 impl<'a> Binding for RemoteCallbacks<'a> {
@@ -175,24 +216,25 @@ impl<'a> Binding for RemoteCallbacks<'a> {
                 0
             );
             if self.progress.is_some() {
-                let f: raw::git_transfer_progress_cb = transfer_progress_cb;
-                callbacks.transfer_progress = Some(f);
+                callbacks.transfer_progress = Some(transfer_progress_cb);
             }
             if self.credentials.is_some() {
-                let f: raw::git_cred_acquire_cb = credentials_cb;
-                callbacks.credentials = Some(f);
+                callbacks.credentials = Some(credentials_cb);
             }
             if self.sideband_progress.is_some() {
-                let f: raw::git_transport_message_cb = sideband_progress_cb;
-                callbacks.sideband_progress = Some(f);
+                callbacks.sideband_progress = Some(sideband_progress_cb);
             }
             if self.certificate_check.is_some() {
-                let f: raw::git_transport_certificate_check_cb = certificate_check_cb;
-                callbacks.certificate_check = Some(f);
+                callbacks.certificate_check = Some(certificate_check_cb);
             }
             if self.push_update_reference.is_some() {
-                let f: extern "C" fn(_, _, _) -> c_int = push_update_reference_cb;
-                callbacks.push_update_reference = Some(f);
+                callbacks.push_update_reference = Some(push_update_reference_cb);
+            }
+            if self.push_progress.is_some() {
+                callbacks.push_transfer_progress = Some(push_transfer_progress_cb);
+            }
+            if self.pack_progress.is_some() {
+                callbacks.pack_progress = Some(pack_progress_cb);
             }
             if self.update_tips.is_some() {
                 let f: extern "C" fn(
@@ -205,63 +247,6 @@ impl<'a> Binding for RemoteCallbacks<'a> {
             }
             callbacks.payload = self as *const _ as *mut _;
             callbacks
-        }
-    }
-}
-
-impl<'a> Progress<'a> {
-    /// Number of objects in the packfile being downloaded
-    pub fn total_objects(&self) -> usize {
-        unsafe { (*self.raw()).total_objects as usize }
-    }
-    /// Received objects that have been hashed
-    pub fn indexed_objects(&self) -> usize {
-        unsafe { (*self.raw()).indexed_objects as usize }
-    }
-    /// Objects which have been downloaded
-    pub fn received_objects(&self) -> usize {
-        unsafe { (*self.raw()).received_objects as usize }
-    }
-    /// Locally-available objects that have been injected in order to fix a thin
-    /// pack.
-    pub fn local_objects(&self) -> usize {
-        unsafe { (*self.raw()).local_objects as usize }
-    }
-    /// Number of deltas in the packfile being downloaded
-    pub fn total_deltas(&self) -> usize {
-        unsafe { (*self.raw()).total_deltas as usize }
-    }
-    /// Received deltas that have been hashed.
-    pub fn indexed_deltas(&self) -> usize {
-        unsafe { (*self.raw()).indexed_deltas as usize }
-    }
-    /// Size of the packfile received up to now
-    pub fn received_bytes(&self) -> usize {
-        unsafe { (*self.raw()).received_bytes as usize }
-    }
-
-    /// Convert this to an owned version of `Progress`.
-    pub fn to_owned(&self) -> Progress<'static> {
-        Progress {
-            raw: ProgressState::Owned(unsafe { *self.raw() }),
-            _marker: marker::PhantomData,
-        }
-    }
-}
-
-impl<'a> Binding for Progress<'a> {
-    type Raw = *const raw::git_transfer_progress;
-    unsafe fn from_raw(raw: *const raw::git_transfer_progress) -> Progress<'a> {
-        Progress {
-            raw: ProgressState::Borrowed(raw),
-            _marker: marker::PhantomData,
-        }
-    }
-
-    fn raw(&self) -> *const raw::git_transfer_progress {
-        match self.raw {
-            ProgressState::Borrowed(raw) => raw,
-            ProgressState::Owned(ref raw) => raw as *const _,
         }
     }
 }
@@ -316,7 +301,7 @@ extern "C" fn credentials_cb(
 }
 
 extern "C" fn transfer_progress_cb(
-    stats: *const raw::git_transfer_progress,
+    stats: *const raw::git_indexer_progress,
     payload: *mut c_void,
 ) -> c_int {
     let ok = panic::wrap(|| unsafe {
@@ -420,6 +405,48 @@ extern "C" fn push_update_reference_cb(
             Ok(()) => 0,
             Err(e) => e.raw_code(),
         }
+    })
+    .unwrap_or(-1)
+}
+
+extern "C" fn push_transfer_progress_cb(
+    progress: c_uint,
+    total: c_uint,
+    bytes: size_t,
+    data: *mut c_void,
+) -> c_int {
+    panic::wrap(|| unsafe {
+        let payload = &mut *(data as *mut RemoteCallbacks<'_>);
+        let callback = match payload.push_progress {
+            Some(ref mut c) => c,
+            None => return 0,
+        };
+
+        callback(progress as usize, total as usize, bytes as usize);
+
+        0
+    })
+    .unwrap_or(-1)
+}
+
+extern "C" fn pack_progress_cb(
+    stage: raw::git_packbuilder_stage_t,
+    current: c_uint,
+    total: c_uint,
+    data: *mut c_void,
+) -> c_int {
+    panic::wrap(|| unsafe {
+        let payload = &mut *(data as *mut RemoteCallbacks<'_>);
+        let callback = match payload.pack_progress {
+            Some(ref mut c) => c,
+            None => return 0,
+        };
+
+        let stage = Binding::from_raw(stage);
+
+        callback(stage, current as usize, total as usize);
+
+        0
     })
     .unwrap_or(-1)
 }

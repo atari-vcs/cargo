@@ -1,30 +1,52 @@
---- a/src/lib.rs
-+++ b/src/lib.rs
-@@ -14,7 +14,7 @@
- //!
- //! ## Platform Implementation Details
- //! On Windows the `ShellExecuteW` Windows API function is used. On Mac the system `open` command is
--//! used. On other platforms, the `xdg-open` script is used. The system `xdg-open` is not used;
-+//! used. On other platforms, the system `xdg-open` script is used.
- //! instead a version is embedded within this library.
+--- a/src/linux_and_more.rs
++++ b/src/linux_and_more.rs
+@@ -1,11 +1,8 @@
+ use crate::OpenError;
+ use std::ffi::OsStr;
+-use std::io::Write;
+ use std::process::{Child, Command, Stdio};
+ use std::{fs, io};
  
- #![warn(
-@@ -167,14 +167,12 @@
- 
- #[cfg(not(any(target_os = "windows", target_os = "macos")))]
- fn open_sys(path: &OsStr) -> Result<(), OpenError> {
--    const XDG_OPEN_SCRIPT: &[u8] = include_bytes!("xdg-open");
+-const XDG_OPEN_SCRIPT: &[u8] = include_bytes!("xdg-open");
 -
-     open_not_windows(
--        "sh",
-+        "xdg-open",
-         path,
--        &["-s"],
--        Some(XDG_OPEN_SCRIPT),
--        "xdg-open (internal)",
-+        &[],
-+        None,
-+        "xdg-open",
-     )
+ pub(crate) fn open(path: &OsStr) -> Result<(), OpenError> {
+     if crate::is_wsl() {
+         wsl_open(path)
+@@ -26,10 +23,7 @@
  }
  
+ fn non_wsl_open(path: &OsStr) -> Result<(), OpenError> {
+-    if open_with_system_xdg_open(path).is_err() {
+-        open_with_internal_xdg_open(path)?;
+-    }
+-
++    open_with_system_xdg_open(path).map_err(OpenError::Io)?;
+     Ok(())
+ }
+ 
+@@ -58,25 +52,6 @@
+         .spawn()
+ }
+ 
+-fn open_with_internal_xdg_open(path: &OsStr) -> Result<Child, OpenError> {
+-    let mut sh = Command::new("sh")
+-        .arg("-s")
+-        .arg(path)
+-        .stdin(Stdio::piped())
+-        .stdout(Stdio::null())
+-        .stderr(Stdio::null())
+-        .spawn()
+-        .map_err(OpenError::Io)?;
+-
+-    sh.stdin
+-        .as_mut()
+-        .unwrap()
+-        .write_all(XDG_OPEN_SCRIPT)
+-        .map_err(OpenError::Io)?;
+-
+-    Ok(sh)
+-}
+-
+ pub(crate) fn is_wsl() -> bool {
+     if is_docker() {
+         return false;

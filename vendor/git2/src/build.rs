@@ -7,11 +7,46 @@ use std::path::Path;
 use std::ptr;
 
 use crate::util::{self, Binding};
-use crate::{panic, raw, Error, FetchOptions, IntoCString, Repository};
-use crate::{CheckoutNotificationType, DiffFile, Remote};
+use crate::{panic, raw, Error, FetchOptions, IntoCString, Oid, Repository, Tree};
+use crate::{CheckoutNotificationType, DiffFile, FileMode, Remote};
 
 /// A builder struct which is used to build configuration for cloning a new git
 /// repository.
+///
+/// # Example
+///
+/// Cloning using SSH:
+///
+/// ```no_run
+/// use git2::{Cred, Error, RemoteCallbacks};
+/// use std::env;
+/// use std::path::Path;
+///
+///   // Prepare callbacks.
+///   let mut callbacks = RemoteCallbacks::new();
+///   callbacks.credentials(|_url, username_from_url, _allowed_types| {
+///     Cred::ssh_key(
+///       username_from_url.unwrap(),
+///       None,
+///       std::path::Path::new(&format!("{}/.ssh/id_rsa", env::var("HOME").unwrap())),
+///       None,
+///     )
+///   });
+///
+///   // Prepare fetch options.
+///   let mut fo = git2::FetchOptions::new();
+///   fo.remote_callbacks(callbacks);
+///
+///   // Prepare builder.
+///   let mut builder = git2::build::RepoBuilder::new();
+///   builder.fetch_options(fo);
+///
+///   // Clone the project.
+///   builder.clone(
+///     "git@github.com:rust-lang/git2-rs.git",
+///     Path::new("/tmp/git2-rs"),
+///   );
+/// ```
 pub struct RepoBuilder<'cb> {
     bare: bool,
     branch: Option<CString>,
@@ -28,6 +63,12 @@ pub struct RepoBuilder<'cb> {
 /// The second and third arguments are the remote's name and the remote's url.
 pub type RemoteCreate<'cb> =
     dyn for<'a> FnMut(&'a Repository, &str, &str) -> Result<Remote<'a>, Error> + 'cb;
+
+/// A builder struct for git tree updates, for use with `git_tree_create_updated`.
+pub struct TreeUpdateBuilder {
+    updates: Vec<raw::git_tree_update>,
+    paths: Vec<CString>,
+}
 
 /// A builder struct for configuring checkouts of a repository.
 pub struct CheckoutBuilder<'cb> {
@@ -232,6 +273,7 @@ impl<'cb> RepoBuilder<'cb> {
         }
 
         let url = CString::new(url)?;
+        // Normal file path OK (does not need Windows conversion).
         let into = into.into_c_string()?;
         let mut raw = ptr::null_mut();
         unsafe {
@@ -468,7 +510,7 @@ impl<'cb> CheckoutBuilder<'cb> {
     /// If no paths are specified, then all files are checked out. Otherwise
     /// only these specified paths are checked out.
     pub fn path<T: IntoCString>(&mut self, path: T) -> &mut CheckoutBuilder<'cb> {
-        let path = path.into_c_string().unwrap();
+        let path = util::cstring_to_repo_path(path).unwrap();
         self.path_ptrs.push(path.as_ptr());
         self.paths.push(path);
         self
@@ -476,6 +518,7 @@ impl<'cb> CheckoutBuilder<'cb> {
 
     /// Set the directory to check out to
     pub fn target_dir(&mut self, dst: &Path) -> &mut CheckoutBuilder<'cb> {
+        // Normal file path OK (does not need Windows conversion).
         self.target_dir = Some(dst.into_c_string().unwrap());
         self
     }
@@ -554,13 +597,11 @@ impl<'cb> CheckoutBuilder<'cb> {
             opts.their_label = c.as_ptr();
         }
         if self.progress.is_some() {
-            let f: raw::git_checkout_progress_cb = progress_cb;
-            opts.progress_cb = Some(f);
+            opts.progress_cb = Some(progress_cb);
             opts.progress_payload = self as *mut _ as *mut _;
         }
         if self.notify.is_some() {
-            let f: raw::git_checkout_notify_cb = notify_cb;
-            opts.notify_cb = Some(f);
+            opts.notify_cb = Some(notify_cb);
             opts.notify_payload = self as *mut _ as *mut _;
             opts.notify_flags = self.notify_flags.bits() as c_uint;
         }
@@ -639,10 +680,79 @@ extern "C" fn notify_cb(
     .unwrap_or(2)
 }
 
+impl Default for TreeUpdateBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TreeUpdateBuilder {
+    /// Create a new empty series of updates.
+    pub fn new() -> Self {
+        Self {
+            updates: Vec::new(),
+            paths: Vec::new(),
+        }
+    }
+
+    /// Add an update removing the specified `path` from a tree.
+    pub fn remove<T: IntoCString>(&mut self, path: T) -> &mut Self {
+        let path = util::cstring_to_repo_path(path).unwrap();
+        let path_ptr = path.as_ptr();
+        self.paths.push(path);
+        self.updates.push(raw::git_tree_update {
+            action: raw::GIT_TREE_UPDATE_REMOVE,
+            id: raw::git_oid {
+                id: [0; raw::GIT_OID_RAWSZ],
+            },
+            filemode: raw::GIT_FILEMODE_UNREADABLE,
+            path: path_ptr,
+        });
+        self
+    }
+
+    /// Add an update setting the specified `path` to a specific Oid, whether it currently exists
+    /// or not.
+    ///
+    /// Note that libgit2 does not support an upsert of a previously removed path, or an upsert
+    /// that changes the type of an object (such as from tree to blob or vice versa).
+    pub fn upsert<T: IntoCString>(&mut self, path: T, id: Oid, filemode: FileMode) -> &mut Self {
+        let path = util::cstring_to_repo_path(path).unwrap();
+        let path_ptr = path.as_ptr();
+        self.paths.push(path);
+        self.updates.push(raw::git_tree_update {
+            action: raw::GIT_TREE_UPDATE_UPSERT,
+            id: unsafe { *id.raw() },
+            filemode: u32::from(filemode) as raw::git_filemode_t,
+            path: path_ptr,
+        });
+        self
+    }
+
+    /// Create a new tree from the specified baseline and this series of updates.
+    ///
+    /// The baseline tree must exist in the specified repository.
+    pub fn create_updated(&mut self, repo: &Repository, baseline: &Tree<'_>) -> Result<Oid, Error> {
+        let mut ret = raw::git_oid {
+            id: [0; raw::GIT_OID_RAWSZ],
+        };
+        unsafe {
+            try_call!(raw::git_tree_create_updated(
+                &mut ret,
+                repo.raw(),
+                baseline.raw(),
+                self.updates.len(),
+                self.updates.as_ptr()
+            ));
+            Ok(Binding::from_raw(&ret as *const _))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CheckoutBuilder, RepoBuilder};
-    use crate::{CheckoutNotificationType, Repository};
+    use super::{CheckoutBuilder, RepoBuilder, TreeUpdateBuilder};
+    use crate::{CheckoutNotificationType, FileMode, Repository};
     use std::fs;
     use std::path::Path;
     use tempfile::TempDir;
@@ -672,6 +782,23 @@ mod tests {
         assert!(RepoBuilder::new().branch("foo").clone(&url, &dst).is_err());
     }
 
+    #[test]
+    fn smoke_tree_create_updated() {
+        let (_tempdir, repo) = crate::test::repo_init();
+        let (_, tree_id) = crate::test::commit(&repo);
+        let tree = t!(repo.find_tree(tree_id));
+        assert!(tree.get_name("bar").is_none());
+        let foo_id = tree.get_name("foo").unwrap().id();
+        let tree2_id = t!(TreeUpdateBuilder::new()
+            .remove("foo")
+            .upsert("bar/baz", foo_id, FileMode::Blob)
+            .create_updated(&repo, &tree));
+        let tree2 = t!(repo.find_tree(tree2_id));
+        assert!(tree2.get_name("foo").is_none());
+        let baz_id = tree2.get_path(Path::new("bar/baz")).unwrap().id();
+        assert_eq!(foo_id, baz_id);
+    }
+
     /// Issue regression test #365
     #[test]
     fn notify_callback() {
@@ -679,7 +806,9 @@ mod tests {
         let cd = TempDir::new().unwrap();
 
         {
-            let repo = Repository::init(&td.path()).unwrap();
+            let mut opts = crate::RepositoryInitOptions::new();
+            opts.initial_head("main");
+            let repo = Repository::init_opts(&td.path(), &opts).unwrap();
 
             let mut config = repo.config().unwrap();
             config.set_str("user.name", "name").unwrap();
@@ -700,7 +829,7 @@ mod tests {
 
         let repo = Repository::open_bare(&td.path().join(".git")).unwrap();
         let tree = repo
-            .revparse_single(&"master")
+            .revparse_single(&"main")
             .unwrap()
             .peel_to_tree()
             .unwrap();

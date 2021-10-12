@@ -5,18 +5,19 @@ use std::fs::{self, FileType, Metadata};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 use std::vec;
 
-use channel::{self, TryRecvError};
 use same_file::Handle;
 use walkdir::{self, WalkDir};
 
-use dir::{Ignore, IgnoreBuilder};
-use gitignore::GitignoreBuilder;
-use overrides::Override;
-use types::Types;
-use {Error, PartialErrorBuilder};
+use crate::dir::{Ignore, IgnoreBuilder};
+use crate::gitignore::GitignoreBuilder;
+use crate::overrides::Override;
+use crate::types::Types;
+use crate::{Error, PartialErrorBuilder};
 
 /// A directory entry with a possible error attached.
 ///
@@ -251,7 +252,7 @@ struct DirEntryRaw {
 }
 
 impl fmt::Debug for DirEntryRaw {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Leaving out FileType because it doesn't have a debug impl
         // in Rust 1.9. We could add it if we really wanted to by manually
         // querying each possibly file type. Meh. ---AG
@@ -364,7 +365,8 @@ impl DirEntryRaw {
         })
     }
 
-    // Placeholder implementation to allow compiling on non-standard platforms (e.g. wasm32).
+    // Placeholder implementation to allow compiling on non-standard platforms
+    // (e.g. wasm32).
     #[cfg(not(any(windows, unix)))]
     fn from_entry_os(
         depth: usize,
@@ -413,7 +415,8 @@ impl DirEntryRaw {
         })
     }
 
-    // Placeholder implementation to allow compiling on non-standard platforms (e.g. wasm32).
+    // Placeholder implementation to allow compiling on non-standard platforms
+    // (e.g. wasm32).
     #[cfg(not(any(windows, unix)))]
     fn from_path(
         depth: usize,
@@ -486,6 +489,7 @@ pub struct WalkBuilder {
     sorter: Option<Sorter>,
     threads: usize,
     skip: Option<Arc<Handle>>,
+    filter: Option<Filter>,
 }
 
 #[derive(Clone)]
@@ -496,8 +500,11 @@ enum Sorter {
     ByPath(Arc<dyn Fn(&Path, &Path) -> cmp::Ordering + Send + Sync + 'static>),
 }
 
+#[derive(Clone)]
+struct Filter(Arc<dyn Fn(&DirEntry) -> bool + Send + Sync + 'static>);
+
 impl fmt::Debug for WalkBuilder {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WalkBuilder")
             .field("paths", &self.paths)
             .field("ig_builder", &self.ig_builder)
@@ -528,6 +535,7 @@ impl WalkBuilder {
             sorter: None,
             threads: 0,
             skip: None,
+            filter: None,
         }
     }
 
@@ -576,6 +584,7 @@ impl WalkBuilder {
             ig: ig_root.clone(),
             max_filesize: self.max_filesize,
             skip: self.skip.clone(),
+            filter: self.filter.clone(),
         }
     }
 
@@ -594,6 +603,7 @@ impl WalkBuilder {
             same_file_system: self.same_file_system,
             threads: self.threads,
             skip: self.skip.clone(),
+            filter: self.filter.clone(),
         }
     }
 
@@ -875,6 +885,23 @@ impl WalkBuilder {
         }
         self
     }
+
+    /// Yields only entries which satisfy the given predicate and skips
+    /// descending into directories that do not satisfy the given predicate.
+    ///
+    /// The predicate is applied to all entries. If the predicate is
+    /// true, iteration carries on as normal. If the predicate is false, the
+    /// entry is ignored and if it is a directory, it is not descended into.
+    ///
+    /// Note that the errors for reading entries that may not satisfy the
+    /// predicate will still be yielded.
+    pub fn filter_entry<P>(&mut self, filter: P) -> &mut WalkBuilder
+    where
+        P: Fn(&DirEntry) -> bool + Send + Sync + 'static,
+    {
+        self.filter = Some(Filter(Arc::new(filter)));
+        self
+    }
 }
 
 /// Walk is a recursive directory iterator over file paths in one or more
@@ -890,6 +917,7 @@ pub struct Walk {
     ig: Ignore,
     max_filesize: Option<u64>,
     skip: Option<Arc<Handle>>,
+    filter: Option<Filter>,
 }
 
 impl Walk {
@@ -906,14 +934,22 @@ impl Walk {
         if ent.depth() == 0 {
             return Ok(false);
         }
-
+        // We ensure that trivial skipping is done before any other potentially
+        // expensive operations (stat, filesystem other) are done. This seems
+        // like an obvious optimization but becomes critical when filesystem
+        // operations even as simple as stat can result in significant
+        // overheads; an example of this was a bespoke filesystem layer in
+        // Windows that hosted files remotely and would download them on-demand
+        // when particular filesystem operations occurred. Users of this system
+        // who ensured correct file-type fileters were being used could still
+        // get unnecessary file access resulting in large downloads.
+        if should_skip_entry(&self.ig, ent) {
+            return Ok(true);
+        }
         if let Some(ref stdout) = self.skip {
             if path_equals(ent, stdout)? {
                 return Ok(true);
             }
-        }
-        if should_skip_entry(&self.ig, ent) {
-            return Ok(true);
         }
         if self.max_filesize.is_some() && !ent.is_dir() {
             return Ok(skip_filesize(
@@ -921,6 +957,11 @@ impl Walk {
                 ent.path(),
                 &ent.metadata().ok(),
             ));
+        }
+        if let Some(Filter(filter)) = &self.filter {
+            if !filter(ent) {
+                return Ok(true);
+            }
         }
         Ok(false)
     }
@@ -1154,6 +1195,7 @@ pub struct WalkParallel {
     same_file_system: bool,
     threads: usize,
     skip: Option<Arc<Handle>>,
+    filter: Option<Filter>,
 }
 
 impl WalkParallel {
@@ -1184,18 +1226,11 @@ impl WalkParallel {
     /// visitor runs on only one thread, this build-up can be done without
     /// synchronization. Then, once traversal is complete, all of the results
     /// can be merged together into a single data structure.
-    pub fn visit(mut self, builder: &mut dyn ParallelVisitorBuilder) {
+    pub fn visit(mut self, builder: &mut dyn ParallelVisitorBuilder<'_>) {
         let threads = self.threads();
-        // TODO: Figure out how to use a bounded channel here. With an
-        // unbounded channel, the workers can run away and fill up memory
-        // with all of the file paths. But a bounded channel doesn't work since
-        // our producers are also are consumers, so they end up getting stuck.
-        //
-        // We probably need to rethink parallel traversal completely to fix
-        // this. The best case scenario would be finding a way to use rayon
-        // to do this.
-        let (tx, rx) = channel::unbounded();
+        let stack = Arc::new(Mutex::new(vec![]));
         {
+            let mut stack = stack.lock().unwrap();
             let mut visitor = builder.build();
             let mut paths = Vec::new().into_iter();
             std::mem::swap(&mut paths, &mut self.paths);
@@ -1232,39 +1267,37 @@ impl WalkParallel {
                         }
                     }
                 };
-                tx.send(Message::Work(Work {
+                stack.push(Message::Work(Work {
                     dent: dent,
                     ignore: self.ig_root.clone(),
                     root_device: root_device,
-                }))
-                .unwrap();
+                }));
             }
             // ... but there's no need to start workers if we don't need them.
-            if tx.is_empty() {
+            if stack.is_empty() {
                 return;
             }
         }
         // Create the workers and then wait for them to finish.
         let quit_now = Arc::new(AtomicBool::new(false));
-        let num_pending = Arc::new(AtomicUsize::new(tx.len()));
+        let num_pending =
+            Arc::new(AtomicUsize::new(stack.lock().unwrap().len()));
         crossbeam_utils::thread::scope(|s| {
             let mut handles = vec![];
             for _ in 0..threads {
                 let worker = Worker {
                     visitor: builder.build(),
-                    tx: tx.clone(),
-                    rx: rx.clone(),
+                    stack: stack.clone(),
                     quit_now: quit_now.clone(),
                     num_pending: num_pending.clone(),
                     max_depth: self.max_depth,
                     max_filesize: self.max_filesize,
                     follow_links: self.follow_links,
                     skip: self.skip.clone(),
+                    filter: self.filter.clone(),
                 };
                 handles.push(s.spawn(|_| worker.run()));
             }
-            drop(tx);
-            drop(rx);
             for handle in handles {
                 handle.join().unwrap();
             }
@@ -1362,10 +1395,13 @@ impl Work {
 struct Worker<'s> {
     /// The caller's callback.
     visitor: Box<dyn ParallelVisitor + 's>,
-    /// The push side of our mpmc queue.
-    tx: channel::Sender<Message>,
-    /// The receive side of our mpmc queue.
-    rx: channel::Receiver<Message>,
+    /// A stack of work to do.
+    ///
+    /// We use a stack instead of a channel because a stack lets us visit
+    /// directories in depth first order. This can substantially reduce peak
+    /// memory usage by keeping both the number of files path and gitignore
+    /// matchers in memory lower.
+    stack: Arc<Mutex<Vec<Message>>>,
     /// Whether all workers should terminate at the next opportunity. Note
     /// that we need this because we don't want other `Work` to be done after
     /// we quit. We wouldn't need this if have a priority channel.
@@ -1384,6 +1420,9 @@ struct Worker<'s> {
     /// A file handle to skip, currently is either `None` or stdout, if it's
     /// a file and it has been requested to skip files identical to stdout.
     skip: Option<Arc<Handle>>,
+    /// A predicate applied to dir entries. If true, the entry and all
+    /// children will be skipped.
+    filter: Option<Filter>,
 }
 
 impl<'s> Worker<'s> {
@@ -1518,6 +1557,11 @@ impl<'s> Worker<'s> {
                 }
             }
         }
+        // N.B. See analogous call in the single-threaded implementation about
+        // why it's important for this to come before the checks below.
+        if should_skip_entry(ig, &dent) {
+            return WalkState::Continue;
+        }
         if let Some(ref stdout) = self.skip {
             let is_stdout = match path_equals(&dent, stdout) {
                 Ok(is_stdout) => is_stdout,
@@ -1527,7 +1571,6 @@ impl<'s> Worker<'s> {
                 return WalkState::Continue;
             }
         }
-        let should_skip_path = should_skip_entry(ig, &dent);
         let should_skip_filesize =
             if self.max_filesize.is_some() && !dent.is_dir() {
                 skip_filesize(
@@ -1538,8 +1581,13 @@ impl<'s> Worker<'s> {
             } else {
                 false
             };
-
-        if !should_skip_path && !should_skip_filesize {
+        let should_skip_filtered =
+            if let Some(Filter(predicate)) = &self.filter {
+                !predicate(&dent)
+            } else {
+                false
+            };
+        if !should_skip_filesize && !should_skip_filtered {
             self.send(Work { dent, ignore: ig.clone(), root_device });
         }
         WalkState::Continue
@@ -1550,25 +1598,25 @@ impl<'s> Worker<'s> {
     /// If all work has been exhausted, then this returns None. The worker
     /// should then subsequently quit.
     fn get_work(&mut self) -> Option<Work> {
-        let mut value = self.rx.try_recv();
+        let mut value = self.recv();
         loop {
             // Simulate a priority channel: If quit_now flag is set, we can
             // receive only quit messages.
             if self.is_quit_now() {
-                value = Ok(Message::Quit)
+                value = Some(Message::Quit)
             }
             match value {
-                Ok(Message::Work(work)) => {
+                Some(Message::Work(work)) => {
                     return Some(work);
                 }
-                Ok(Message::Quit) => {
+                Some(Message::Quit) => {
                     // Repeat quit message to wake up sleeping threads, if
                     // any. The domino effect will ensure that every thread
                     // will quit.
-                    self.tx.send(Message::Quit).unwrap();
+                    self.send_quit();
                     return None;
                 }
-                Err(TryRecvError::Empty) => {
+                None => {
                     // Once num_pending reaches 0, it is impossible for it to
                     // ever increase again. Namely, it only reaches 0 once
                     // all jobs have run such that no jobs have produced more
@@ -1580,17 +1628,21 @@ impl<'s> Worker<'s> {
                     if self.num_pending() == 0 {
                         // Every other thread is blocked at the next recv().
                         // Send the initial quit message and quit.
-                        self.tx.send(Message::Quit).unwrap();
+                        self.send_quit();
                         return None;
                     }
                     // Wait for next `Work` or `Quit` message.
-                    value = Ok(self
-                        .rx
-                        .recv()
-                        .expect("channel disconnected while worker is alive"));
-                }
-                Err(TryRecvError::Disconnected) => {
-                    unreachable!("channel disconnected while worker is alive");
+                    loop {
+                        if let Some(v) = self.recv() {
+                            value = Some(v);
+                            break;
+                        }
+                        // Our stack isn't blocking. Instead of burning the
+                        // CPU waiting, we let the thread sleep for a bit. In
+                        // general, this tends to only occur once the search is
+                        // approaching termination.
+                        thread::sleep(Duration::from_millis(1));
+                    }
                 }
             }
         }
@@ -1614,7 +1666,20 @@ impl<'s> Worker<'s> {
     /// Send work.
     fn send(&self, work: Work) {
         self.num_pending.fetch_add(1, Ordering::SeqCst);
-        self.tx.send(Message::Work(work)).unwrap();
+        let mut stack = self.stack.lock().unwrap();
+        stack.push(Message::Work(work));
+    }
+
+    /// Send a quit message.
+    fn send_quit(&self) {
+        let mut stack = self.stack.lock().unwrap();
+        stack.push(Message::Quit);
+    }
+
+    /// Receive work.
+    fn recv(&self) -> Option<Message> {
+        let mut stack = self.stack.lock().unwrap();
+        stack.pop()
     }
 
     /// Signal that work has been received.
@@ -1660,7 +1725,7 @@ fn skip_filesize(
 
     if let Some(fs) = filesize {
         if fs > max_filesize {
-            debug!("ignoring {}: {} bytes", path.display(), fs);
+            log::debug!("ignoring {}: {} bytes", path.display(), fs);
             true
         } else {
             false
@@ -1673,10 +1738,10 @@ fn skip_filesize(
 fn should_skip_entry(ig: &Ignore, dent: &DirEntry) -> bool {
     let m = ig.matched_dir_entry(dent);
     if m.is_ignore() {
-        debug!("ignoring {}: {:?}", dent.path().display(), m);
+        log::debug!("ignoring {}: {:?}", dent.path().display(), m);
         true
     } else if m.is_whitelist() {
-        debug!("whitelisting {}: {:?}", dent.path().display(), m);
+        log::debug!("whitelisting {}: {:?}", dent.path().display(), m);
         false
     } else {
         false
@@ -1780,13 +1845,14 @@ fn device_num<P: AsRef<Path>>(_: P) -> io::Result<u64> {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
     use std::fs::{self, File};
     use std::io::Write;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
 
     use super::{DirEntry, WalkBuilder, WalkState};
-    use tests::TempDir;
+    use crate::tests::TempDir;
 
     fn wfile<P: AsRef<Path>>(path: P, contents: &str) {
         let mut file = File::create(path).unwrap();
@@ -2160,5 +2226,27 @@ mod tests {
         // Check that we can't descend but get an entry for the parent dir.
         let builder = WalkBuilder::new(&dir_path);
         assert_paths(dir_path.parent().unwrap(), &builder, &["root"]);
+    }
+
+    #[test]
+    fn filter() {
+        let td = tmpdir();
+        mkdirp(td.path().join("a/b/c"));
+        mkdirp(td.path().join("x/y"));
+        wfile(td.path().join("a/b/foo"), "");
+        wfile(td.path().join("x/y/foo"), "");
+
+        assert_paths(
+            td.path(),
+            &WalkBuilder::new(td.path()),
+            &["x", "x/y", "x/y/foo", "a", "a/b", "a/b/foo", "a/b/c"],
+        );
+
+        assert_paths(
+            td.path(),
+            &WalkBuilder::new(td.path())
+                .filter_entry(|entry| entry.file_name() != OsStr::new("a")),
+            &["x", "x/y", "x/y/foo"],
+        );
     }
 }

@@ -4,7 +4,7 @@
 /// types to each invocation of ripgrep with the '--type-add' flag.
 ///
 /// If you would like to add or improve this list, please file a PR:
-/// https://github.com/BurntSushi/ripgrep
+/// <https://github.com/BurntSushi/ripgrep>.
 ///
 /// Please try to keep this list sorted lexicographically and wrapped to 79
 /// columns (inclusive).
@@ -16,12 +16,12 @@ pub const DEFAULT_TYPES: &[(&str, &[&str])] = &[
     ("asciidoc", &["*.adoc", "*.asc", "*.asciidoc"]),
     ("asm", &["*.asm", "*.s", "*.S"]),
     ("asp", &[
-        "*.aspx", "*.aspx.cs", "*.aspx.cs", "*.ascx", "*.ascx.cs", "*.ascx.vb",
+        "*.aspx", "*.aspx.cs", "*.aspx.vb", "*.ascx", "*.ascx.cs", "*.ascx.vb",
     ]),
     ("ats", &["*.ats", "*.dats", "*.sats", "*.hats"]),
     ("avro", &["*.avdl", "*.avpr", "*.avsc"]),
     ("awk", &["*.awk"]),
-    ("bazel", &["*.bzl", "WORKSPACE", "BUILD", "BUILD.bazel"]),
+    ("bazel", &["*.bazel", "*.bzl", "*.BUILD", "*.bazelrc", "BUILD", "WORKSPACE"]),
     ("bitbake", &["*.bb", "*.bbappend", "*.bbclass", "*.conf", "*.inc"]),
     ("brotli", &["*.br"]),
     ("buildstream", &["*.bst"]),
@@ -52,6 +52,7 @@ pub const DEFAULT_TYPES: &[(&str, &[&str])] = &[
     ("dhall", &["*.dhall"]),
     ("diff", &["*.patch", "*.diff"]),
     ("docker", &["*Dockerfile*"]),
+    ("dvc", &["Dvcfile", "*.dvc"]),
     ("ebuild", &["*.ebuild"]),
     ("edn", &["*.edn"]),
     ("elisp", &["*.el"]),
@@ -61,11 +62,13 @@ pub const DEFAULT_TYPES: &[(&str, &[&str])] = &[
     ("erlang", &["*.erl", "*.hrl"]),
     ("fidl", &["*.fidl"]),
     ("fish", &["*.fish"]),
+    ("flatbuffers", &["*.fbs"]),
     ("fortran", &[
         "*.f", "*.F", "*.f77", "*.F77", "*.pfo",
         "*.f90", "*.F90", "*.f95", "*.F95",
     ]),
     ("fsharp", &["*.fs", "*.fsx", "*.fsi"]),
+    ("fut", &[".fut"]),
     ("gap", &["*.g", "*.gap", "*.gi", "*.gd", "*.tst"]),
     ("gn", &["*.gn", "*.gni"]),
     ("go", &["*.go"]),
@@ -135,6 +138,9 @@ pub const DEFAULT_TYPES: &[(&str, &[&str])] = &[
     ("markdown", &["*.markdown", "*.md", "*.mdown", "*.mkdn"]),
     ("matlab", &["*.m"]),
     ("md", &["*.markdown", "*.md", "*.mdown", "*.mkdn"]),
+    ("meson", &["meson.build", "meson_options.txt"]),
+    ("minified", &["*.min.html", "*.min.css", "*.min.js"]),
+    ("mint", &["*.mint"]),
     ("mk", &["mkfile"]),
     ("ml", &["*.ml"]),
     ("msbuild", &[
@@ -150,6 +156,7 @@ pub const DEFAULT_TYPES: &[(&str, &[&str])] = &[
     ("pdf", &["*.pdf"]),
     ("perl", &["*.perl", "*.pl", "*.PL", "*.plh", "*.plx", "*.pm", "*.t"]),
     ("php", &["*.php", "*.php3", "*.php4", "*.php5", "*.phtml"]),
+    ("po", &["*.po"]),
     ("pod", &["*.pod"]),
     ("postscript", &["*.eps", "*.ps"]),
     ("protobuf", &["*.proto"]),
@@ -160,11 +167,18 @@ pub const DEFAULT_TYPES: &[(&str, &[&str])] = &[
     ("qmake", &["*.pro", "*.pri", "*.prf"]),
     ("qml", &["*.qml"]),
     ("r", &["*.R", "*.r", "*.Rmd", "*.Rnw"]),
+    ("racket", &["*.rkt"]),
     ("rdoc", &["*.rdoc"]),
     ("readme", &["README*", "*README"]),
+    ("red", &["*.r", "*.red", "*.reds"]),
     ("robot", &["*.robot"]),
     ("rst", &["*.rst"]),
-    ("ruby", &["Gemfile", "*.gemspec", ".irbrc", "Rakefile", "*.rb"]),
+    ("ruby", &[
+        // Idiomatic files
+        "config.ru", "Gemfile", ".irbrc", "Rakefile",
+        // Extensions
+        "*.gemspec", "*.rb", "*.rbw"
+    ]),
     ("rust", &["*.rs"]),
     ("sass", &["*.sass", "*.scss"]),
     ("scala", &["*.scala", "*.sbt"]),
@@ -221,6 +235,7 @@ pub const DEFAULT_TYPES: &[(&str, &[&str])] = &[
     ("typoscript", &["*.typoscript", "*.ts"]),
     ("vala", &["*.vala"]),
     ("vb", &["*.vb"]),
+    ("vcl", &["*.vcl"]),
     ("verilog", &["*.v", "*.vh", "*.sv", "*.svh"]),
     ("vhdl", &["*.vhd", "*.vhdl"]),
     ("vim", &["*.vim"]),
@@ -234,6 +249,8 @@ pub const DEFAULT_TYPES: &[(&str, &[&str])] = &[
     ("xz", &["*.xz", "*.txz"]),
     ("yacc", &["*.y"]),
     ("yaml", &["*.yaml", "*.yml"]),
+    ("yang", &["*.yang"]),
+    ("z", &["*.Z"]),
     ("zig", &["*.zig"]),
     ("zsh", &[
         ".zshenv", "zshenv",

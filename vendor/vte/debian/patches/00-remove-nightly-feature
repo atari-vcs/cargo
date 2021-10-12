@@ -1,0 +1,8 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -36,5 +36,4 @@
+ 
+ [features]
+ default = ["no_std"]
+-nightly = ["utf8parse/nightly"]
+ no_std = ["arrayvec"]

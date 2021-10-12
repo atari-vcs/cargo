@@ -3,7 +3,7 @@
 # When uploading crates to the registry Cargo will automatically
 # "normalize" Cargo.toml files for maximal compatibility
 # with all versions of Cargo and also rewrite `path` dependencies
-# to registry (e.g. crates.io) dependencies
+# to registry (e.g., crates.io) dependencies
 #
 # If you believe there's an error in this file please file an
 # issue against the rust-lang/cargo repository. If you're
@@ -12,7 +12,7 @@
 
 [package]
 name = "bytesize"
-version = "1.0.0"
+version = "1.1.0"
 authors = ["Hyunsik Choi <hyunsik.choi@gmail.com>"]
 description = "an utility for human-readable bytes representations"
 homepage = "https://github.com/hyunsik/bytesize/"

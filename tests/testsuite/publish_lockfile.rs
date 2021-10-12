@@ -1,6 +1,5 @@
 //! Tests for including `Cargo.lock` when publishing/packaging.
 
-use std;
 use std::fs::File;
 
 use cargo_test_support::registry::Package;
@@ -28,7 +27,7 @@ fn pl_manifest(name: &str, version: &str, extra: &str) -> String {
 }
 
 #[cargo_test]
-fn deprecated() {
+fn removed() {
     let p = project()
         .file(
             "Cargo.toml",
@@ -49,14 +48,16 @@ fn deprecated() {
         .build();
     p.cargo("package")
         .masquerade_as_nightly_cargo()
+        .with_status(101)
         .with_stderr(
             "\
-[PACKAGING] foo v0.1.0 ([..])
-[VERIFYING] foo v0.1.0 ([..])
-[WARNING] The `publish-lockfile` feature is deprecated and currently has no effect. \
-    It may be removed in a future version.
-[COMPILING] foo v0.1.0 ([..])
-[FINISHED] dev [..]
+[ERROR] failed to parse manifest at [..]
+
+Caused by:
+  the cargo feature `publish-lockfile` has been removed in the 1.37 release
+
+  Remove the feature from Cargo.toml to remove this error.
+  See https://doc.rust-lang.org/[..]cargo/reference/unstable.html#publish-lockfile [..]
 ",
         )
         .run();
@@ -85,6 +86,7 @@ fn package_lockfile() {
             "\
 Cargo.lock
 Cargo.toml
+Cargo.toml.orig
 src/main.rs
 ",
         )
@@ -114,6 +116,7 @@ fn package_lockfile_git_repo() {
 .cargo_vcs_info.json
 Cargo.lock
 Cargo.toml
+Cargo.toml.orig
 src/main.rs
 ",
         )
@@ -123,10 +126,11 @@ src/main.rs
         .with_stderr(
             "\
 [PACKAGING] foo v0.0.1 ([..])
-[ARCHIVING] Cargo.toml
-[ARCHIVING] src/main.rs
 [ARCHIVING] .cargo_vcs_info.json
 [ARCHIVING] Cargo.lock
+[ARCHIVING] Cargo.toml
+[ARCHIVING] Cargo.toml.orig
+[ARCHIVING] src/main.rs
 [VERIFYING] foo v0.0.1 ([..])
 [COMPILING] foo v0.0.1 ([..])
 [RUNNING] `rustc --crate-name foo src/main.rs [..]
@@ -160,9 +164,9 @@ fn lock_file_and_workspace() {
         .file(
             "Cargo.toml",
             r#"
-            [workspace]
-            members = ["foo"]
-        "#,
+                [workspace]
+                members = ["foo"]
+            "#,
         )
         .file("foo/Cargo.toml", &pl_manifest("foo", "0.0.1", ""))
         .file("foo/src/main.rs", "fn main() {}")
@@ -221,9 +225,10 @@ fn note_resolve_changes() {
         .with_stderr_unordered(
             "\
 [PACKAGING] foo v0.0.1 ([..])
-[ARCHIVING] Cargo.toml
-[ARCHIVING] src/main.rs
 [ARCHIVING] Cargo.lock
+[ARCHIVING] Cargo.toml
+[ARCHIVING] Cargo.toml.orig
+[ARCHIVING] src/main.rs
 [UPDATING] `[..]` index
 [NOTE] package `mutli v0.1.0` added to the packaged Cargo.lock file, was originally sourced from `[..]/foo/mutli`
 [NOTE] package `patched v1.0.0` added to the packaged Cargo.lock file, was originally sourced from `[..]/foo/patched`
@@ -328,7 +333,7 @@ fn warn_package_with_yanked() {
 [PACKAGING] foo v0.0.1 ([..])
 [UPDATING] `[..]` index
 [WARNING] package `bar v0.1.0` in Cargo.lock is yanked in registry \
-    `crates.io`, consider updating to a version that is not yanked
+    `crates-io`, consider updating to a version that is not yanked
 ",
         )
         .run();
@@ -367,7 +372,7 @@ dependencies = [
 [DOWNLOADED] foo v0.1.0 (registry `[..]`)
 [INSTALLING] foo v0.1.0
 [WARNING] package `bar v0.1.0` in Cargo.lock is yanked in registry \
-    `crates.io`, consider running without --locked
+    `crates-io`, consider running without --locked
 [DOWNLOADING] crates ...
 [DOWNLOADED] bar v0.1.0 (registry `[..]`)
 [COMPILING] bar v0.1.0
@@ -426,6 +431,7 @@ fn ignore_lockfile() {
 .cargo_vcs_info.json
 Cargo.lock
 Cargo.toml
+Cargo.toml.orig
 src/main.rs
 ",
         )
@@ -435,10 +441,11 @@ src/main.rs
         .with_stderr(
             "\
 [PACKAGING] foo v0.0.1 ([..])
-[ARCHIVING] Cargo.toml
-[ARCHIVING] src/main.rs
 [ARCHIVING] .cargo_vcs_info.json
 [ARCHIVING] Cargo.lock
+[ARCHIVING] Cargo.toml
+[ARCHIVING] Cargo.toml.orig
+[ARCHIVING] src/main.rs
 [VERIFYING] foo v0.0.1 ([..])
 [COMPILING] foo v0.0.1 ([..])
 [RUNNING] `rustc --crate-name foo src/main.rs [..]
@@ -463,10 +470,12 @@ fn ignore_lockfile_inner() {
         .with_stderr(
             "\
 [PACKAGING] bar v0.0.1 ([..])
-[ARCHIVING] Cargo.toml
-[ARCHIVING] src/main.rs
 [ARCHIVING] .cargo_vcs_info.json
+[ARCHIVING] .gitignore
 [ARCHIVING] Cargo.lock
+[ARCHIVING] Cargo.toml
+[ARCHIVING] Cargo.toml.orig
+[ARCHIVING] src/main.rs
 ",
         )
         .run();
