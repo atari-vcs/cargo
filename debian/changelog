@@ -1,8 +1,8 @@
-cargo (0.56.0-0.1) UNRELEASED; urgency=medium
+cargo (0.56.0-0.1+atari1) atari; urgency=medium
 
-  * New upstream release
+  * WIP snapshot of new upstream cargo
 
- -- Sjoerd Simons <sjoerd@debian.org>  Mon, 11 Oct 2021 21:15:29 +0200
+ -- Sjoerd Simons <sjoerd@collabora.com>  Tue, 12 Oct 2021 10:19:13 +0200
 
 cargo (0.47.0-3) unstable; urgency=medium
 
