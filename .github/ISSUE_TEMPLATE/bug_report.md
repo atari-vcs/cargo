@@ -1,28 +1,31 @@
 ---
-name: Bug report
+name: Bug Report
 about: Create a report to help us improve
-labels: C-bug
+title: '[BUG] '
+labels: 'bug'
+assignees: ''
 ---
 
-<!-- Thanks for filing a 🐛 bug report 😄! -->
+**Describe the bug**
+A clear and concise description of what the bug is.
 
-**Problem**
-<!-- A clear and concise description of what the bug is. -->
-<!-- including what currently happens and what you expected to happen. -->
+**To Reproduce**
+Steps to reproduce the behavior:
+1. Go to '...'
+2. Click on '....'
+3. Scroll down to '....'
+4. See error
 
-**Steps**
-<!-- The steps to reproduce the bug. -->
-1.
-2.
-3.
+**Expected behavior**
+A clear and concise description of what you expected to happen.
 
-**Possible Solution(s)**
-<!-- Not obligatory, but suggest a fix/reason for the bug, -->
-<!-- or ideas how to implement the addition or change -->
+**Screenshots**
+If applicable, add screenshots to help explain your problem.
 
-**Notes**
+**Environment (please complete the following information):**
+ - OS: [e.g. Windows, macOS, Linux]
+ - Browser [e.g. chrome, safari] (if applicable)
+ - Version [e.g. 22]
 
-Output of `cargo version`:
-
-<!-- Also, any additional context or information you feel may be relevant to the issue. -->
-<!-- (e.g rust version, OS platform/distribution/version, target toolchain(s), release channel.. -->
+**Additional context**
+Add any other context about the problem here.
